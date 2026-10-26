@@ -310,8 +310,9 @@ class HostScheduler:
 
 class GenericPass:
     def __init__(self, store: Store, client, reader: Reader, pool: Executor, workers: int,
-                 prev_chars: dict[str, int] | None = None):
+                 keep_raw: bool = False, prev_chars: dict[str, int] | None = None):
         self.store = store
+        self.keep_raw = keep_raw
         self.client = client
         self.reader = reader
         self.pool = pool
@@ -355,33 +356,48 @@ class GenericPass:
                 for lost in sched.done(host, requeue, cooldown, drop is not None):
                     self._fail(lost, drop, Fetched())
 
-    def _fail(self, url: str, reason: str, f: Fetched) -> None:
+    def _fail(self, url: str, reason: str, f: Fetched, raw_path: str | None = None) -> None:
         if self.prev_chars is not None:
             return  # upgrade pass: keep the pass-1 record
         self.store.record(url, "failed", reason, http_status=f.status or None,
-                          final_url=f.final_url, content_type=f.content_type)
+                          final_url=f.final_url, content_type=f.content_type, raw_path=raw_path)
+
+    def _save_raw(self, url: str, f: Fetched) -> str:
+        if f.kind == "pdf":
+            return self.store.save_raw(url, "pdf", move_from=f.pdf_path)
+        return self.store.save_raw(url, "html.zst" if f.kind == "html" else "txt.zst", data=f.body)
 
     async def _extract(self, url: str, f: Fetched) -> None:
         loop = asyncio.get_running_loop()
+        raw_path = None
         try:
-            if f.kind == "html":
-                async with self.extract_slots:
-                    res = await loop.run_in_executor(self.pool, extract.html_to_doc, f.body, f.final_url or url)
-            elif f.kind == "pdf":
-                async with self.extract_slots:
-                    res = await loop.run_in_executor(self.pool, extract.pdf_to_doc, f.pdf_path)
-            else:
-                res = {"text": f.body.decode(f.charset or "utf-8", errors="replace")}
-        except LookupError:  # unknown charset name
-            res = {"text": f.body.decode("utf-8", errors="replace")}
+            try:
+                if f.kind == "html":
+                    async with self.extract_slots:
+                        res = await loop.run_in_executor(self.pool, extract.html_to_doc, f.body, f.final_url or url)
+                elif f.kind == "pdf":
+                    async with self.extract_slots:
+                        res = await loop.run_in_executor(self.pool, extract.pdf_to_doc, f.pdf_path)
+                else:
+                    res = {"text": f.body.decode(f.charset or "utf-8", errors="replace")}
+            except LookupError:  # unknown charset name
+                res = {"text": f.body.decode("utf-8", errors="replace")}
+            text = (res.get("text") or "").strip()
+            # the upgrade pass only records (and keeps raw for) results that beat pass 1
+            better = self.prev_chars is None or len(text) > max(self.prev_chars.get(url, -1), 0)
+            if self.keep_raw and better:
+                raw_path = self._save_raw(url, f)
         finally:
-            self.reader.release_pdf(f)
+            if raw_path and f.kind == "pdf":  # the download now lives in raw/; just free the slot
+                f.pdf_path = None
+                self.reader.pdf_slots.release()
+            else:
+                self.reader.release_pdf(f)
 
-        text = (res.get("text") or "").strip()
         if not text:
-            self._fail(url, res.get("error") or "no_text", f)
+            self._fail(url, res.get("error") or "no_text", f, raw_path)
             return
-        if self.prev_chars is not None and len(text) <= self.prev_chars.get(url, -1):
+        if not better:
             return
         meta = {
             "url": url,
@@ -395,11 +411,12 @@ class GenericPass:
         chars = self.store.write_doc(url, meta, text)
         ok = chars >= extract.MIN_CHARS
         self.store.record(url, "ok" if ok else "thin", None if ok else "short", chars=chars,
-                          http_status=f.status, final_url=f.final_url, content_type=f.content_type)
+                          http_status=f.status, final_url=f.final_url, content_type=f.content_type,
+                          raw_path=raw_path)
 
 
 async def run_generic(store: Store, pool: Executor, workers: int, concurrency: int, per_host: int,
-                      contact: str | None, impersonate: bool) -> None:
+                      contact: str | None, impersonate: bool, keep_raw: bool) -> None:
     pdf_slots = asyncio.Semaphore(3)
     reader = Reader(store.tmp_dir, pdf_slots)
 
@@ -407,7 +424,7 @@ async def run_generic(store: Store, pool: Executor, workers: int, concurrency: i
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
     client = AiohttpClient(reader, concurrency, per_host, contact)
     try:
-        await GenericPass(store, client, reader, pool, workers).run(urls, concurrency, per_host)
+        await GenericPass(store, client, reader, pool, workers, keep_raw).run(urls, concurrency, per_host)
     finally:
         await client.close()
 
@@ -419,7 +436,7 @@ async def run_generic(store: Store, pool: Executor, workers: int, concurrency: i
     log.info("generic: retrying %d blocked/thin URLs with a browser fingerprint", len(candidates))
     client = CurlClient(reader, concurrency=16)
     try:
-        upgrade = GenericPass(store, client, reader, pool, workers, prev_chars=dict(candidates))
+        upgrade = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars=dict(candidates))
         await upgrade.run([key for key, _ in candidates], concurrency=16, per_host=2)
     finally:
         await client.close()

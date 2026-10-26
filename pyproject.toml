@@ -15,6 +15,7 @@ dependencies = [
     "uvloop",
     "curl_cffi>=0.7",
     "pypdfium2>=4",
+    "zstandard",
 ]
 
 [project.scripts]

@@ -68,7 +68,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "arxiv": lambda: run_arxiv(store),
         "stackexchange": lambda: run_stackexchange(store),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
-                                       args.contact, impersonate=not args.no_impersonate),
+                                       args.contact, impersonate=not args.no_impersonate,
+                                       keep_raw=args.keep_raw),
     }
     try:
         results = await asyncio.gather(*(jobs[lane]() for lane in lanes), return_exceptions=True)
@@ -201,6 +202,9 @@ def main() -> None:
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--no-impersonate", action="store_true", help="skip the curl_cffi retry pass")
+    run.add_argument("--keep-raw", action="store_true",
+                     help="also keep fetched pages under <out>/raw/: HTML as .html.zst (roughly 1-1.5 GB for "
+                          "~20k pages), PDFs as-is (~2 MB each)")
     run.add_argument("--contact", help="email/URL appended to the User-Agent sent to Wikimedia sites")
     run.set_defaults(func=cmd_run)
 

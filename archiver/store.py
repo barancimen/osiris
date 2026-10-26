@@ -162,6 +162,22 @@ class Store:
         os.replace(tmp, path)
         return len(body)
 
+    def save_raw(self, doc_key: str, ext: str, data: bytes | None = None, move_from: str | None = None) -> str:
+        """Keep a fetched body under raw/<id[:2]>/<id>.<ext>; returns the path relative to the output dir.
+        Bytes are zstd-compressed (ext should end in .zst); move_from (a finished PDF download) is kept as-is."""
+        did = doc_id(doc_key)
+        path = self.out / "raw" / did[:2] / f"{did}.{ext}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if move_from is not None:
+            os.replace(move_from, path)
+        else:
+            import zstandard
+
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_bytes(zstandard.ZstdCompressor(level=3).compress(data))
+            os.replace(tmp, path)
+        return str(path.relative_to(self.out))
+
     def read_doc(self, did: str) -> tuple[dict, str] | None:
         path = self.md_path(did)
         try:
