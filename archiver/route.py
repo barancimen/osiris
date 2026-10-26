@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit, urlunsplit
+
+from .dedup import dedup_key
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
 
@@ -37,9 +39,12 @@ MEDIA_EXTS = {
 @dataclass(frozen=True)
 class Route:
     url: str  # normalized URL, primary key in the manifest
-    lane: str  # generic | twitter | arxiv | skip
+    lane: str  # generic | twitter | arxiv | stackexchange | skip
     doc_key: str | None = None  # URLs sharing a doc_key share one document
     reason: str | None = None  # why it was skipped
+    # extract_urls.py's notion of "same page" (tracking params, host aliases, ...): a URL
+    # whose dedup key is already in the manifest is not queued again from a new list
+    dedup_key: str | None = None
 
     @property
     def doc_id(self) -> str | None:
@@ -91,6 +96,17 @@ def route(raw: str) -> Route | None:
     found = extract_url(raw)
     if found is None:
         return None
+    return replace(_route(found), dedup_key=safe_dedup_key(found))
+
+
+def safe_dedup_key(url: str) -> str:
+    try:
+        return dedup_key(url)
+    except ValueError:  # unparseable URL: only identical strings match
+        return url
+
+
+def _route(found: str) -> Route:
     url = normalize(found)
     if url is None:
         return Route(found, "skip", reason="bad_url")

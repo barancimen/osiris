@@ -94,10 +94,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             r = route(line)
             if r is not None:
                 routes.append(r)
-    added = store.add(routes)
+    added, known = store.add(routes)
     by_lane = Counter(r.lane for r in routes)
-    log.info("%d URLs read (%s); %d new in manifest", len(routes),
-             ", ".join(f"{lane} {n}" for lane, n in by_lane.most_common()), added)
+    log.info("%d URLs read from %s (%s)", len(routes), args.urlfile,
+             ", ".join(f"{lane} {n}" for lane, n in by_lane.most_common()))
+    log.info("%d new URLs queued; %d already in the manifest (same dedup key as extract_urls.py)", added, known)
 
     lanes = args.only or list(LANES)
     if args.retry_failed:

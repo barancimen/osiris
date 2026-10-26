@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .route import Route, doc_id
+from .route import Route, doc_id, safe_dedup_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS urls (
@@ -25,11 +25,15 @@ CREATE TABLE IF NOT EXISTS urls (
     content_type TEXT,
     chars        INTEGER,
     attempts     INTEGER NOT NULL DEFAULT 0,
-    updated_at   TEXT
+    updated_at   TEXT,
+    dedup_key    TEXT,  -- archiver.dedup.dedup_key of the URL as it appeared in the input
+    raw_path     TEXT   -- relative to the output dir, only with --keep-raw
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
 CREATE INDEX IF NOT EXISTS urls_doc_key ON urls(doc_key);
 """
+MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
+              "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT"}
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
 DONE = ("ok", "thin")
@@ -50,22 +54,41 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self._last_commit = time.monotonic()
+
+    def _migrate(self) -> None:
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(urls)")}
+        for column, ddl in MIGRATIONS.items():
+            if column not in columns:
+                self.db.execute(ddl)
+        missing = self.db.execute("SELECT url FROM urls WHERE dedup_key IS NULL").fetchall()
+        self.db.executemany("UPDATE urls SET dedup_key = ? WHERE url = ?", ((safe_dedup_key(u), u) for (u,) in missing))
+        self.db.execute("CREATE INDEX IF NOT EXISTS urls_dedup_key ON urls(dedup_key)")
+        self.db.commit()
 
     # -- manifest -----------------------------------------------------------
 
-    def add(self, routes: Iterable[Route]) -> int:
+    def add(self, routes: Iterable[Route]) -> tuple[int, int]:
+        """Queue routes whose dedup key isn't in the manifest yet. Returns (added, already known)."""
+        known = {key for (key,) in self.db.execute("SELECT dedup_key FROM urls")}
+        rows, seen = [], 0
+        for r in routes:
+            if r.dedup_key in known:
+                seen += 1
+                continue
+            known.add(r.dedup_key)
+            status = "skipped" if r.lane == "skip" else "pending"
+            rows.append((r.url, r.lane, r.doc_key, r.doc_id, status, r.reason, now_iso(), r.dedup_key))
         before = self.db.total_changes
         self.db.executemany(
-            "INSERT OR IGNORE INTO urls (url, lane, doc_key, doc_id, status, reason, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                (r.url, r.lane, r.doc_key, r.doc_id, "skipped" if r.lane == "skip" else "pending", r.reason, now_iso())
-                for r in routes
-            ),
+            "INSERT OR IGNORE INTO urls (url, lane, doc_key, doc_id, status, reason, updated_at, dedup_key)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
         )
         self.db.commit()
-        return self.db.total_changes - before
+        added = self.db.total_changes - before
+        return added, seen + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
 
     def pending(self, lane: str) -> list[tuple[str, str]]:
         """(doc_key, url) for each pending document in a lane; one URL per doc_key."""
