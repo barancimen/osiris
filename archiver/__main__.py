@@ -13,7 +13,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import extract
+from . import cookies, extract
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .reddit import run_reddit
@@ -62,6 +62,10 @@ async def _report(store: Store) -> None:
 
 
 async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -> None:
+    browser_cookies = cookies.load(args.cookies) if args.cookies else []
+    if args.cookies:
+        log.info("using %d browser cookies for %d sites", len(browser_cookies),
+                 len({c.domain.lstrip(".") for c in browser_cookies}))
     pool = ProcessPoolExecutor(max_workers=args.workers, initializer=extract.init_worker)
     reporter = asyncio.create_task(_report(store))
     jobs = {
@@ -72,7 +76,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw, wayback=not args.no_wayback,
-                                       rules=host_rules(args.host_limit)),
+                                       rules=host_rules(args.host_limit), cookies=browser_cookies,
+                                       browser_ua=args.user_agent),
     }
     try:
         results = await asyncio.gather(*(jobs[lane]() for lane in lanes), return_exceptions=True)
@@ -224,6 +229,10 @@ def main() -> None:
     run.add_argument("--keep-raw", action="store_true",
                      help="also keep fetched pages under <out>/raw/: HTML as .html.zst (roughly 1-1.5 GB for "
                           "~20k pages), PDFs as-is (~2 MB each)")
+    run.add_argument("--cookies", metavar="FILE",
+                     help="your browser's cookies (Netscape cookies.txt or JSON export), each sent only to its "
+                          "own site: for Scholar, Medium, logged-in and bot-walled pages")
+    run.add_argument("--user-agent", help="browser User-Agent to send; match the browser the cookies came from")
     run.add_argument("--contact", help="email/URL appended to the User-Agent sent to Wikimedia sites")
     run.set_defaults(func=cmd_run)
 

@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from . import extract
+from .cookies import BrowserCookie, into_aiohttp, to_cookiejar
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -98,10 +99,10 @@ def host_of(url: str) -> str:
     return urlsplit(url).hostname or ""
 
 
-def user_agent(url: str, contact: str | None) -> str:
+def user_agent(url: str, contact: str | None, browser_ua: str | None = None) -> str:
     if host_of(url).endswith(WIKIMEDIA):
         return f"{BOT_UA[:-1]}; {contact})" if contact else BOT_UA
-    return BROWSER_UA
+    return browser_ua or BROWSER_UA
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -212,10 +213,15 @@ class Reader:
 
 
 class AiohttpClient:
-    def __init__(self, reader: Reader, concurrency: int, per_host: int, contact: str | None):
+    def __init__(self, reader: Reader, concurrency: int, per_host: int, contact: str | None,
+                 cookies: list[BrowserCookie] = (), browser_ua: str | None = None):
         self.reader = reader
         self.contact = contact
+        self.browser_ua = browser_ua
+        jar = aiohttp.CookieJar(quote_cookie=False)
+        into_aiohttp(list(cookies), jar)
         self.session = aiohttp.ClientSession(
+            cookie_jar=jar,
             connector=aiohttp.TCPConnector(
                 limit=concurrency,
                 limit_per_host=per_host,
@@ -230,7 +236,7 @@ class AiohttpClient:
 
     async def fetch(self, url: str) -> Fetched:
         return await aiohttp_get(self.session, self.reader, url,
-                                 headers={"User-Agent": user_agent(url, self.contact)})
+                                 headers={"User-Agent": user_agent(url, self.contact, self.browser_ua)})
 
     async def close(self) -> None:
         await self.session.close()
@@ -320,11 +326,13 @@ class WaybackClient:
 class CurlClient:
     """Browser TLS/HTTP2 fingerprint via curl_cffi, for sites that block plain clients."""
 
-    def __init__(self, reader: Reader, concurrency: int):
-        from curl_cffi.requests import AsyncSession
+    def __init__(self, reader: Reader, concurrency: int, cookies: list[BrowserCookie] = ()):
+        from curl_cffi.requests import AsyncSession, Cookies
 
         self.reader = reader
         self.session = AsyncSession(impersonate="chrome", max_clients=concurrency, timeout=30)
+        if cookies:
+            self.session.cookies = Cookies(to_cookiejar(list(cookies)))
 
     async def fetch(self, url: str) -> Fetched:
         resp = None
@@ -541,13 +549,14 @@ class GenericPass:
 
 async def run_generic(store: Store, pool: Executor, workers: int, concurrency: int, per_host: int,
                       contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool,
-                      rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES) -> None:
+                      rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
+                      browser_ua: str | None = None) -> None:
     pdf_slots = asyncio.Semaphore(3)
     reader = Reader(store.tmp_dir, pdf_slots)
 
     urls = [key for key, _ in store.pending("generic")]
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
-    client = AiohttpClient(reader, concurrency, per_host, contact)
+    client = AiohttpClient(reader, concurrency, per_host, contact, cookies, browser_ua)
     try:
         await GenericPass(store, client, reader, pool, workers, keep_raw, rules=rules).run(urls, concurrency, per_host)
     finally:
@@ -555,7 +564,7 @@ async def run_generic(store: Store, pool: Executor, workers: int, concurrency: i
 
     fallbacks = []
     if impersonate:
-        fallbacks.append(("impersonate", lambda: CurlClient(reader, concurrency=16), 16, 2, rules,
+        fallbacks.append(("impersonate", lambda: CurlClient(reader, 16, cookies), 16, 2, rules,
                           lambda reason: reason in BLOCKED, "blocked/thin URLs with a browser fingerprint"))
     if wayback:
         # requests go to archive.org, so the per-site rules don't apply
