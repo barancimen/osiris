@@ -28,6 +28,9 @@ SE_HOSTS = {"stackoverflow.com", "superuser.com", "serverfault.com", "askubuntu.
             "stackapps.com"}
 SE_QUESTION_RE = re.compile(r"^/(?:questions|q)/(\d+)(?:/|$)")
 
+# skipped by request; *.github.io sites are ordinary blogs/docs and stay in
+GITHUB_HOSTS = {"github.com", "gist.github.com", "raw.githubusercontent.com", "gist.githubusercontent.com"}
+
 # Logged-in chat apps: conversations are private and the pages are JS shells.
 PRIVATE_APP_HOSTS = {"chatgpt.com", "chat.openai.com", "claude.ai", "grok.com", "gemini.google.com"}
 
@@ -123,6 +126,8 @@ def _route(found: str) -> Route:
         return Route(url, "skip", reason="local")
     if bare in PRIVATE_APP_HOSTS:
         return Route(url, "skip", reason="private_app")
+    if bare in GITHUB_HOSTS:
+        return Route(url, "skip", reason="github")
     if bare in X_HOSTS:
         m = TWEET_PATH_RE.match(path)
         if m:

@@ -92,6 +92,27 @@ class Store:
         added = self.db.total_changes - before
         return added, seen + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
 
+    def reroute(self, route_fn: Callable[[str], Route | None]) -> int:
+        """Apply the current routing rules to URLs not yet archived: pending ones, and failed or
+        thin ones whose lane changed (e.g. Reddit posts that failed in the generic lane before
+        the Reddit lane existed). Finished documents are never touched."""
+        changed = []
+        for url, lane, doc_key, reason, status in self.db.execute(
+            "SELECT url, lane, doc_key, reason, status FROM urls WHERE status IN ('pending', 'failed', 'thin')"
+        ).fetchall():
+            r = route_fn(url)
+            if r is None or (status != "pending" and r.lane == lane):
+                continue
+            if (r.lane, r.doc_key, r.reason) != (lane, doc_key, reason):
+                new_status = "skipped" if r.lane == "skip" else "pending"
+                changed.append((r.lane, r.doc_key, r.doc_id, new_status, r.reason, url))
+        self.db.executemany(
+            "UPDATE urls SET lane = ?, doc_key = ?, doc_id = ?, status = ?, reason = ?, tried = '' WHERE url = ?",
+            changed,
+        )
+        self.db.commit()
+        return len(changed)
+
     def pending(self, lane: str) -> list[tuple[str, str]]:
         """(doc_key, url) for each pending document in a lane; one URL per doc_key."""
         return self.db.execute(

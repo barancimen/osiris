@@ -111,7 +111,10 @@ def cmd_run(args: argparse.Namespace) -> None:
              ", ".join(f"{lane} {n}" for lane, n in by_lane.most_common()))
     log.info("%d new URLs queued; %d already in the manifest (same dedup key as extract_urls.py)", added, known)
 
-    lanes = args.only or list(LANES)
+    rerouted = store.reroute(route)
+    if rerouted:
+        log.info("%d unfinished URLs re-routed by the current rules", rerouted)
+    lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
     if args.retry_failed:
         log.info("re-queued %d failed URLs", store.requeue(lanes))
 
@@ -210,6 +213,8 @@ def main() -> None:
     run.add_argument("--per-host", type=int, default=4, help="max requests in flight per host (default: 4)")
     run.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
+    run.add_argument("--skip", choices=LANES, action="append", default=[],
+                     help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--no-impersonate", action="store_true", help="skip the curl_cffi retry pass")
     run.add_argument("--no-wayback", action="store_true", help="skip the Wayback Machine fallback pass")
