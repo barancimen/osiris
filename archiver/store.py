@@ -85,16 +85,15 @@ class Store:
         self.db.commit()
         return cur.rowcount
 
-    def failed_with(self, lane: str, reasons: Iterable[str]) -> list[str]:
+    def retry_candidates(self, lane: str, reasons: Iterable[str]) -> list[tuple[str, int]]:
+        """(doc_key, chars so far; -1 if failed) for thin docs and failures with these reasons."""
         reasons = list(reasons)
-        return [
-            row[0]
-            for row in self.db.execute(
-                f"SELECT doc_key FROM urls WHERE lane = ? AND status = 'failed'"
-                f" AND reason IN ({','.join('?' * len(reasons))})",
-                (lane, *reasons),
-            )
-        ]
+        return self.db.execute(
+            f"SELECT doc_key, COALESCE(chars, -1) FROM urls WHERE lane = ? AND"
+            f" (status = 'thin' OR (status = 'failed' AND reason IN ({','.join('?' * len(reasons))})))"
+            f" ORDER BY rowid",
+            (lane, *reasons),
+        ).fetchall()
 
     def record(self, doc_key: str, status: str, reason: str | None = None, **fields) -> None:
         """Set the outcome for every URL sharing doc_key. Commits at most once a second."""

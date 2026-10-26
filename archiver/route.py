@@ -108,7 +108,9 @@ def route(raw: str) -> Route | None:
     if bare in ARXIV_HOSTS:
         m = ARXIV_ID_RE.match(path)
         if m:
-            return Route(url, "arxiv", doc_key=f"arxiv:{m.group(1)}")
+            # math.GT/0309136 is an alias of math/0309136, the form the API returns
+            arxiv_id = re.sub(r"^([a-z\-]+)\.[A-Z]{2}/", r"\1/", m.group(1))
+            return Route(url, "arxiv", doc_key=f"arxiv:{arxiv_id}")
         return Route(url, "skip", reason="arxiv_other")
 
     ext = path.rsplit("/", 1)[-1].rpartition(".")[2].lower() if "." in path.rsplit("/", 1)[-1] else ""
