@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "archiver"
+version = "0.1.0"
+description = "Archive a URL list as clean markdown for lexical/semantic indexing"
+requires-python = ">=3.10"
+dependencies = [
+    "trafilatura>=2.3",
+    "lxml_html_clean",
+    "aiohttp>=3.9",
+    "aiodns",
+    "uvloop",
+    "curl_cffi>=0.7",
+    "pypdfium2>=4",
+]
+
+[project.scripts]
+archiver = "archiver.__main__:main"
+
+[tool.setuptools]
+packages = ["archiver"]
