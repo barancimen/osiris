@@ -45,6 +45,9 @@ CHUNK = 1 << 16
 MAX_ATTEMPTS = 3
 MAX_COOLDOWN = 60.0
 HOST_DOWN_AFTER = 3  # consecutive connection-level failures before skipping the rest of a host
+# consecutive 403s before skipping the rest of a host (Scholar, Reddit, Cloudflare walls);
+# the skipped URLs keep reason http_403, so the curl_cffi pass still gets a sample of them
+FORBIDDEN_AFTER = 5
 
 RETRYABLE = {"timeout", "connect", "payload"} | {
     f"http_{c}" for c in (429, 500, 502, 503, 504, 520, 521, 522, 523, 524)
@@ -316,6 +319,7 @@ class GenericPass:
         self.prev_chars = prev_chars  # set on the upgrade pass: only better results get recorded
         self.attempts: Counter[str] = Counter()
         self.host_failures: Counter[str] = Counter()
+        self.host_forbidden: Counter[str] = Counter()
 
     async def run(self, urls: list[str], concurrency: int, per_host: int) -> None:
         sched = HostScheduler(urls, per_host)
@@ -325,20 +329,20 @@ class GenericPass:
     async def _worker(self, sched: HostScheduler) -> None:
         while (item := await sched.get()) is not None:
             host, url = item
-            requeue, cooldown, drop = None, 0.0, False
+            requeue, cooldown, drop = None, 0.0, None
             try:
                 fetched = await self.client.fetch(url)
                 self.attempts[url] += 1
                 reason = fetched.error
+                self.host_failures[host] = self.host_failures[host] + 1 if reason in CONNECTION_LEVEL else 0
+                self.host_forbidden[host] = self.host_forbidden[host] + 1 if reason == "http_403" else 0
                 if reason is None:
-                    self.host_failures[host] = 0
                     await self._extract(url, fetched)
                     continue
-                if reason in CONNECTION_LEVEL:
-                    self.host_failures[host] += 1
-                else:
-                    self.host_failures[host] = 0
-                drop = reason == "dns" or self.host_failures[host] >= HOST_DOWN_AFTER
+                if reason == "dns" or self.host_failures[host] >= HOST_DOWN_AFTER:
+                    drop = "host_down"
+                elif self.host_forbidden[host] >= FORBIDDEN_AFTER:
+                    drop = "http_403"
                 if reason in RETRYABLE and self.attempts[url] < MAX_ATTEMPTS and not drop:
                     requeue = url
                     cooldown = fetched.retry_after or min(2 ** self.attempts[url] + random.uniform(0, 2), MAX_COOLDOWN)
@@ -348,8 +352,8 @@ class GenericPass:
                 log.exception("unexpected error on %s", url)
                 self._fail(url, f"bug:{type(e).__name__}", Fetched())
             finally:
-                for lost in sched.done(host, requeue, cooldown, drop):
-                    self._fail(lost, "host_down", Fetched())
+                for lost in sched.done(host, requeue, cooldown, drop is not None):
+                    self._fail(lost, drop, Fetched())
 
     def _fail(self, url: str, reason: str, f: Fetched) -> None:
         if self.prev_chars is not None:

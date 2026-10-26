@@ -17,6 +17,7 @@ from . import extract
 from .arxiv import run_arxiv
 from .generic import run_generic
 from .route import route
+from .stackexchange import run_stackexchange
 from .store import Store
 from .twitter import run_twitter
 
@@ -26,7 +27,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
 DEFAULT_OUT = REPO_DIR / "data"
 
-LANES = ("twitter", "arxiv", "generic")
+LANES = ("twitter", "arxiv", "stackexchange", "generic")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
 
@@ -65,6 +66,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
     jobs = {
         "twitter": lambda: run_twitter(store),
         "arxiv": lambda: run_arxiv(store),
+        "stackexchange": lambda: run_stackexchange(store),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate),
     }
@@ -113,11 +115,11 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 def print_stats(store: Store, failed: bool = False, thin: bool = False) -> None:
     counts = lane_counts(store)
-    print(f"\n{'lane':<9}{'total':>8}" + "".join(f"{s:>9}" for s in STATUSES))
+    print(f"\n{'lane':<14}{'total':>8}" + "".join(f"{s:>9}" for s in STATUSES))
     for lane in (*LANES, "skip"):
         c = counts.get(lane)
         if c:
-            print(f"{lane:<9}{sum(c.values()):>8}" + "".join(f"{c[s]:>9}" for s in STATUSES))
+            print(f"{lane:<14}{sum(c.values()):>8}" + "".join(f"{c[s]:>9}" for s in STATUSES))
     docs, chars = store.db.execute(
         "SELECT COUNT(DISTINCT doc_id), COALESCE(SUM(chars), 0) FROM"
         " (SELECT doc_id, MAX(chars) AS chars FROM urls WHERE status IN ('ok','thin') GROUP BY doc_id)"

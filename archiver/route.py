@@ -19,6 +19,10 @@ ARXIV_ID_RE = re.compile(
     r"^/(?:abs|pdf|html)/(\d{4}\.\d{4,5}|[a-z][a-z\-]*(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?(?:\.pdf)?/?$"
 )
 
+SE_HOSTS = {"stackoverflow.com", "superuser.com", "serverfault.com", "askubuntu.com", "mathoverflow.net",
+            "stackapps.com"}
+SE_QUESTION_RE = re.compile(r"^/(?:questions|q)/(\d+)(?:/|$)")
+
 # Logged-in chat apps: conversations are private and the pages are JS shells.
 PRIVATE_APP_HOSTS = {"chatgpt.com", "chat.openai.com", "claude.ai", "grok.com", "gemini.google.com"}
 
@@ -112,6 +116,10 @@ def route(raw: str) -> Route | None:
             arxiv_id = re.sub(r"^([a-z\-]+)\.[A-Z]{2}/", r"\1/", m.group(1))
             return Route(url, "arxiv", doc_key=f"arxiv:{arxiv_id}")
         return Route(url, "skip", reason="arxiv_other")
+    if bare in SE_HOSTS or bare.endswith((".stackexchange.com", ".stackoverflow.com", ".mathoverflow.net")):
+        m = SE_QUESTION_RE.match(path)
+        if m:  # anything else (tag listings, user pages) goes through the generic lane
+            return Route(url, "stackexchange", doc_key=f"se:{bare}:{m.group(1)}")
 
     ext = path.rsplit("/", 1)[-1].rpartition(".")[2].lower() if "." in path.rsplit("/", 1)[-1] else ""
     if ext in MEDIA_EXTS:
