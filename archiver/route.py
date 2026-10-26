@@ -21,6 +21,9 @@ ARXIV_ID_RE = re.compile(
     r"^/(?:abs|pdf|html)/(\d{4}\.\d{4,5}|[a-z][a-z\-]*(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?(?:\.pdf)?/?$"
 )
 
+REDDIT_POST_RE = re.compile(r"^/(?:r/[^/]+/)?comments/([a-z0-9]{2,12})(?:/|$)", re.I)
+REDDIT_SHORT_RE = re.compile(r"^/([a-z0-9]{2,12})/?$", re.I)  # redd.it/<post id>
+
 SE_HOSTS = {"stackoverflow.com", "superuser.com", "serverfault.com", "askubuntu.com", "mathoverflow.net",
             "stackapps.com"}
 SE_QUESTION_RE = re.compile(r"^/(?:questions|q)/(\d+)(?:/|$)")
@@ -132,6 +135,10 @@ def _route(found: str) -> Route:
             arxiv_id = re.sub(r"^([a-z\-]+)\.[A-Z]{2}/", r"\1/", m.group(1))
             return Route(url, "arxiv", doc_key=f"arxiv:{arxiv_id}")
         return Route(url, "skip", reason="arxiv_other")
+    if bare == "reddit.com" or bare.endswith(".reddit.com") or bare == "redd.it":
+        m = (REDDIT_SHORT_RE if bare == "redd.it" else REDDIT_POST_RE).match(path)
+        if m:  # subreddit/user pages and /s/ share links go through the generic lane
+            return Route(url, "reddit", doc_key=f"reddit:{m.group(1).lower()}")
     if bare in SE_HOSTS or bare.endswith((".stackexchange.com", ".stackoverflow.com", ".mathoverflow.net")):
         m = SE_QUESTION_RE.match(path)
         if m:  # anything else (tag listings, user pages) goes through the generic lane

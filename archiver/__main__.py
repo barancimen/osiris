@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from . import extract
 from .arxiv import run_arxiv
 from .generic import run_generic
+from .reddit import run_reddit
 from .route import route
 from .stackexchange import run_stackexchange
 from .store import Store
@@ -27,7 +28,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
 DEFAULT_OUT = REPO_DIR / "data"
 
-LANES = ("twitter", "arxiv", "stackexchange", "generic")
+LANES = ("twitter", "arxiv", "stackexchange", "reddit", "generic")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
 
@@ -67,6 +68,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "twitter": lambda: run_twitter(store),
         "arxiv": lambda: run_arxiv(store),
         "stackexchange": lambda: run_stackexchange(store),
+        "reddit": lambda: run_reddit(store),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw),
