@@ -22,6 +22,10 @@ from .twitter import run_twitter
 
 log = logging.getLogger("archiver")
 
+REPO_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
+DEFAULT_OUT = REPO_DIR / "data"
+
 LANES = ("twitter", "arxiv", "generic")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
@@ -185,8 +189,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     run = sub.add_parser("run", help="fetch and extract every pending URL (resumable)")
-    run.add_argument("urlfile", help="text file with one URL per line")
-    run.add_argument("--out", default="data", help="output directory (default: ./data)")
+    run.add_argument("urlfile", nargs="?", default=DEFAULT_URLFILE,
+                     help=f"text file with one URL per line (default: {DEFAULT_URLFILE}, from extract_urls.py)")
+    run.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     run.add_argument("--concurrency", type=int, default=64, help="max requests in flight (default: 64)")
     run.add_argument("--per-host", type=int, default=4, help="max requests in flight per host (default: 4)")
     run.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
@@ -197,13 +202,13 @@ def main() -> None:
     run.set_defaults(func=cmd_run)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
-    stats.add_argument("--out", default="data")
+    stats.add_argument("--out", default=DEFAULT_OUT)
     stats.add_argument("--failed", action="store_true", help="break failures down by host")
     stats.add_argument("--thin", action="store_true", help="break thin pages down by host")
     stats.set_defaults(func=cmd_stats)
 
     export = sub.add_parser("export", help="write all documents to a JSONL corpus")
-    export.add_argument("--out", default="data")
+    export.add_argument("--out", default=DEFAULT_OUT)
     export.add_argument("-o", "--output", help="output path (default: <out>/corpus.jsonl)")
     export.set_defaults(func=cmd_export)
 

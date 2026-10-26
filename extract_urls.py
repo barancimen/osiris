@@ -1,3 +1,4 @@
+import argparse
 import json
 import re
 import glob
@@ -119,11 +120,22 @@ def dedup_key(u):
     frag = unquote(p.fragment) if keep_fragment(p.fragment, path) else ''
     return urlunsplit(('https', host, path, urlencode(query), frag))
 
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_DIR = os.path.normpath(os.path.join(REPO_DIR, '..', 'tab-backups'))
+OUTPUT = os.path.join(REPO_DIR, 'all_urls.md')  # default input of `archiver run`
+
 def main():
-    d = os.path.dirname(os.path.abspath(__file__))
+    ap = argparse.ArgumentParser(description='Collect unique saved URLs from bookmark and Session Buddy backups.')
+    ap.add_argument('--input-dir', default=INPUT_DIR, help=f'backup directory (default: {INPUT_DIR})')
+    ap.add_argument('--output', default=OUTPUT, help=f'URL list to write (default: {OUTPUT})')
+    args = ap.parse_args()
+
+    d = args.input_dir
     files = []
     files += sorted(glob.glob(os.path.join(d, 'bookmarks_*.html')))
     files += sorted(glob.glob(os.path.join(d, 'session-buddy-*.json')))
+    if not files:
+        sys.exit(f'no bookmarks_*.html or session-buddy-*.json in {d}')
 
     seen = set()
     ordered = []  # first-seen original spelling of each page
@@ -144,7 +156,7 @@ def main():
         print(f'{name}: {len(urls)} total, {len(urls) - len(kept)} filtered, '
               f'{added} new, running unique {len(seen)}', file=sys.stderr)
 
-    out = os.path.join(d, 'all_urls.md')
+    out = args.output
     with open(out, 'w', encoding='utf-8') as f:
         f.write('\n'.join(ordered) + '\n')
     print(f'wrote {out}: {len(ordered)} unique urls', file=sys.stderr)
