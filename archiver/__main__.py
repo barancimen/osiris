@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from . import extract
 from .arxiv import run_arxiv
-from .generic import run_generic
+from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .reddit import run_reddit
 from .route import route
 from .stackexchange import run_stackexchange
@@ -71,7 +71,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "reddit": lambda: run_reddit(store),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
-                                       keep_raw=args.keep_raw),
+                                       keep_raw=args.keep_raw, wayback=not args.no_wayback,
+                                       rules=host_rules(args.host_limit)),
     }
     try:
         results = await asyncio.gather(*(jobs[lane]() for lane in lanes), return_exceptions=True)
@@ -82,6 +83,13 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         reporter.cancel()
         store.commit()
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def host_rules(specs: list[str]) -> tuple[HostRule, ...]:
+    """--host-limit rules, plus the defaults for patterns they don't override."""
+    rules = [HostRule.parse(spec) for spec in specs]
+    given = {r.pattern for r in rules}
+    return (*rules, *(r for r in DEFAULT_HOST_RULES if r.pattern not in given))
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -204,6 +212,10 @@ def main() -> None:
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--no-impersonate", action="store_true", help="skip the curl_cffi retry pass")
+    run.add_argument("--no-wayback", action="store_true", help="skip the Wayback Machine fallback pass")
+    run.add_argument("--host-limit", action="append", default=[], metavar="PATTERN=N[:SECONDS]",
+                     help="hosts matching the glob share one queue: N requests in flight, SECONDS between "
+                          "starts (repeatable; default scholar.google.*=1:8)")
     run.add_argument("--keep-raw", action="store_true",
                      help="also keep fetched pages under <out>/raw/: HTML as .html.zst (roughly 1-1.5 GB for "
                           "~20k pages), PDFs as-is (~2 MB each)")

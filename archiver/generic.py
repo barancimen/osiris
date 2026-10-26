@@ -1,12 +1,16 @@
 """Generic lane: async fetch of arbitrary pages, routed by Content-Type, extracted to markdown.
 
-Pass 1 uses aiohttp. Pass 2 re-fetches blocked/thin pages with curl_cffi's Chrome
-TLS fingerprint and only keeps results that beat what pass 1 got.
+Pass 1 uses aiohttp. Then two fallback passes over what it couldn't get, each keeping
+a result only when it beats what came before:
+- impersonate: blocked/thin pages again with curl_cffi's Chrome TLS fingerprint
+- wayback: the newest 200 capture in the Wayback Machine for anything still failed or thin
+Each URL gets each fallback pass once (manifest column `tried`); --retry-failed resets that.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import os
 import random
@@ -45,8 +49,9 @@ CHUNK = 1 << 16
 MAX_ATTEMPTS = 3
 MAX_COOLDOWN = 60.0
 HOST_DOWN_AFTER = 3  # consecutive connection-level failures before skipping the rest of a host
-# consecutive 403s before skipping the rest of a host (Scholar, Reddit, Cloudflare walls);
-# the skipped URLs keep reason http_403, so the curl_cffi pass still gets a sample of them
+# consecutive refusals (403, or 429 after its retries) before skipping the rest of a host
+# (Scholar, Reddit, Cloudflare walls); the skipped URLs keep that reason, so the fallback
+# passes still get to try them
 FORBIDDEN_AFTER = 5
 
 RETRYABLE = {"timeout", "connect", "payload"} | {
@@ -54,7 +59,34 @@ RETRYABLE = {"timeout", "connect", "payload"} | {
 }
 CONNECTION_LEVEL = {"dns", "connect", "ssl", "timeout"}
 # failures a browser TLS fingerprint can plausibly get past (bot walls, fingerprint resets)
-BLOCKED = ["http_403", "http_429", "http_503", "connect", "ssl", "payload", "no_text"]
+BLOCKED = {"http_403", "http_429", "http_503", "connect", "ssl", "payload", "no_text"}
+# failures no archived copy can fix
+NOT_FOR_WAYBACK = ("non_text:", "too_large", "bad_url", "bug:")
+
+WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
+WAYBACK_CONCURRENCY = 4  # archive.org is a nonprofit; keep the load modest
+
+
+@dataclass(frozen=True)
+class HostRule:
+    """Hosts matching `pattern` (fnmatch on the hostname) share one queue: at most
+    `concurrency` requests in flight and `delay` seconds between request starts."""
+
+    pattern: str
+    concurrency: int
+    delay: float = 0.0
+
+    @classmethod
+    def parse(cls, spec: str) -> HostRule:
+        """'scholar.google.*=1:8' -> one request at a time, 8 s apart."""
+        pattern, _, limits = spec.partition("=")
+        concurrency, _, delay = limits.partition(":")
+        return cls(pattern.strip().lower(), max(1, int(concurrency or 1)), float(delay or 0))
+
+
+# Google Scholar shows CAPTCHAs after a burst of requests even from home IPs, and treats
+# all its country domains as one service
+DEFAULT_HOST_RULES = (HostRule("scholar.google.*", 1, 8.0),)
 
 TEXT_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
@@ -90,6 +122,7 @@ class Fetched:
     pdf_path: str | None = None  # holds a pdf_slots permit until the caller releases it
     error: str | None = None
     retry_after: float | None = None
+    via: str | None = None  # fallback that produced it: impersonate | wayback
 
 
 class Reader:
@@ -196,27 +229,89 @@ class AiohttpClient:
         )
 
     async def fetch(self, url: str) -> Fetched:
-        try:
-            async with self.session.get(
-                url, headers={"User-Agent": user_agent(url, self.contact)}, max_redirects=5
-            ) as resp:
-                return await self.reader.read(resp.status, str(resp.url), resp.headers, resp.content.iter_chunked(CHUNK))
-        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
-            return Fetched(error="timeout")
-        except aiohttp.TooManyRedirects:
-            return Fetched(error="redirects")
-        except aiohttp.ClientConnectorDNSError:
-            return Fetched(error="dns")
-        except aiohttp.ClientSSLError:
-            return Fetched(error="ssl")
-        except aiohttp.ClientConnectorError:
-            return Fetched(error="connect")
-        except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError):
-            return Fetched(error="payload")
-        except aiohttp.ClientResponseError as e:
-            return Fetched(status=e.status, error=f"http_{e.status}" if e.status else "bad_response")
-        except (aiohttp.InvalidURL, ValueError, UnicodeError):
-            return Fetched(error="bad_url")
+        return await aiohttp_get(self.session, self.reader, url,
+                                 headers={"User-Agent": user_agent(url, self.contact)})
+
+    async def close(self) -> None:
+        await self.session.close()
+
+
+async def aiohttp_get(session: aiohttp.ClientSession, reader: Reader, url: str, **kwargs) -> Fetched:
+    """GET through Reader, with aiohttp's exceptions mapped onto manifest reasons."""
+    try:
+        async with session.get(url, max_redirects=5, **kwargs) as resp:
+            return await reader.read(resp.status, str(resp.url), resp.headers, resp.content.iter_chunked(CHUNK))
+    except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+        return Fetched(error="timeout")
+    except aiohttp.TooManyRedirects:
+        return Fetched(error="redirects")
+    except aiohttp.ClientConnectorDNSError:
+        return Fetched(error="dns")
+    except aiohttp.ClientSSLError:
+        return Fetched(error="ssl")
+    except aiohttp.ClientConnectorError:
+        return Fetched(error="connect")
+    except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError):
+        return Fetched(error="payload")
+    except aiohttp.ClientResponseError as e:
+        return Fetched(status=e.status, error=f"http_{e.status}" if e.status else "bad_response")
+    except (aiohttp.InvalidURL, ValueError, UnicodeError):
+        return Fetched(error="bad_url")
+
+
+class WaybackClient:
+    """The newest successful Wayback Machine capture of a URL, as originally served
+    (the id_ form: no toolbar, no rewritten links)."""
+
+    def __init__(self, reader: Reader):
+        self.reader = reader
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=90, connect=15, sock_read=45),
+            headers={"User-Agent": BOT_UA},
+        )
+        self.slots = asyncio.Semaphore(WAYBACK_CONCURRENCY)
+        self.paused_until = 0.0  # archive.org rate limits apply to all our requests at once
+
+    async def _pause_if_limited(self, status: int, headers) -> bool:
+        if status != 429:
+            return False
+        wait = parse_retry_after(headers.get("Retry-After")) or 30.0
+        self.paused_until = max(self.paused_until, time.monotonic() + wait)
+        log.warning("wayback: rate limited, pausing %.0fs", wait)
+        return True
+
+    async def _latest_capture(self, url: str) -> tuple[str, str] | str:
+        """(timestamp, original url) of the newest 200 capture, or a failure reason."""
+        params = {"url": url, "output": "json", "fl": "timestamp,original", "filter": "statuscode:200",
+                  "limit": "-1"}
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            await asyncio.sleep(max(0.0, self.paused_until - time.monotonic()))
+            try:
+                async with self.session.get(WAYBACK_CDX, params=params) as resp:
+                    if await self._pause_if_limited(resp.status, resp.headers):
+                        continue
+                    if resp.status >= 400:
+                        return f"wayback_http_{resp.status}"
+                    rows = await resp.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                await asyncio.sleep(2**attempt)
+                continue
+            return (rows[1][0], rows[1][1]) if rows and len(rows) > 1 else "wayback_none"
+        return "wayback_unreachable"
+
+    async def fetch(self, url: str) -> Fetched:
+        async with self.slots:
+            capture = await self._latest_capture(url)
+            if isinstance(capture, str):
+                return Fetched(error=capture)
+            timestamp, original = capture
+            for _ in range(MAX_ATTEMPTS):
+                await asyncio.sleep(max(0.0, self.paused_until - time.monotonic()))
+                f = await aiohttp_get(self.session, self.reader, f"https://web.archive.org/web/{timestamp}id_/{original}")
+                if f.status != 429 or not await self._pause_if_limited(429, {}):
+                    break
+            f.via = "wayback"
+            return f
 
     async def close(self) -> None:
         await self.session.close()
@@ -235,7 +330,9 @@ class CurlClient:
         resp = None
         try:
             resp = await self.session.get(url, stream=True, allow_redirects=True, max_redirects=5)
-            return await self.reader.read(resp.status_code, str(resp.url), resp.headers, resp.aiter_content(CHUNK))
+            f = await self.reader.read(resp.status_code, str(resp.url), resp.headers, resp.aiter_content(CHUNK))
+            f.via = "impersonate"
+            return f
         except Exception as e:  # curl_cffi exception names map cleanly onto our reasons
             name = type(e).__name__
             for needle, reason in (("Timeout", "timeout"), ("DNS", "dns"), ("SSL", "ssl"), ("Certificate", "ssl"),
@@ -256,15 +353,22 @@ class HostScheduler:
     skipping hosts that are cooling down after a 429/5xx/timeout. No head-of-line blocking:
     a worker never waits on a busy host while another host has work."""
 
-    def __init__(self, urls: list[str], per_host: int):
+    def __init__(self, urls: list[str], per_host: int, rules: tuple[HostRule, ...] = ()):
+        self.rules = rules
         self.queues: OrderedDict[str, deque[str]] = OrderedDict()
         for url in urls:
-            self.queues.setdefault(host_of(url), deque()).append(url)
+            self.queues.setdefault(self.key_of(url), deque()).append(url)
         self.per_host = per_host
+        self.limits = {r.pattern: r for r in rules}
         self.active: Counter[str] = Counter()
         self.in_flight = 0
         self.cooldown: dict[str, float] = {}
         self.changed = asyncio.Event()
+
+    def key_of(self, url: str) -> str:
+        """The queue a URL waits in: its host, or the pattern of the first rule matching it."""
+        host = host_of(url)
+        return next((r.pattern for r in self.rules if fnmatch.fnmatch(host, r.pattern)), host)
 
     async def get(self) -> tuple[str, str] | None:
         while True:
@@ -272,21 +376,24 @@ class HostScheduler:
                 return None
             now = time.monotonic()
             wake = None
-            for host, queue in self.queues.items():
-                if self.active[host] >= self.per_host:
+            for key, queue in self.queues.items():
+                rule = self.limits.get(key)
+                if self.active[key] >= (rule.concurrency if rule else self.per_host):
                     continue
-                until = self.cooldown.get(host, 0.0)
+                until = self.cooldown.get(key, 0.0)
                 if until > now:
                     wake = until if wake is None else min(wake, until)
                     continue
                 url = queue.popleft()
                 if queue:
-                    self.queues.move_to_end(host)
+                    self.queues.move_to_end(key)
                 else:
-                    del self.queues[host]
-                self.active[host] += 1
+                    del self.queues[key]
+                if rule and rule.delay:
+                    self.cooldown[key] = max(until, now + rule.delay * random.uniform(0.75, 1.25))
+                self.active[key] += 1
                 self.in_flight += 1
-                return host, url
+                return key, url
             self.changed.clear()
             try:
                 await asyncio.wait_for(self.changed.wait(), None if wake is None else max(0.05, wake - now))
@@ -310,9 +417,12 @@ class HostScheduler:
 
 class GenericPass:
     def __init__(self, store: Store, client, reader: Reader, pool: Executor, workers: int,
-                 keep_raw: bool = False, prev_chars: dict[str, int] | None = None):
+                 keep_raw: bool = False, prev_chars: dict[str, int] | None = None,
+                 pass_name: str | None = None, rules: tuple[HostRule, ...] = ()):
         self.store = store
         self.keep_raw = keep_raw
+        self.pass_name = pass_name  # fallback passes mark each URL they finish in `tried`
+        self.rules = rules
         self.client = client
         self.reader = reader
         self.pool = pool
@@ -323,28 +433,33 @@ class GenericPass:
         self.host_forbidden: Counter[str] = Counter()
 
     async def run(self, urls: list[str], concurrency: int, per_host: int) -> None:
-        sched = HostScheduler(urls, per_host)
+        sched = HostScheduler(urls, per_host, self.rules)
         await asyncio.gather(*(self._worker(sched) for _ in range(concurrency)))
         self.store.commit()
 
     async def _worker(self, sched: HostScheduler) -> None:
         while (item := await sched.get()) is not None:
-            host, url = item
+            key, url = item  # key: the host, or the HostRule pattern grouping several hosts
             requeue, cooldown, drop = None, 0.0, None
             try:
                 fetched = await self.client.fetch(url)
                 self.attempts[url] += 1
                 reason = fetched.error
-                self.host_failures[host] = self.host_failures[host] + 1 if reason in CONNECTION_LEVEL else 0
-                self.host_forbidden[host] = self.host_forbidden[host] + 1 if reason == "http_403" else 0
+                self.host_failures[key] = self.host_failures[key] + 1 if reason in CONNECTION_LEVEL else 0
                 if reason is None:
+                    self.host_forbidden[key] = 0
                     await self._extract(url, fetched)
                     continue
-                if reason == "dns" or self.host_failures[host] >= HOST_DOWN_AFTER:
+                if reason == "dns" or self.host_failures[key] >= HOST_DOWN_AFTER:
                     drop = "host_down"
-                elif self.host_forbidden[host] >= FORBIDDEN_AFTER:
-                    drop = "http_403"
-                if reason in RETRYABLE and self.attempts[url] < MAX_ATTEMPTS and not drop:
+                retry = reason in RETRYABLE and self.attempts[url] < MAX_ATTEMPTS and drop is None
+                if reason == "http_403" or (reason == "http_429" and not retry):
+                    self.host_forbidden[key] += 1
+                    if drop is None and self.host_forbidden[key] >= FORBIDDEN_AFTER:
+                        drop = reason
+                elif reason != "http_429":
+                    self.host_forbidden[key] = 0
+                if retry:
                     requeue = url
                     cooldown = fetched.retry_after or min(2 ** self.attempts[url] + random.uniform(0, 2), MAX_COOLDOWN)
                 else:
@@ -353,8 +468,15 @@ class GenericPass:
                 log.exception("unexpected error on %s", url)
                 self._fail(url, f"bug:{type(e).__name__}", Fetched())
             finally:
-                for lost in sched.done(host, requeue, cooldown, drop is not None):
+                if requeue is None:
+                    self._mark_tried(url)
+                for lost in sched.done(key, requeue, cooldown, drop is not None):
                     self._fail(lost, drop, Fetched())
+                    self._mark_tried(lost)
+
+    def _mark_tried(self, url: str) -> None:
+        if self.pass_name:
+            self.store.mark_tried(url, self.pass_name)
 
     def _fail(self, url: str, reason: str, f: Fetched, raw_path: str | None = None) -> None:
         if self.prev_chars is not None:
@@ -374,7 +496,9 @@ class GenericPass:
             try:
                 if f.kind == "html":
                     async with self.extract_slots:
-                        res = await loop.run_in_executor(self.pool, extract.html_to_doc, f.body, f.final_url or url)
+                        # an archived copy is still the original page as far as metadata goes
+                        page_url = url if f.via == "wayback" else (f.final_url or url)
+                        res = await loop.run_in_executor(self.pool, extract.html_to_doc, f.body, page_url)
                 elif f.kind == "pdf":
                     async with self.extract_slots:
                         res = await loop.run_in_executor(self.pool, extract.pdf_to_doc, f.pdf_path)
@@ -402,7 +526,7 @@ class GenericPass:
         meta = {
             "url": url,
             "final_url": f.final_url if f.final_url != url else None,
-            "source": f.kind,
+            "source": f"{f.kind}:{f.via}" if f.via else f.kind,
             "title": res.get("title"),
             "author": res.get("author"),
             "date": res.get("date"),
@@ -416,7 +540,8 @@ class GenericPass:
 
 
 async def run_generic(store: Store, pool: Executor, workers: int, concurrency: int, per_host: int,
-                      contact: str | None, impersonate: bool, keep_raw: bool) -> None:
+                      contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool,
+                      rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES) -> None:
     pdf_slots = asyncio.Semaphore(3)
     reader = Reader(store.tmp_dir, pdf_slots)
 
@@ -424,19 +549,27 @@ async def run_generic(store: Store, pool: Executor, workers: int, concurrency: i
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
     client = AiohttpClient(reader, concurrency, per_host, contact)
     try:
-        await GenericPass(store, client, reader, pool, workers, keep_raw).run(urls, concurrency, per_host)
+        await GenericPass(store, client, reader, pool, workers, keep_raw, rules=rules).run(urls, concurrency, per_host)
     finally:
         await client.close()
 
-    if not impersonate:
-        return
-    candidates = store.retry_candidates("generic", BLOCKED)
-    if not candidates:
-        return
-    log.info("generic: retrying %d blocked/thin URLs with a browser fingerprint", len(candidates))
-    client = CurlClient(reader, concurrency=16)
-    try:
-        upgrade = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars=dict(candidates))
-        await upgrade.run([key for key, _ in candidates], concurrency=16, per_host=2)
-    finally:
-        await client.close()
+    fallbacks = []
+    if impersonate:
+        fallbacks.append(("impersonate", lambda: CurlClient(reader, concurrency=16), 16, 2, rules,
+                          lambda reason: reason in BLOCKED, "blocked/thin URLs with a browser fingerprint"))
+    if wayback:
+        # requests go to archive.org, so the per-site rules don't apply
+        fallbacks.append(("wayback", lambda: WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, (),
+                          lambda reason: not reason.startswith(NOT_FOR_WAYBACK), "failed/thin URLs from the Wayback Machine"))
+    for name, make_client, pass_concurrency, pass_per_host, pass_rules, eligible, what in fallbacks:
+        candidates = store.retry_candidates("generic", name, eligible)
+        if not candidates:
+            continue
+        log.info("generic: %s pass: %d %s", name, len(candidates), what)
+        client = make_client()
+        try:
+            upgrade = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars=dict(candidates),
+                                  pass_name=name, rules=pass_rules)
+            await upgrade.run([key for key, _ in candidates], pass_concurrency, pass_per_host)
+        finally:
+            await client.close()

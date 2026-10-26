@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,13 +27,15 @@ CREATE TABLE IF NOT EXISTS urls (
     attempts     INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT,
     dedup_key    TEXT,  -- archiver.dedup.dedup_key of the URL as it appeared in the input
-    raw_path     TEXT   -- relative to the output dir, only with --keep-raw
+    raw_path     TEXT,  -- relative to the output dir, only with --keep-raw
+    tried        TEXT NOT NULL DEFAULT ''  -- fallback passes already run on it, e.g. ",impersonate,wayback"
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
 CREATE INDEX IF NOT EXISTS urls_doc_key ON urls(doc_key);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
-              "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT"}
+              "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
+              "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''"}
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
 DONE = ("ok", "thin")
@@ -101,22 +103,26 @@ class Store:
     def requeue(self, lanes: Iterable[str], statuses: Iterable[str] = ("failed",)) -> int:
         lanes, statuses = list(lanes), list(statuses)
         cur = self.db.execute(
-            f"UPDATE urls SET status = 'pending' WHERE lane IN ({','.join('?' * len(lanes))})"
+            f"UPDATE urls SET status = 'pending', tried = '' WHERE lane IN ({','.join('?' * len(lanes))})"
             f" AND status IN ({','.join('?' * len(statuses))})",
             (*lanes, *statuses),
         )
         self.db.commit()
         return cur.rowcount
 
-    def retry_candidates(self, lane: str, reasons: Iterable[str]) -> list[tuple[str, int]]:
-        """(doc_key, chars so far; -1 if failed) for thin docs and failures with these reasons."""
-        reasons = list(reasons)
-        return self.db.execute(
-            f"SELECT doc_key, COALESCE(chars, -1) FROM urls WHERE lane = ? AND"
-            f" (status = 'thin' OR (status = 'failed' AND reason IN ({','.join('?' * len(reasons))})))"
-            f" ORDER BY rowid",
-            (lane, *reasons),
-        ).fetchall()
+    def retry_candidates(self, lane: str, pass_name: str, eligible: Callable[[str], bool]) -> list[tuple[str, int]]:
+        """(doc_key, chars so far; -1 if failed) for thin docs and failures whose reason is
+        eligible, skipping those this fallback pass already tried."""
+        rows = self.db.execute(
+            "SELECT doc_key, status, reason, COALESCE(chars, -1) FROM urls WHERE lane = ?"
+            " AND status IN ('thin', 'failed') AND instr(tried, ?) = 0 ORDER BY rowid",
+            (lane, f",{pass_name}"),
+        )
+        return [(key, chars) for key, status, reason, chars in rows if status == "thin" or eligible(reason or "")]
+
+    def mark_tried(self, doc_key: str, pass_name: str) -> None:
+        self.db.execute("UPDATE urls SET tried = tried || ? WHERE doc_key = ? AND instr(tried, ?) = 0",
+                        (f",{pass_name}", doc_key, f",{pass_name}"))
 
     def record(self, doc_key: str, status: str, reason: str | None = None, **fields) -> None:
         """Set the outcome for every URL sharing doc_key. Commits at most once a second."""
