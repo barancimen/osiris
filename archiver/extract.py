@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import signal
 
@@ -9,9 +10,21 @@ MIN_CHARS = 200  # below this a page is "thin" (JS shell, paywall, bot wall, ...
 MAX_PDF_PAGES = 400
 TASK_TIMEOUT = 45  # seconds; a pathological document must not wedge the only worker
 
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+except OSError:  # not glibc
+    _libc = None
+
 
 class ExtractionTimeout(Exception):
     pass
+
+
+def _release_memory() -> None:
+    """Hand freed heap back to the OS. Without this the worker keeps its high-water mark
+    (~475 MB after a large PDF, ~240 MB after big HTML pages) for the rest of the run."""
+    if _libc is not None:
+        _libc.malloc_trim(0)
 
 
 def _on_alarm(signum, frame):
@@ -58,6 +71,7 @@ def html_to_doc(data: bytes, url: str) -> dict:
         return {"text": "", "error": f"extract_error:{type(e).__name__}"}
     finally:
         signal.alarm(0)
+        _release_memory()
     if doc is None:
         return {"text": ""}
     return {
@@ -93,6 +107,7 @@ def pdf_to_doc(path: str) -> dict:
         signal.alarm(0)
         if pdf is not None:
             pdf.close()
+        _release_memory()
     text = "\n\n".join(p for p in pages if p)
     title = meta.get("Title") or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
     return {"text": text, "title": title, "author": meta.get("Author")}
