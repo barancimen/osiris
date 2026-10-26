@@ -14,17 +14,15 @@ that comes back empty although the post has comments.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import aiohttp
 
+from .scry import ScryClient, ScryError, load_key
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -53,21 +51,6 @@ class SourceError(Exception):
     pass
 
 
-def load_scry_key() -> str | None:
-    if os.environ.get("SCRY_API_KEY"):
-        return os.environ["SCRY_API_KEY"]
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    for path in (xdg / "scry" / "env", Path.home() / ".scry" / ".env"):
-        try:
-            for line in path.read_text().splitlines():
-                key, _, value = line.removeprefix("export ").partition("=")
-                if key.strip() == "SCRY_API_KEY" and value.strip():
-                    return value.strip().strip("'\"")
-        except OSError:
-            continue
-    return None
-
-
 def _parent(parent_id: str | None) -> str | None:
     """t1_<comment> -> comment id; t3_<post> (top level) -> None."""
     return parent_id[3:] if parent_id and parent_id.startswith("t1_") else None
@@ -75,35 +58,17 @@ def _parent(parent_id: str | None) -> str | None:
 
 class ScrySource:
     name = "scry"
-    API_URL = "https://api.scry.io/v1/scry/query"
     BATCH = 100
     COMMENT_WINDOW = timedelta(days=190)  # Reddit archives threads after 6 months by default
 
     def __init__(self, session: aiohttp.ClientSession, key: str):
-        self.session = session
-        self.key = key
-        self.slots = asyncio.Semaphore(4)
+        self.client = ScryClient(session, key)
 
     async def _query(self, sql: str, max_seconds: int) -> list[dict]:
-        headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "text/plain",
-                   "x-scry-max-seconds": str(max_seconds)}
-        async with self.slots:
-            for attempt in range(1, 4):
-                try:
-                    async with self.session.post(self.API_URL, data=sql, headers=headers,
-                                                 timeout=aiohttp.ClientTimeout(total=max_seconds + 60)) as resp:
-                        # long queries stream keepalive whitespace before the JSON body
-                        data = json.loads((await resp.text()).strip() or "{}")
-                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-                    log.warning("reddit/scry: %s (try %d)", e, attempt)
-                    await asyncio.sleep(2**attempt)
-                    continue
-                if "rows" in data:
-                    names = [c["name"] for c in data["columns"]]
-                    return [dict(zip(names, row)) for row in data["rows"]]
-                error = data.get("error") or data
-                raise SourceError(f"{error.get('code')}: {error.get('message')}")
-        raise SourceError("scry unreachable")
+        try:
+            return await self.client.query(sql, max_seconds)
+        except ScryError as e:
+            raise SourceError(str(e)) from e
 
     async def posts(self, ids: list[str]) -> dict[str, Post]:
         found = {}
@@ -250,7 +215,7 @@ async def run_reddit(store: Store) -> None:
 
     async with aiohttp.ClientSession(headers={"User-Agent": UA}) as session:
         sources = [ArcticShiftSource(session)]
-        key = load_scry_key()
+        key = load_key()
         if key:
             sources.insert(0, ScrySource(session, key))
         else:

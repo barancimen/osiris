@@ -1,4 +1,11 @@
-"""Twitter lane: batch tweet lookup via twitterapi.io (x.com serves an empty JS shell to scrapers)."""
+"""Twitter lane: tweet text without scraping x.com (it serves an empty JS shell).
+
+1. Scry's Twitter archive (free; it also holds some tweets deleted since), when a Scry key
+   is configured (SCRY_API_KEY, ~/.config/scry/env or ~/.scry/.env)
+2. twitterapi.io's batch lookup for the tweets Scry lacks, only when TWITTERAPI_IO_KEY is
+   set (it bills per tweet). Without it those tweets are recorded as not_in_scry, ready
+   for --retry-failed later.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,7 @@ import os
 
 import aiohttp
 
+from .scry import ScryClient, ScryError, load_key
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -18,6 +26,7 @@ PAGE_DELAY = 0.5  # same pacing as /root/twitterapi/fetch_tweets.py
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2.0
 KEY_ENV = "TWITTERAPI_IO_KEY"
+SCRY_BATCH = 500  # keyed reads take up to 1000 literal ids
 
 
 async def _api_get(session: aiohttp.ClientSession, path: str, params: dict) -> dict:
@@ -64,17 +73,65 @@ def _tweet_markdown(t: dict) -> tuple[dict, str]:
     return meta, "\n".join(lines)
 
 
-async def run_twitter(store: Store) -> None:
-    pending = store.pending("twitter")
-    if not pending:
-        return
-    api_key = os.environ.get(KEY_ENV)
-    if not api_key:
-        log.warning("twitter: %s not set; leaving %d tweets pending", KEY_ENV, len(pending))
-        return
-    ids = [key.split(":", 1)[1] for key, _ in pending]
-    log.info("twitter: %d tweets in %d calls", len(ids), -(-len(ids) // BATCH))
+def _ids_sql(ids) -> str:
+    return ",".join(i for i in ids if i.isdigit())
 
+
+async def _from_scry(client: ScryClient, ids: list[str]) -> dict[str, dict]:
+    """Tweets from Scry's archive in twitterapi.io's shape, so one renderer serves both."""
+    cols = ("toString(tweet_id) AS id, toString(author_id) AS author_id, author_handle, author_display_name,"
+            " toString(original_timestamp) AS created, text, toString(quoted_tweet_id) AS quoted_id,"
+            " article_title, article_text")
+
+    async def read(wanted: list[str]) -> dict[str, dict]:
+        rows = {}
+        for i in range(0, len(wanted), SCRY_BATCH):
+            for r in await client.query(f"SELECT {cols} FROM twitter.tweets_latest"
+                                        f" WHERE tweet_id IN ({_ids_sql(wanted[i : i + SCRY_BATCH])})"
+                                        f" LIMIT {2 * SCRY_BATCH}", max_seconds=180):
+                rows[r["id"]] = r
+        return rows
+
+    tweets = await read(ids)
+    quoted = await read(sorted({t["quoted_id"] for t in tweets.values() if t["quoted_id"] != "0"} - tweets.keys()))
+    everything = {**quoted, **tweets}
+    # about 8% of observations carry the author's id but not the handle
+    blank = sorted({t["author_id"] for t in everything.values() if not t["author_handle"]})
+    names: dict[str, tuple[str, str]] = {}
+    for i in range(0, len(blank), SCRY_BATCH):
+        for r in await client.query(
+            "SELECT toString(author_id) AS author_id, argMax(handle, observed_on) AS handle,"
+            " argMax(display_name, observed_on) AS name FROM twitter.users"
+            f" WHERE author_id IN ({_ids_sql(blank[i : i + SCRY_BATCH])}) AND handle != ''"
+            f" GROUP BY author_id LIMIT {SCRY_BATCH}", max_seconds=120):
+            names[r["author_id"]] = (r["handle"], r["name"])
+
+    def author(t: dict) -> dict:
+        handle, name = (t["author_handle"], t["author_display_name"]) if t["author_handle"] else \
+            names.get(t["author_id"], ("", ""))
+        return {"userName": handle or None, "name": name or None}
+
+    out = {}
+    for tid, t in tweets.items():
+        text = t["text"]
+        if t["article_title"]:  # an X article: keep its body, not just the link
+            text += f"\n\n## {t['article_title']}\n\n{t['article_text']}".rstrip()
+        a = author(t)
+        q = everything.get(t["quoted_id"])
+        out[tid] = {
+            "id": tid,
+            "text": text,
+            "createdAt": t["created"][:19],  # drop the zero microseconds
+            "url": f"https://x.com/{a['userName'] or 'i/web'}/status/{tid}",
+            "author": a,
+            "quoted_tweet": {"text": q["text"], "author": author(q)} if q else None,
+        }
+    return out
+
+
+async def _from_twitterapi(api_key: str, ids: list[str]) -> tuple[dict[str, dict], set[str]]:
+    """(tweets found, ids whose batch failed and so stay unresolved)."""
+    found, unresolved = {}, set()
     timeout = aiohttp.ClientTimeout(total=60)
     async with aiohttp.ClientSession(headers={"X-API-Key": api_key}, timeout=timeout) as session:
         for i in range(0, len(ids), BATCH):
@@ -82,16 +139,56 @@ async def run_twitter(store: Store) -> None:
             try:
                 data = await _api_get(session, "/twitter/tweets", {"tweet_ids": ",".join(batch)})
             except Exception as e:
-                log.error("twitter: batch %d failed, left pending: %s", i // BATCH, e)
+                log.error("twitter: twitterapi.io batch %d failed, left pending: %s", i // BATCH, e)
+                unresolved.update(batch)
                 continue
-            found = {str(t.get("id")): t for t in data.get("tweets") or []}
-            for tid in batch:
-                tweet = found.get(tid)
-                if tweet is None:
-                    store.record(f"tweet:{tid}", "failed", "not_found")  # deleted, protected or suspended
-                    continue
-                meta, body = _tweet_markdown(tweet)
-                chars = store.write_doc(f"tweet:{tid}", meta, body)
-                store.record(f"tweet:{tid}", "ok", chars=chars, final_url=meta["url"], http_status=200)
-            store.commit()
+            for t in data.get("tweets") or []:
+                found[str(t.get("id"))] = t
             await asyncio.sleep(PAGE_DELAY)
+    return found, unresolved
+
+
+async def run_twitter(store: Store) -> None:
+    pending = store.pending("twitter")
+    if not pending:
+        return
+    ids = [key.split(":", 1)[1] for key, _ in pending]
+    scry_key, api_key = load_key(), os.environ.get(KEY_ENV)
+    if not scry_key and not api_key:
+        log.warning("twitter: no Scry key and %s not set; leaving %d tweets pending", KEY_ENV, len(ids))
+        return
+
+    found: dict[str, tuple[dict, str]] = {}
+    unresolved: set[str] = set()
+    scry_answered = False
+    if scry_key:
+        async with aiohttp.ClientSession() as session:
+            try:
+                for tid, t in (await _from_scry(ScryClient(session, scry_key), ids)).items():
+                    found[tid] = (t, "scry")
+                scry_answered = True
+            except ScryError as e:
+                log.error("twitter: Scry lookup failed: %s", e)
+        log.info("twitter: %d of %d tweets found in Scry's archive", len(found), len(ids))
+    missing = [tid for tid in ids if tid not in found]
+    if missing and api_key:
+        log.info("twitter: looking up %d tweets on twitterapi.io (%d calls)", len(missing), -(-len(missing) // BATCH))
+        tweets, unresolved = await _from_twitterapi(api_key, missing)
+        found.update((tid, (t, "twitterapi")) for tid, t in tweets.items())
+    elif missing:
+        log.info("twitter: %d tweets not in Scry; set %s to look them up on twitterapi.io", len(missing), KEY_ENV)
+
+    for tid in ids:
+        if tid in found:
+            tweet, source = found[tid]
+            meta, body = _tweet_markdown(tweet)
+            meta["source"] = f"tweet:{source}"
+            chars = store.write_doc(f"tweet:{tid}", meta, body)
+            store.record(f"tweet:{tid}", "ok", chars=chars, final_url=meta["url"], http_status=200)
+        elif tid in unresolved:
+            continue
+        elif api_key:
+            store.record(f"tweet:{tid}", "failed", "not_found")  # deleted, protected or suspended
+        elif scry_answered:
+            store.record(f"tweet:{tid}", "failed", "not_in_scry")
+    store.commit()
