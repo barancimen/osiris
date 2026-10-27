@@ -8,7 +8,9 @@ import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
+from fnmatch import fnmatch
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .route import Route, doc_id, safe_dedup_key
 
@@ -121,15 +123,19 @@ class Store:
             (lane,),
         ).fetchall()
 
-    def requeue(self, lanes: Iterable[str], statuses: Iterable[str] = ("failed",)) -> int:
-        lanes, statuses = list(lanes), list(statuses)
-        cur = self.db.execute(
-            f"UPDATE urls SET status = 'pending', tried = '' WHERE lane IN ({','.join('?' * len(lanes))})"
-            f" AND status IN ({','.join('?' * len(statuses))})",
-            (*lanes, *statuses),
-        )
+    def requeue(self, lanes: Iterable[str], statuses: Iterable[str] = ("failed",), hosts: Iterable[str] = ()) -> int:
+        """Back to pending with no fallback passes tried; `hosts` (fnmatch globs) narrows it to those sites."""
+        lanes, statuses, hosts = list(lanes), list(statuses), [h.lower() for h in hosts]
+        where = f"lane IN ({','.join('?' * len(lanes))}) AND status IN ({','.join('?' * len(statuses))})"
+        if not hosts:
+            cur = self.db.execute(f"UPDATE urls SET status = 'pending', tried = '' WHERE {where}", (*lanes, *statuses))
+            self.db.commit()
+            return cur.rowcount
+        urls = [(url,) for (url,) in self.db.execute(f"SELECT url FROM urls WHERE {where}", (*lanes, *statuses))
+                if any(fnmatch(urlsplit(url).hostname or "", h) for h in hosts)]
+        self.db.executemany("UPDATE urls SET status = 'pending', tried = '' WHERE url = ?", urls)
         self.db.commit()
-        return cur.rowcount
+        return len(urls)
 
     def retry_candidates(self, lane: str, pass_name: str, eligible: Callable[[str], bool]) -> list[tuple[str, int]]:
         """(doc_key, chars so far; -1 if failed) for thin docs and failures whose reason is

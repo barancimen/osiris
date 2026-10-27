@@ -136,8 +136,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if rerouted:
         log.info("%d unfinished URLs re-routed by the current rules", rerouted)
     lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
-    if args.retry_failed:
-        log.info("re-queued %d failed URLs", store.requeue(lanes))
+    if args.retry_failed or args.retry_host:
+        log.info("re-queued %d failed URLs%s", store.requeue(lanes, hosts=args.retry_host),
+                 f" on {', '.join(args.retry_host)}" if args.retry_host else "")
 
     try:
         uvloop.run(_run_lanes(store, args, lanes))
@@ -242,6 +243,9 @@ def main() -> None:
     run.add_argument("--skip", choices=LANES, action="append", default=[],
                      help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
+    run.add_argument("--retry-host", action="append", default=[], metavar="PATTERN",
+                     help="re-queue only failed URLs on hosts matching the glob (repeatable), e.g. "
+                          "--retry-host 'scholar.google.*' after adding --cookies")
     run.add_argument("--no-impersonate", action="store_true", help="skip the curl_cffi retry pass")
     run.add_argument("--no-doi", action="store_true", help="skip the DOI (OpenAlex abstract) fallback pass")
     run.add_argument("--no-wayback", action="store_true", help="skip the Wayback Machine fallback pass")

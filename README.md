@@ -23,8 +23,11 @@ Typical local run, with your browser's session for Scholar, Medium and logged-in
 Re-running `archiver run` on a new or updated list only queues URLs whose dedup key
 (`archiver/dedup.py`, shared with `extract_urls.py`: tracking params, `twitter.com`→`x.com`,
 `www.`/`m.`/`old.` hosts, arXiv abs/pdf/html, …) isn't already in the manifest. Every run
-also applies the current routing rules to URLs not yet archived. `--retry-failed` re-queues
-earlier failures. To move a run to another machine, copy `data/` along with the repo.
+also applies the current routing rules to URLs not yet archived. Failed URLs get each fallback
+pass once and are then left alone: `--retry-failed` re-queues all of them, and
+`--retry-host 'scholar.google.*'` (repeatable) only those on matching sites, e.g. after adding
+`--cookies`. To move a run to another machine, copy `data/` along with the repo (not `.venv`),
+after the run has stopped.
 
 ### Keys (all optional)
 

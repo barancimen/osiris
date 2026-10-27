@@ -34,8 +34,9 @@ log = logging.getLogger(__name__)
 BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
-BOT_UA = "personal-archiver/0.1 (one-off text archive of saved browser tabs)"
-# Wikimedia asks automated clients for a descriptive User-Agent instead of a browser one
+BOT_UA = "personal-archiver/0.1 (https://github.com/barancimen/archiver; one-off text archive of saved browser tabs)"
+# Wikimedia wants automated clients to send a descriptive User-Agent with contact details: a
+# browser UA, or one without a URL or email, gets 403 "Please respect our robot policy"
 WIKIMEDIA = (
     "wikipedia.org", "wikimedia.org", "wiktionary.org", "wikibooks.org", "wikiquote.org",
     "wikisource.org", "wikivoyage.org", "wikidata.org", "mediawiki.org", "wikinews.org",
