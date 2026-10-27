@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import logging
+import resource
 import signal
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+
+log = logging.getLogger(__name__)
 
 MIN_CHARS = 200  # below this a page is "thin" (JS shell, paywall, bot wall, ...)
+RECYCLE_AFTER = 500  # tasks per worker generation: freed address space never shrinks otherwise
 MAX_PDF_PAGES = 400
 TASK_TIMEOUT = 45  # seconds; a pathological document must not wedge the only worker
 
@@ -31,9 +38,13 @@ def _on_alarm(signum, frame):
     raise ExtractionTimeout()
 
 
-def init_worker() -> None:
+def init_worker(mem_mb: int = 0) -> None:
     # the parent handles Ctrl-C and shuts the pool down
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if mem_mb:
+        # a pathological document then fails with MemoryError instead of swapping the machine
+        cap = mem_mb * 2**20
+        resource.setrlimit(resource.RLIMIT_DATA, (cap, cap))
     signal.signal(signal.SIGALRM, _on_alarm)
     for name in ("trafilatura", "htmldate", "courlan", "justext", "charset_normalizer", "readability"):
         logging.getLogger(name).setLevel(logging.CRITICAL)
@@ -111,3 +122,50 @@ def pdf_to_doc(path: str) -> dict:
     text = "\n\n".join(p for p in pages if p)
     title = meta.get("Title") or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
     return {"text": text, "title": title, "author": meta.get("Author")}
+
+
+class WorkerPool:
+    """Extraction processes that survive their workers. A worker that dies (OOM killer,
+    memory cap, a crash inside lxml or pdfium) breaks the whole executor and every task in
+    flight on it, so the pool is rebuilt and each of those tasks is retried alone in a
+    one-off process: only the document that actually crashes is lost. Workers are also
+    replaced every RECYCLE_AFTER tasks."""
+
+    def __init__(self, workers: int, mem_mb: int = 0):
+        self.workers = workers
+        self.mem_mb = mem_mb
+        self.executor = self._new(workers)
+        self.submitted = 0
+
+    def _new(self, workers: int) -> ProcessPoolExecutor:
+        return ProcessPoolExecutor(max_workers=workers, initializer=init_worker, initargs=(self.mem_mb,))
+
+    def _replace(self, old: ProcessPoolExecutor, cancel: bool) -> None:
+        if old is self.executor:  # several failing tasks race to replace the same executor
+            self.executor = self._new(self.workers)
+            self.submitted = 0
+            old.shutdown(wait=False, cancel_futures=cancel)
+
+    async def run(self, fn, *args) -> dict:
+        loop = asyncio.get_running_loop()
+        if self.submitted >= RECYCLE_AFTER * self.workers:
+            self._replace(self.executor, cancel=False)  # in-flight tasks still finish
+        executor = self.executor
+        self.submitted += 1
+        try:
+            return await loop.run_in_executor(executor, fn, *args)
+        except BrokenProcessPool:
+            if executor is self.executor:
+                log.warning("an extraction worker died; restarting the pool")
+            self._replace(executor, cancel=True)
+        solo = self._new(1)
+        try:
+            return await loop.run_in_executor(solo, fn, *args)
+        except BrokenProcessPool:
+            log.warning("a document crashed its extraction worker twice; skipping it")
+            return {"text": "", "error": "extract_crashed"}
+        finally:
+            solo.shutdown(wait=False)
+
+    def shutdown(self) -> None:
+        self.executor.shutdown(wait=True, cancel_futures=True)

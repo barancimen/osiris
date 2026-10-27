@@ -17,7 +17,6 @@ import random
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
-from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -424,7 +423,7 @@ class HostScheduler:
 
 
 class GenericPass:
-    def __init__(self, store: Store, client, reader: Reader, pool: Executor, workers: int,
+    def __init__(self, store: Store, client, reader: Reader, pool: extract.WorkerPool, workers: int,
                  keep_raw: bool = False, prev_chars: dict[str, int] | None = None,
                  pass_name: str | None = None, rules: tuple[HostRule, ...] = ()):
         self.store = store
@@ -498,7 +497,6 @@ class GenericPass:
         return self.store.save_raw(url, "html.zst" if f.kind == "html" else "txt.zst", data=f.body)
 
     async def _extract(self, url: str, f: Fetched) -> None:
-        loop = asyncio.get_running_loop()
         raw_path = None
         try:
             try:
@@ -506,10 +504,10 @@ class GenericPass:
                     async with self.extract_slots:
                         # an archived copy is still the original page as far as metadata goes
                         page_url = url if f.via == "wayback" else (f.final_url or url)
-                        res = await loop.run_in_executor(self.pool, extract.html_to_doc, f.body, page_url)
+                        res = await self.pool.run(extract.html_to_doc, f.body, page_url)
                 elif f.kind == "pdf":
                     async with self.extract_slots:
-                        res = await loop.run_in_executor(self.pool, extract.pdf_to_doc, f.pdf_path)
+                        res = await self.pool.run(extract.pdf_to_doc, f.pdf_path)
                 else:
                     res = {"text": f.body.decode(f.charset or "utf-8", errors="replace")}
             except LookupError:  # unknown charset name
@@ -547,7 +545,7 @@ class GenericPass:
                           raw_path=raw_path)
 
 
-async def run_generic(store: Store, pool: Executor, workers: int, concurrency: int, per_host: int,
+async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, concurrency: int, per_host: int,
                       contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool,
                       rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
                       browser_ua: str | None = None) -> None:

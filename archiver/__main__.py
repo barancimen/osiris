@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -66,7 +65,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
     if args.cookies:
         log.info("using %d browser cookies for %d sites", len(browser_cookies),
                  len({c.domain.lstrip(".") for c in browser_cookies}))
-    pool = ProcessPoolExecutor(max_workers=args.workers, initializer=extract.init_worker)
+    pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
     reporter = asyncio.create_task(_report(store))
     jobs = {
         "twitter": lambda: run_twitter(store),
@@ -87,7 +86,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
     finally:
         reporter.cancel()
         store.commit()
-        pool.shutdown(wait=True, cancel_futures=True)
+        pool.shutdown()
 
 
 def host_rules(specs: list[str]) -> tuple[HostRule, ...]:
@@ -217,6 +216,9 @@ def main() -> None:
     run.add_argument("--concurrency", type=int, default=64, help="max requests in flight (default: 64)")
     run.add_argument("--per-host", type=int, default=4, help="max requests in flight per host (default: 4)")
     run.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
+    run.add_argument("--worker-mem-mb", type=int, default=1536,
+                     help="memory cap per extraction process; a document past it fails instead of swapping "
+                          "the machine (default 1536, 0 = none)")
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
     run.add_argument("--skip", choices=LANES, action="append", default=[],
                      help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
