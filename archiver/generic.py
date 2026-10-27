@@ -67,6 +67,7 @@ NOT_FOR_WAYBACK = ("non_text:", "too_large", "bad_url", "bug:")
 
 WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
 WAYBACK_CONCURRENCY = 4  # archive.org is a nonprofit; keep the load modest
+WAYBACK_INTERVAL = 1.0  # seconds between request starts: 4 unspaced workers drew 429s within a minute
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,14 @@ class WaybackClient:
         )
         self.slots = asyncio.Semaphore(WAYBACK_CONCURRENCY)
         self.paused_until = 0.0  # archive.org rate limits apply to all our requests at once
+        self.next_start = 0.0
+        self.spacing = asyncio.Lock()
+
+    async def _throttle(self) -> None:
+        async with self.spacing:
+            start = max(time.monotonic(), self.next_start, self.paused_until)
+            self.next_start = start + WAYBACK_INTERVAL
+        await asyncio.sleep(max(0.0, start - time.monotonic()))
 
     async def _pause_if_limited(self, status: int, headers) -> bool:
         if status != 429:
@@ -292,7 +301,7 @@ class WaybackClient:
         params = {"url": url, "output": "json", "fl": "timestamp,original", "filter": "statuscode:200",
                   "limit": "-1"}
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            await asyncio.sleep(max(0.0, self.paused_until - time.monotonic()))
+            await self._throttle()
             try:
                 async with self.session.get(WAYBACK_CDX, params=params) as resp:
                     if await self._pause_if_limited(resp.status, resp.headers):
@@ -313,7 +322,7 @@ class WaybackClient:
                 return Fetched(error=capture)
             timestamp, original = capture
             for _ in range(MAX_ATTEMPTS):
-                await asyncio.sleep(max(0.0, self.paused_until - time.monotonic()))
+                await self._throttle()
                 f = await aiohttp_get(self.session, self.reader, f"https://web.archive.org/web/{timestamp}id_/{original}")
                 if f.status != 429 or not await self._pause_if_limited(429, {}):
                     break
