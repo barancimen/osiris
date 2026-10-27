@@ -18,6 +18,10 @@ dependencies = [
     "zstandard",
 ]
 
+[project.optional-dependencies]
+# headless-browser fallback (--render); then run: playwright install chromium
+render = ["playwright>=1.49"]
+
 [project.scripts]
 archiver = "archiver.__main__:main"
 

@@ -1,8 +1,10 @@
 """Generic lane: async fetch of arbitrary pages, routed by Content-Type, extracted to markdown.
 
-Pass 1 uses aiohttp. Then two fallback passes over what it couldn't get, each keeping
-a result only when it beats what came before:
+Pass 1 uses aiohttp. Then fallback passes over what it couldn't get, cheapest first, each
+keeping a result only when it beats what came before:
 - impersonate: blocked/thin pages again with curl_cffi's Chrome TLS fingerprint
+- render (--render): blocked/thin pages in headless Chromium (archiver/render.py)
+- doi: title/authors/abstract for paper links, via OpenAlex (archiver/doi.py)
 - wayback: the newest 200 capture in the Wayback Machine for anything still failed or thin
 Each URL gets each fallback pass once (manifest column `tried`); --retry-failed resets that.
 """
@@ -546,9 +548,10 @@ class GenericPass:
 
 
 async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, concurrency: int, per_host: int,
-                      contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool,
+                      contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool, doi: bool = True,
                       rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
-                      browser_ua: str | None = None) -> None:
+                      browser_ua: str | None = None, render: bool = False, render_concurrency: int = 2,
+                      chrome_profile: str | None = None, challenge_wait: float = 15.0) -> None:
     pdf_slots = asyncio.Semaphore(3)
     reader = Reader(store.tmp_dir, pdf_slots)
 
@@ -560,18 +563,11 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
     finally:
         await client.close()
 
-    fallbacks = []
-    if impersonate:
-        fallbacks.append(("impersonate", lambda: CurlClient(reader, 16, cookies), 16, 2, rules,
-                          lambda reason: reason in BLOCKED, "blocked/thin URLs with a browser fingerprint"))
-    if wayback:
-        # requests go to archive.org, so the per-site rules don't apply
-        fallbacks.append(("wayback", lambda: WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, (),
-                          lambda reason: not reason.startswith(NOT_FOR_WAYBACK), "failed/thin URLs from the Wayback Machine"))
-    for name, make_client, pass_concurrency, pass_per_host, pass_rules, eligible, what in fallbacks:
-        candidates = store.retry_candidates("generic", name, eligible)
+    async def fallback(name, make_client, pass_concurrency, pass_per_host, pass_rules, eligible, what, url_ok=None):
+        candidates = [(key, chars) for key, chars in store.retry_candidates("generic", name, eligible)
+                      if url_ok is None or url_ok(key)]
         if not candidates:
-            continue
+            return
         log.info("generic: %s pass: %d %s", name, len(candidates), what)
         client = make_client()
         try:
@@ -580,3 +576,23 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
             await upgrade.run([key for key, _ in candidates], pass_concurrency, pass_per_host)
         finally:
             await client.close()
+
+    # cheapest first: each pass only sees what the passes before it couldn't fix
+    if impersonate:
+        await fallback("impersonate", lambda: CurlClient(reader, 16, cookies), 16, 2, rules,
+                       lambda reason: reason in BLOCKED, "blocked/thin URLs with a browser fingerprint")
+    if render:
+        from .render import RenderClient
+
+        await fallback("render", lambda: RenderClient(render_concurrency, cookies, browser_ua, chrome_profile,
+                                                      challenge_wait),
+                       render_concurrency, 1, rules, lambda reason: reason in BLOCKED,
+                       "blocked/thin pages in a headless browser", url_ok=lambda u: not u.lower().endswith(".pdf"))
+    if doi:
+        from .doi import run_doi_pass
+
+        await run_doi_pass(store, contact)
+    if wayback:
+        # requests go to archive.org, so the per-site rules don't apply
+        await fallback("wayback", lambda: WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, (),
+                       lambda reason: not reason.startswith(NOT_FOR_WAYBACK), "failed/thin URLs from the Wayback Machine")

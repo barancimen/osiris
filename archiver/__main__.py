@@ -75,8 +75,10 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw, wayback=not args.no_wayback,
-                                       rules=host_rules(args.host_limit), cookies=browser_cookies,
-                                       browser_ua=args.user_agent),
+                                       doi=not args.no_doi, rules=host_rules(args.host_limit),
+                                       cookies=browser_cookies, browser_ua=args.user_agent, render=args.render,
+                                       render_concurrency=args.render_concurrency,
+                                       chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait),
     }
     try:
         results = await asyncio.gather(*(jobs[lane]() for lane in lanes), return_exceptions=True)
@@ -224,7 +226,17 @@ def main() -> None:
                      help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--no-impersonate", action="store_true", help="skip the curl_cffi retry pass")
+    run.add_argument("--no-doi", action="store_true", help="skip the DOI (OpenAlex abstract) fallback pass")
     run.add_argument("--no-wayback", action="store_true", help="skip the Wayback Machine fallback pass")
+    run.add_argument("--render", action="store_true",
+                     help="headless-browser fallback pass for blocked/thin pages (needs: pip install -e .[render] "
+                          "&& playwright install chromium; a few hundred MB of RAM per page)")
+    run.add_argument("--render-concurrency", type=int, default=2, help="pages open at once in --render (default 2)")
+    run.add_argument("--chrome-profile", metavar="DIR",
+                     help="--render with a COPY of your Chrome profile directory (uses installed Chrome) so its "
+                          "logged-in sessions apply; Chrome must not have that copy open")
+    run.add_argument("--challenge-wait", type=float, default=15.0,
+                     help="seconds --render waits for bot-challenge pages to clear (default 15)")
     run.add_argument("--host-limit", action="append", default=[], metavar="PATTERN=N[:SECONDS]",
                      help="hosts matching the glob share one queue: N requests in flight, SECONDS between "
                           "starts (repeatable; default scholar.google.*=1:8)")
