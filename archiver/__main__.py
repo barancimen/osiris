@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 from collections import Counter
 from pathlib import Path
@@ -17,6 +18,7 @@ from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .reddit import run_reddit
 from .route import route
+from .scry import ScryClient
 from .stackexchange import run_stackexchange
 from .store import Store
 from .twitter import run_twitter
@@ -67,6 +69,19 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
                  len({c.domain.lstrip(".") for c in browser_cookies}))
     pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
     reporter = asyncio.create_task(_report(store))
+    # Ctrl-C/kill cancel the run as a whole. Left to Python, SIGINT raises KeyboardInterrupt in
+    # whatever callback happens to be running, and uvloop's SSL callbacks swallow it. A second
+    # Ctrl-C falls back to the default and quits on the spot.
+    loop, main = asyncio.get_running_loop(), asyncio.current_task()
+
+    def interrupt() -> None:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.remove_signal_handler(sig)
+            signal.signal(sig, signal.SIG_DFL)
+        main.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, interrupt)
     jobs = {
         "twitter": lambda: run_twitter(store),
         "arxiv": lambda: run_arxiv(store),
@@ -126,9 +141,11 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     try:
         uvloop.run(_run_lanes(store, args, lanes))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         log.warning("interrupted: progress is saved, re-run the same command to resume")
     finally:
+        if ScryClient.spent_nanodollars:
+            log.info("scry: $%.4f spent from the wallet this run", ScryClient.spent_nanodollars / 1e9)
         store.commit()
         print_stats(store)
         store.close()
