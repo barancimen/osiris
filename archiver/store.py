@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS urls (
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
 CREATE INDEX IF NOT EXISTS urls_doc_key ON urls(doc_key);
+CREATE TABLE IF NOT EXISTS imported_files (  -- saved pages `archiver import` has handled, by content
+    sha1        TEXT PRIMARY KEY,
+    name        TEXT,
+    url         TEXT,
+    imported_at TEXT
+);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
@@ -97,10 +103,11 @@ class Store:
     def reroute(self, route_fn: Callable[[str], Route | None]) -> int:
         """Apply the current routing rules to URLs not yet archived: pending ones, and failed or
         thin ones whose lane changed (e.g. Reddit posts that failed in the generic lane before
-        the Reddit lane existed). Finished documents are never touched."""
+        the Reddit lane existed). Finished documents and imported pages are never touched."""
         changed = []
         for url, lane, doc_key, reason, status in self.db.execute(
-            "SELECT url, lane, doc_key, reason, status FROM urls WHERE status IN ('pending', 'failed', 'thin')"
+            "SELECT url, lane, doc_key, reason, status FROM urls"
+            " WHERE status IN ('pending', 'failed', 'thin') AND lane != 'singlefile'"
         ).fetchall():
             r = route_fn(url)
             if r is None or (status != "pending" and r.lane == lane):
@@ -162,6 +169,35 @@ class Store:
         if time.monotonic() - self._last_commit > 1.0:
             self.commit()
 
+    def find_url(self, r: Route) -> dict | None:
+        """The manifest row for this page: same dedup key, same document or same URL."""
+        row = self.db.execute(
+            "SELECT url, lane, doc_key, status, chars FROM urls WHERE dedup_key = ? OR url = ?"
+            " OR (doc_key IS NOT NULL AND doc_key = ?) LIMIT 1",
+            (r.dedup_key, r.url, r.doc_key),
+        ).fetchone()
+        return dict(zip(("url", "lane", "doc_key", "status", "chars"), row)) if row else None
+
+    def record_import(self, url: str, doc_key: str, dedup_key: str, status: str, reason: str | None, chars: int,
+                      final_url: str | None) -> None:
+        """A saved page now holds this document, for every URL that shares it."""
+        self.db.execute("INSERT OR IGNORE INTO urls (url, lane, status, dedup_key) VALUES (?, 'singlefile', ?, ?)",
+                        (url, status, dedup_key))
+        self.db.execute(
+            "UPDATE urls SET lane = 'singlefile', doc_key = ?, doc_id = ?, status = ?, reason = ?, chars = ?,"
+            " final_url = ?, http_status = NULL, tried = '', updated_at = ?, attempts = attempts + 1"
+            " WHERE url = ? OR doc_key = ?",
+            (doc_key, doc_id(doc_key), status, reason, chars, final_url, now_iso(), url, doc_key),
+        )
+        if time.monotonic() - self._last_commit > 1.0:
+            self.commit()
+
+    def imported_files(self) -> set[str]:
+        return {sha for (sha,) in self.db.execute("SELECT sha1 FROM imported_files")}
+
+    def mark_imported(self, sha1: str, name: str, url: str | None) -> None:
+        self.db.execute("INSERT OR REPLACE INTO imported_files VALUES (?, ?, ?, ?)", (sha1, name, url, now_iso()))
+
     def commit(self) -> None:
         self.db.commit()
         self._last_commit = time.monotonic()
@@ -178,7 +214,7 @@ class Store:
     def write_doc(self, doc_key: str, meta: dict, body: str) -> int:
         """Write md/<id[:2]>/<id>.md with YAML front matter; returns body length."""
         did = doc_id(doc_key)
-        meta = {"id": did, **meta, "fetched_at": now_iso()}
+        meta = {"id": did, "fetched_at": now_iso(), **meta}
         lines = ["---"]
         for key in FRONT_MATTER_KEYS:
             value = meta.get(key)

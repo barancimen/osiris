@@ -19,6 +19,7 @@ from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .reddit import run_reddit
 from .route import route
 from .scry import ScryClient
+from .singlefile import run_import
 from .stackexchange import run_stackexchange
 from .store import Store
 from .twitter import run_twitter
@@ -62,16 +63,10 @@ async def _report(store: Store) -> None:
             log.info(" | ".join(parts))
 
 
-async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -> None:
-    browser_cookies = cookies.load(args.cookies) if args.cookies else []
-    if args.cookies:
-        log.info("using %d browser cookies for %d sites", len(browser_cookies),
-                 len({c.domain.lstrip(".") for c in browser_cookies}))
-    pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
-    reporter = asyncio.create_task(_report(store))
-    # Ctrl-C/kill cancel the run as a whole. Left to Python, SIGINT raises KeyboardInterrupt in
-    # whatever callback happens to be running, and uvloop's SSL callbacks swallow it. A second
-    # Ctrl-C falls back to the default and quits on the spot.
+def stop_on_signals() -> None:
+    """Ctrl-C/kill cancel the current task as a whole. Left to Python, SIGINT raises
+    KeyboardInterrupt in whatever callback happens to be running, and uvloop's SSL callbacks
+    swallow it. A second Ctrl-C falls back to the default and quits on the spot."""
     loop, main = asyncio.get_running_loop(), asyncio.current_task()
 
     def interrupt() -> None:
@@ -82,6 +77,16 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, interrupt)
+
+
+async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -> None:
+    browser_cookies = cookies.load(args.cookies) if args.cookies else []
+    if args.cookies:
+        log.info("using %d browser cookies for %d sites", len(browser_cookies),
+                 len({c.domain.lstrip(".") for c in browser_cookies}))
+    pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
+    reporter = asyncio.create_task(_report(store))
+    stop_on_signals()
     jobs = {
         "twitter": lambda: run_twitter(store),
         "arxiv": lambda: run_arxiv(store),
@@ -155,7 +160,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 def print_stats(store: Store, failed: bool = False, thin: bool = False) -> None:
     counts = lane_counts(store)
     print(f"\n{'lane':<14}{'total':>8}" + "".join(f"{s:>9}" for s in STATUSES))
-    for lane in (*LANES, "skip"):
+    for lane in (*LANES, "singlefile", "skip"):
         c = counts.get(lane)
         if c:
             print(f"{lane:<14}{sum(c.values()):>8}" + "".join(f"{c[s]:>9}" for s in STATUSES))
@@ -187,6 +192,31 @@ def print_stats(store: Store, failed: bool = False, thin: bool = False) -> None:
         for host, n in hosts.most_common(30):
             top = ", ".join(f"{r} {k}" for r, k in host_reasons[host].most_common(3))
             print(f"  {n:>6}  {host:<40} {top}")
+
+
+def cmd_import(args: argparse.Namespace) -> None:
+    import uvloop
+
+    paths = [Path(p) for p in args.paths]
+    if missing := [p for p in paths if not p.exists()]:
+        sys.exit(f"not found: {', '.join(map(str, missing))}")
+
+    async def main() -> None:
+        stop_on_signals()
+        pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
+        try:
+            await run_import(store, paths, pool, args.workers)
+        finally:
+            pool.shutdown()
+
+    store = Store(args.out)
+    try:
+        uvloop.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.warning("interrupted: progress is saved, re-run the same command to resume")
+    finally:
+        store.commit()
+        store.close()
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
@@ -270,6 +300,13 @@ def main() -> None:
     run.add_argument("--user-agent", help="browser User-Agent to send; match the browser the cookies came from")
     run.add_argument("--contact", help="email/URL appended to the User-Agent sent to Wikimedia sites")
     run.set_defaults(func=cmd_run)
+
+    imp = sub.add_parser("import", help="store HTML pages saved with SingleFile as markdown (resumable)")
+    imp.add_argument("paths", nargs="+", help="directories (searched recursively for .html/.htm) or files")
+    imp.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    imp.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
+    imp.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per extraction process (0 = none)")
+    imp.set_defaults(func=cmd_import)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)

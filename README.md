@@ -11,6 +11,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .          # add [render] for 
 python3 extract_urls.py                 # ../tab-backups/{bookmarks_*.html,session-buddy-*.json} -> ./all_urls.md
 .venv/bin/archiver run                  # ./all_urls.md -> ./data  (resumable, Ctrl-C safe)
 .venv/bin/archiver stats --failed --thin
+.venv/bin/archiver import ~/saved-pages # HTML pages you saved with SingleFile -> ./data
 .venv/bin/archiver export               # ./data/corpus.jsonl, one document per line
 ```
 
@@ -53,6 +54,18 @@ Each URL is routed to the cheapest source that actually returns its text:
 
 `--skip LANE` leaves a lane's URLs pending (e.g. `--skip twitter`); `--only LANE` runs just one.
 
+### Saved pages (`archiver import`)
+
+`archiver import DIR [DIR|FILE ...]` stores pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension as markdown like every other document. Subdirectories are searched for `.html` and `.htm` files, and the originals are left alone.
+
+- The page's URL and save date come from the comment SingleFile writes at the top of the file. The date becomes `fetched_at`. A file with no such comment uses its `<link rel=canonical>`, and failing that is stored under a `file:` key.
+- URLs go through the same dedup as `archiver run`, and imported URLs are never queued for fetching. Saved copies replace failed or pending entries, and an archived document only when they have more text. Complete Twitter, Stack Exchange and Reddit documents are always kept.
+- URLs `archiver run` skips on purpose (GitHub, chat apps, X profiles) are stored, since you saved them deliberately.
+- Files are tracked by content hash, so re-running on a growing directory only reads new or changed files. Files that failed are tried again.
+- Inlined CSS, scripts and images are cut before parsing, as are elements SingleFile marked hidden (`sf-hidden`). Saved shadow DOM is kept. SingleFile's self-extracting ZIP format isn't supported and is reported as `singlefile_zip`; use the default HTML format.
+
+Imported documents appear as the `singlefile` lane in `stats` and `export`, with `source: singlefile`.
+
 ### Generic lane
 
 Pass 1:
@@ -77,7 +90,7 @@ Your browser session, the way ArchiveBox and Karakeep handle logged-in and bot-w
 ## Output (`data/`)
 
 - `manifest.sqlite`: one row per input URL with lane, status (`pending|ok|thin|failed|skipped`), reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path.
-- `md/<id[:2]>/<id>.md`: YAML front matter (url, title, author, date, site, source) plus the markdown body. `source` records where the text came from, e.g. `html`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`.
+- `md/<id[:2]>/<id>.md`: YAML front matter (url, title, author, date, site, source) plus the markdown body. `source` records where the text came from, e.g. `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`.
 - `corpus.jsonl`: written by `archiver export`.
 - `raw/<id[:2]>/<id>.{html.zst,pdf}`: only with `--keep-raw`. HTML is zstd-compressed and PDFs are kept as-is. Budget about 1–1.5 GB for 20k pages plus about 2 MB per PDF.
 
