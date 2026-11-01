@@ -59,10 +59,10 @@ Each URL is routed to the cheapest source that actually returns its text:
 `archiver import DIR [DIR|FILE ...]` stores pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension as markdown like every other document. Subdirectories are searched for `.html` and `.htm` files, and the originals are left alone.
 
 - The page's URL and save date come from the comment SingleFile writes at the top of the file. The date becomes `fetched_at`. A file with no such comment uses its `<link rel=canonical>`, and failing that is stored under a `file:` key.
-- URLs go through the same dedup as `archiver run`, and imported URLs are never queued for fetching. Saved copies replace failed or pending entries, and an archived document only when they have more text. Complete Twitter, Stack Exchange and Reddit documents are always kept.
+- URLs go through the same dedup as `archiver run`, and imported URLs are never queued for fetching. Saved copies replace failed or pending entries, and an archived document only when they have more text. Complete Stack Exchange and Reddit documents are always kept.
 - URLs `archiver run` skips on purpose (GitHub, chat apps, X profiles) are stored, since you saved them deliberately.
 - Files are tracked by content hash, so re-running on a growing directory only reads new or changed files. Files that failed are tried again.
-- Inlined CSS, scripts and images are cut before parsing, as are elements SingleFile marked hidden (`sf-hidden`). Saved shadow DOM is kept. SingleFile's self-extracting ZIP format isn't supported and is reported as `singlefile_zip`; use the default HTML format.
+- Inlined CSS, scripts and images are cut before parsing, as are elements SingleFile marked hidden (`sf-hidden`). Saved shadow DOM is kept. X pages are read from X's own tweet markup, so a saved conversation keeps every tweet in it, each with its author and date, and any X Article. SingleFile's self-extracting ZIP format isn't supported and is reported as `singlefile_zip`; use the default HTML format.
 
 Imported documents appear as the `singlefile` lane in `stats` and `export`, with `source: singlefile`.
 

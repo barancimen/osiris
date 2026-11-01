@@ -31,16 +31,22 @@ log = logging.getLogger(__name__)
 SUFFIXES = {".html", ".htm"}
 MAX_BYTES = 512 * 2**20
 HEAD_BYTES = 16 * 1024  # SingleFile's comment follows the <html> tag; don't match page text about it
-# lanes whose API documents hold the complete post: a saved page only adds site chrome
-COMPLETE_LANES = {"twitter", "stackexchange", "reddit"}
+# lanes whose API documents hold the complete post: a saved page only adds site chrome. Not
+# Twitter: its API documents hold one tweet, where a saved page has the thread, X Article and replies.
+COMPLETE_LANES = {"stackexchange", "reddit"}
 
 HEADER_RE = re.compile(rb"(?:Page saved with|Archive processed by) SingleFile\s+url:\s*(\S+)"
                        rb"(?:\s+saved date:\s*([^\r\n]+))?")
 CANONICAL_RE = re.compile(rb"<link\b[^>]*\brel=[\"']?canonical\b[^>]*>", re.I)
 HREF_RE = re.compile(rb"\bhref=[\"']?([^\"'\s>]+)", re.I)
 # JSON-LD stays: trafilatura reads author and date from it
-NOISE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>|<script\b(?![^>]*ld\+json)[^>]*>.*?</script\s*>", re.I | re.S)
+NOISE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>|<script\b(?![^>]*ld\+json)[^>]*>.*?</script\s*>"
+                      rb"|<noscript\b[^>]*>.*?</noscript\s*>", re.I | re.S)
 DATA_URI_RE = re.compile(rb"data:[a-z]+/[a-z0-9.+-]+(?:;[a-z0-9=-]+)*,[^\"'\s>)]{256,}", re.I)
+TITLE_RE = re.compile(rb"<title\b[^>]*>(.*?)</title\s*>", re.I | re.S)
+X_URL_RE = re.compile(r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/", re.I)
+X_USER_RE = re.compile(r"^(.*?)@(\w{1,15})(?:·|$)", re.S)
+X_STATUS_RE = re.compile(r"/status/(\d+)")
 
 
 def file_sha1(path: Path) -> str:
@@ -62,9 +68,9 @@ def _saved_at(value: bytes | None) -> str | None:
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _clean_dom(data: bytes) -> bytes:
-    """Drop what SingleFile kept but marked hidden, and expose saved shadow DOM, which
-    extractors skip as an inert <template>."""
+def _clean_tree(data: bytes):
+    """Parsed page without what SingleFile kept but marked hidden, and with saved shadow DOM
+    exposed, which extractors skip as an inert <template>. None if it won't parse."""
     import lxml.html
 
     try:
@@ -74,9 +80,81 @@ def _clean_dom(data: bytes) -> bytes:
                 el.drop_tree()
         for el in tree.xpath("//template[@shadowrootmode or @shadowmode]"):
             el.tag = "div"
-        return lxml.html.tostring(tree, encoding="utf-8")
-    except Exception:  # keep the page as it is rather than lose it
-        return data
+        return tree
+    except Exception:
+        return None
+
+
+def _clean_dom(data: bytes) -> bytes:
+    import lxml.html
+
+    tree = _clean_tree(data)
+    return data if tree is None else lxml.html.tostring(tree, encoding="utf-8")  # keep the page rather than lose it
+
+
+def _node_text(el) -> str:
+    """Text of an element, with emoji, which X renders as <img alt>."""
+    if not isinstance(el.tag, str):  # comment
+        return ""
+    parts = [el.get("alt") or "" if el.tag == "img" else "", el.text or ""]
+    for child in el:
+        parts += [_node_text(child), child.tail or ""]
+    return "".join(parts)
+
+
+def _x_page_doc(data: bytes, url: str) -> dict | None:
+    """Tweets of a saved X page, read from X's own markup. Main-content extraction is no use here:
+    it treats each tweet as a block to keep or drop, and loses ~40% of them, sometimes the main one."""
+    tree = _clean_tree(data)
+    if tree is None:
+        return None
+    status = X_STATUS_RE.search(url)
+    blocks, focal, first_text = [], None, None
+    for node in tree.xpath('//article[@data-testid="tweet"] | //h2'):
+        if node.tag == "h2":
+            if _node_text(node).strip() == "Discover more" and not node.xpath("ancestor::article"):
+                break  # the rest is X's recommendations, not this conversation
+            continue
+        when = node.xpath(".//time/@datetime")
+        date = when[0][:10] if when else None
+        if focal is None and status and node.xpath(f'.//a[contains(@href, "/status/{status.group(1)}")]//time'):
+            focal = (node, date)
+        parts, quoting = [], False
+        for el in node.xpath('.//*[@data-testid="User-Name" or @data-testid="tweetText"'
+                             ' or @data-testid="twitter-article-title" or @data-testid="longformRichTextComponent"]'):
+            testid = el.get("data-testid")
+            if testid == "User-Name":
+                who = X_USER_RE.match(" ".join(_node_text(el).split()))
+                if not parts:
+                    byline = f"{who.group(1).strip()} (@{who.group(2)})" if who else ""
+                    parts.append(f"**{byline}**" + (f" · {date}" if date else ""))
+                else:  # a second name inside a tweet is the tweet it quotes
+                    quoting = True
+                    parts.append(f"> **{who.group(1).strip()} (@{who.group(2)})**" if who else "> ")
+            elif testid == "twitter-article-title":
+                parts.append(f"# {_node_text(el).strip()}")
+                if focal and focal[0] is node:
+                    first_text = _node_text(el).strip()
+            else:  # an X Article's paragraphs are adjacent blocks with no text between them
+                pieces = el.xpath('.//*[@data-block="true"]') or [el]
+                text = "\n\n".join(t for t in (_node_text(p).strip() for p in pieces) if t)
+                parts.append("\n".join(f"> {line}" for line in text.splitlines()) if quoting else text)
+                if focal and focal[0] is node and first_text is None:
+                    first_text = text
+        if len(parts) > 1:  # a media-only tweet has nothing but its byline
+            blocks.append("\n\n".join(parts))
+    if not blocks:
+        return None
+    doc = {"text": "\n\n---\n\n".join(blocks), "site": "x.com"}
+    if focal:  # same shape as the Twitter lane's documents
+        names = focal[0].xpath('.//*[@data-testid="User-Name"]')
+        who = X_USER_RE.match(" ".join(_node_text(names[0]).split())) if names else None
+        if who:
+            doc["author"] = f"{who.group(1).strip()} (@{who.group(2)})"
+            if first_text:
+                doc["title"] = f"@{who.group(2)}: " + " ".join(first_text.split())[:100]
+        doc["date"] = focal[1]
+    return doc
 
 
 def saved_page_to_doc(path: str) -> dict:
@@ -101,9 +179,16 @@ def saved_page_to_doc(path: str) -> dict:
         tag = CANONICAL_RE.search(data[:HEAD_BYTES])
         href = HREF_RE.search(tag.group(0)) if tag else None
         url = html.unescape(href.group(1).decode("utf-8", "replace")) if href else None
-    if b"sf-hidden" in data or b"shadowrootmode" in data or b"shadowmode" in data:
-        data = _clean_dom(data)
-    doc = extract.html_to_doc(data, url)
+    tag = TITLE_RE.search(data)
+    title = " ".join(html.unescape(tag.group(1).decode("utf-8", "replace")).split()) if tag else ""
+    title = re.sub(r"^\(\d+\+?\)\s*", "", title)  # the unread count browsers show in the tab
+    doc = _x_page_doc(data, url) if url and X_URL_RE.match(url) else None
+    if doc is None:
+        if b"sf-hidden" in data or b"shadowrootmode" in data or b"shadowmode" in data:
+            data = _clean_dom(data)
+        doc = extract.html_to_doc(data, url)
+    if title and not (doc.get("site") == "x.com" and doc.get("title")):
+        doc["title"] = title  # what the page called itself; extractors can pick a hidden heading instead
     return {**doc, "url": url, "singlefile": bool(header), "saved_at": _saved_at(header.group(2)) if header else None}
 
 
