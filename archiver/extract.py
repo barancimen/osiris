@@ -175,9 +175,3 @@ class WorkerPool:
         for process in list((self.executor._processes or {}).values()):
             process.terminate()
         self.executor.shutdown(wait=False, cancel_futures=True)
-
-    def kill(self) -> None:
-        """Stop now, for work too long to wait for: shutdown() lets the running task finish."""
-        for process in list((self.executor._processes or {}).values()):
-            process.terminate()
-        self.executor.shutdown(wait=False, cancel_futures=True)
