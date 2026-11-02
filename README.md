@@ -52,7 +52,7 @@ Each URL is routed to the cheapest source that actually returns its text:
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | post + comment tree from Scry's Reddit archive, falling back to Arctic Shift for posts or comment trees Scry lacks. reddit.com refuses datacenter IPs and new API apps need approval |
 | `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files (Jupyter notebooks reduced to their markdown and code). All links into one repo share its document, so a file or issue link stores the repo's README, not that file or issue |
 | `youtube` | videos, playlists, channels | transcripts, or a list's title, description and video titles (up to 2,000, without their transcripts). See below |
-| `localfile` | `file://` links to `.pdf`, `.html`, `.txt`, `.md`, `.rst`, `.tex`, `.org` | read in place, never changed. See below |
+| `localfile` | `file://` links to PDFs, ebooks (`.epub`, `.mobi`, `.azw`, `.azw3`), `.docx`, web pages and text files | read in place, never changed. See below |
 | `generic` | everything else | async fetch, then trafilatura main-content markdown, or pypdfium2 for PDFs, then the fallback passes below |
 | `skip` | GitHub user and organization pages and GitHub's own pages, other YouTube pages (search, feeds, your Watch Later and Liked lists), other local files (images, no extension), private chat links (ChatGPT/Claude/Grok), X profiles, media files, local hosts | recorded, not fetched |
 
@@ -69,6 +69,21 @@ Each URL is routed to the cheapest source that actually returns its text:
 ### Local files
 
 - `all_urls.md` holds them as `file:///path/to/My%20Paper.pdf`, one per line, and they run with `archiver run` like any URL. `file:///C:/…` is also looked up under `/mnt/c/…` for WSL.
+- To add a whole folder, write its files to a list of your own and run that. Files in formats the lane can't read are recorded as `skipped` with `local_other`, and are picked up automatically if a later version supports them:
+
+  ```sh
+  find ~/my-files -type f -print0 | python3 -c '
+  import sys, pathlib
+  for p in sys.stdin.buffer.read().split(b"\0"):
+      if p:
+          print(pathlib.Path(p.decode()).resolve().as_uri())
+  ' > local_files.txt
+  .venv/bin/archiver run local_files.txt --only localfile
+  ```
+
+- Readable formats: `.pdf`; `.epub`; `.mobi`, `.azw`, `.azw3`; `.docx`; `.html`, `.htm`, `.xhtml`; `.txt`, `.md`, `.markdown`, `.rst`, `.tex`, `.org`.
+- Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdown)'s recipe: an EPUB is read in spine order, a DOCX goes through mammoth, and the HTML becomes markdown with markdownify, keeping all the text rather than guessing at a main content block. Kindle files are unpacked with KindleUnpack (the `mobi` package) first.
+- Books under DRM are `failed` with `drm_protected`, and aren't worked around. Newer `.kfx` files and old binary `.doc` files aren't supported.
 - **Your files are only ever read.** Nothing moves, changes or deletes them, and `--keep-raw` stores a copy under `raw/`.
 - A file that isn't there is `failed` with `file_missing`: run on the machine that has the files, or use `--retry-failed` once they're back. A scanned PDF with no text layer is `failed` with `no_text`, since there's no OCR.
 - Only the first 400 pages of any PDF are read, here and in the generic lane.

@@ -104,13 +104,14 @@ class Store:
     def reroute(self, route_fn: Callable[[str], Route | None]) -> int:
         """Apply the current routing rules to URLs not yet archived: pending ones, and failed or
         thin ones whose lane changed (e.g. Reddit posts that failed in the generic lane before
-        the Reddit lane existed), and GitHub links skipped before the GitHub lane existed.
+        the Reddit lane existed), and GitHub links and local files skipped before their lane or
+        format was supported.
         Finished documents and imported pages are never touched."""
         changed = []
         for url, lane, doc_key, reason, status in self.db.execute(
             "SELECT url, lane, doc_key, reason, status FROM urls"
             " WHERE (status IN ('pending', 'failed', 'thin') AND lane != 'singlefile')"
-            " OR (status = 'skipped' AND reason = 'github')"
+            " OR (status = 'skipped' AND reason IN ('github', 'local_other'))"
         ).fetchall():
             r = route_fn(url)
             if r is None or (status in ("failed", "thin") and r.lane == lane):

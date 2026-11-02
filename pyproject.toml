@@ -18,6 +18,9 @@ dependencies = [
     "zstandard",
     "youtube-transcript-api>=1.2",
     "yt-dlp",
+    "mammoth",
+    "markdownify",
+    "mobi",
 ]
 
 [project.optional-dependencies]

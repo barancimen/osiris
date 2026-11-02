@@ -1,4 +1,4 @@
-"""Local files lane: file:// links from your bookmarks and tabs, mostly PDFs.
+"""Local files lane: file:// links from your bookmarks and tabs, and lists you make yourself.
 
 The originals are only ever opened for reading. Unlike a downloaded PDF, which lives in the
 output directory's tmp/ and is deleted after extraction, a local file is yours: this module
@@ -13,16 +13,12 @@ import os
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import extract
+from . import documents, extract
 from .singlefile import saved_page_to_doc
 from .store import Store
 
 log = logging.getLogger(__name__)
 
-PDF_EXTS = {"pdf"}
-HTML_EXTS = {"html", "htm", "xhtml"}
-TEXT_EXTS = {"txt", "md", "markdown", "rst", "tex", "org"}
-READABLE_EXTS = PDF_EXTS | HTML_EXTS | TEXT_EXTS
 MAX_TEXT_BYTES = 64 * 2**20
 
 
@@ -45,6 +41,17 @@ def text_to_doc(path: str) -> dict:
     return {"text": data.decode("utf-8", errors="replace")}
 
 
+# extension -> (name used in `source`, reader); route.LOCAL_READABLE lists the same extensions
+READERS = {
+    "pdf": ("pdf", extract.pdf_to_doc),
+    **dict.fromkeys(("html", "htm", "xhtml"), ("html", saved_page_to_doc)),
+    **dict.fromkeys(("txt", "md", "markdown", "rst", "tex", "org"), ("text", text_to_doc)),
+    "docx": ("docx", documents.docx_to_doc),
+    "epub": ("epub", documents.epub_to_doc),
+    **dict.fromkeys(("mobi", "azw", "azw3"), ("kindle", documents.kindle_to_doc)),
+}
+
+
 async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, keep_raw: bool = False) -> None:
     pending = store.pending("localfile")
     if not pending:
@@ -61,8 +68,7 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, ke
             store.record(doc_key, "failed", "file_unreadable")
             return
         ext = path.suffix.lower().lstrip(".")
-        kind = "pdf" if ext in PDF_EXTS else "html" if ext in HTML_EXTS else "text"
-        worker = {"pdf": extract.pdf_to_doc, "html": saved_page_to_doc, "text": text_to_doc}[kind]
+        kind, worker = READERS[ext]
         async with slots:
             try:
                 res = await pool.run(worker, str(path))
