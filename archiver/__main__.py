@@ -94,7 +94,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
     jobs = {
         "twitter": lambda: run_twitter(store),
         "arxiv": lambda: run_arxiv(store),
-        "stackexchange": lambda: run_stackexchange(store),
+        "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
         "github": lambda: run_github(store),
         "youtube": lambda: run_youtube(store, args.youtube_delay),
@@ -310,6 +310,9 @@ def main() -> None:
     run.add_argument("--youtube-delay", type=float, default=YOUTUBE_DELAY, metavar="SECONDS",
                      help=f"seconds between YouTube requests (default {YOUTUBE_DELAY:.0f}); it's the lane most "
                           "likely to get your IP blocked")
+    run.add_argument("--refetch-stackexchange", action="store_true",
+                     help="update archived Stack Exchange threads to include comments; resumable, and a question "
+                          "deleted since keeps its document")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--retry-host", action="append", default=[], metavar="PATTERN",
                      help="re-queue only failed URLs on hosts matching the glob (repeatable), e.g. "

@@ -134,6 +134,14 @@ class Store:
             (lane,),
         ).fetchall()
 
+    def done_without(self, lane: str, pass_name: str) -> list[tuple[str, str]]:
+        """(doc_key, url) for each finished document in a lane that this pass hasn't touched."""
+        return self.db.execute(
+            "SELECT doc_key, MIN(url) FROM urls WHERE lane = ? AND status = 'ok' AND instr(tried, ?) = 0"
+            " GROUP BY doc_key ORDER BY MIN(rowid)",
+            (lane, f",{pass_name}"),
+        ).fetchall()
+
     def requeue(self, lanes: Iterable[str], statuses: Iterable[str] = ("failed",), hosts: Iterable[str] = ()) -> int:
         """Back to pending with no fallback passes tried; `hosts` (fnmatch globs) narrows it to those sites."""
         lanes, statuses, hosts = list(lanes), list(statuses), [h.lower() for h in hosts]

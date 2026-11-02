@@ -49,13 +49,15 @@ Each URL is routed to the cheapest source that actually returns its text:
 |---|---|---|
 | `twitter` | `x.com/…/status/<id>` | Scry's Twitter archive first (it also holds some deleted tweets), then twitterapi.io for the rest if keyed. x.com serves an empty JS shell |
 | `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | export API, 100 IDs per call, title/authors/abstract (arxiv.org's robots.txt sets a 15 s crawl delay) |
-| `stackexchange` | `*/questions/<id>` on SE sites | api.stackexchange.com, 100 IDs per call, question and all answers as markdown (the sites show Cloudflare challenges to datacenter IPs) |
+| `stackexchange` | `*/questions/<id>` on SE sites | api.stackexchange.com, 100 IDs per call, question, all answers and their comments as markdown (the sites show Cloudflare challenges to datacenter IPs) |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | post + comment tree from Scry's Reddit archive, falling back to Arctic Shift for posts or comment trees Scry lacks. reddit.com refuses datacenter IPs and new API apps need approval |
 | `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files (Jupyter notebooks reduced to their markdown and code). All links into one repo share its document, so a file or issue link stores the repo's README, not that file or issue |
 | `youtube` | videos, playlists, channels | transcripts, or a list's title, description and video titles (up to 2,000, without their transcripts). See below |
 | `localfile` | `file://` links to PDFs, ebooks (`.epub`, `.mobi`, `.azw`, `.azw3`), `.docx`, web pages and text files | read in place, never changed. See below |
 | `generic` | everything else | async fetch, then trafilatura main-content markdown, or pypdfium2 for PDFs, then the fallback passes below |
 | `skip` | GitHub user and organization pages and GitHub's own pages, other YouTube pages (search, feeds, your Watch Later and Liked lists), other local files (images, no extension), private chat links (ChatGPT/Claude/Grok), X profiles, media files, local hosts | recorded, not fetched |
+
+Stack Exchange threads archived before comments were collected don't have them until you run `archiver run --only stackexchange --refetch-stackexchange`. It updates each thread once. Without `STACKEXCHANGE_KEY` the API allows 300 calls a day, and if that runs out, the same command carries on the next day.
 
 `--skip LANE` leaves a lane's URLs pending (e.g. `--skip youtube`); `--only LANE` runs just one.
 
