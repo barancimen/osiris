@@ -12,6 +12,7 @@ python3 extract_urls.py                 # ../tab-backups/{bookmarks_*.html,sessi
 .venv/bin/archiver run                  # ./all_urls.md -> ./data  (resumable, Ctrl-C safe)
 .venv/bin/archiver stats --failed --thin
 .venv/bin/archiver import ~/saved-pages # HTML pages you saved with SingleFile -> ./data
+.venv/bin/archiver ocr                  # PDFs with no text layer, with tesseract (slow; apt install tesseract-ocr)
 .venv/bin/archiver export               # ./data/corpus.jsonl, one document per line
 ```
 
@@ -85,8 +86,16 @@ Each URL is routed to the cheapest source that actually returns its text:
 - Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdown)'s recipe: an EPUB is read in spine order, a DOCX goes through mammoth, and the HTML becomes markdown with markdownify, keeping all the text rather than guessing at a main content block. Kindle files are unpacked with KindleUnpack (the `mobi` package) first.
 - Books under DRM are `failed` with `drm_protected`, and aren't worked around. Newer `.kfx` files and old binary `.doc` files aren't supported.
 - **Your files are only ever read.** Nothing moves, changes or deletes them, and `--keep-raw` stores a copy under `raw/`.
-- A file that isn't there is `failed` with `file_missing`: run on the machine that has the files, or use `--retry-failed` once they're back. A scanned PDF with no text layer is `failed` with `no_text`, since there's no OCR.
+- A file that isn't there is `failed` with `file_missing`: run on the machine that has the files, or use `--retry-failed` once they're back. A scanned PDF with no text layer is `failed` with `no_text` until you run `archiver ocr`.
 - Only the first 400 pages of any PDF are read, here and in the generic lane.
+
+### OCR (`archiver ocr`)
+
+Reads PDFs recorded with no usable text, local or from the web, with [tesseract](https://github.com/tesseract-ocr/tesseract). It's a separate command because it takes seconds per page, so a long scan can't hold up anything else. Local files are read in place and never changed, and web PDFs are downloaded again to a temporary file. Text is kept only if there's more of it than before, with `source: pdf:ocr` or `file:pdf:ocr`.
+
+- `--lang eng+tur` sets the languages, after installing their packs (`apt install tesseract-ocr-tur`). The default is English. List only what you need, since each extra language is slower and can lower accuracy.
+- `--workers N` runs N PDFs at once. Each PDF is tried once, and `--retry` tries them again, e.g. with another language. Only the first 400 pages are read, like other PDFs.
+- A PDF with a few readable pages and many scanned ones counts as having text, so it isn't picked up.
 
 ### Saved pages (`archiver import`)
 

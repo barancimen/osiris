@@ -21,6 +21,7 @@ dependencies = [
     "mammoth",
     "markdownify",
     "mobi",
+    "pillow",
 ]
 
 [project.optional-dependencies]

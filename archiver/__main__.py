@@ -1,4 +1,4 @@
-"""CLI: archiver run URLFILE | archiver import PATH | archiver stats | archiver export"""
+"""CLI: archiver run URLFILE | archiver import PATH | archiver ocr | archiver stats | archiver export"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
 from .localfile import run_localfile
+from .ocr import DEFAULT_LANG as OCR_LANG, run_ocr
 from .reddit import run_reddit
 from .route import route
 from .scry import ScryClient
@@ -235,6 +236,24 @@ def cmd_import(args: argparse.Namespace) -> None:
         store.close()
 
 
+def cmd_ocr(args: argparse.Namespace) -> None:
+    import uvloop
+
+    async def main() -> None:
+        stop_on_signals()
+        await run_ocr(store, args.lang, args.workers, args.worker_mem_mb, args.retry, args.limit)
+
+    store = Store(args.out)
+    try:
+        uvloop.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.warning("interrupted: progress is saved, re-run the same command to resume")
+    finally:
+        store.commit()
+        print_stats(store)
+        store.close()
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     store = Store(args.out)
     print_stats(store, failed=args.failed, thin=args.thin)
@@ -326,6 +345,15 @@ def main() -> None:
     imp.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
     imp.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per extraction process (0 = none)")
     imp.set_defaults(func=cmd_import)
+
+    ocr = sub.add_parser("ocr", help="read PDFs with no text layer (scans) with tesseract; slow, resumable")
+    ocr.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    ocr.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages, e.g. eng+tur (default {OCR_LANG})")
+    ocr.add_argument("--workers", type=int, default=1, help="PDFs at a time, one CPU core each (default 1)")
+    ocr.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
+    ocr.add_argument("--retry", action="store_true", help="also try PDFs OCR has already tried, e.g. in a new language")
+    ocr.add_argument("--limit", type=int, help="stop after this many PDFs")
+    ocr.set_defaults(func=cmd_ocr)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)
