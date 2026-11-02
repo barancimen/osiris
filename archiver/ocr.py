@@ -54,7 +54,11 @@ def pdf_to_doc(path: str, lang: str) -> dict:
     def out_of_time(*_):
         raise _DocTimeout()
 
+    def stop(*_):  # raising lets subprocess.run kill the tesseract it's waiting on
+        raise SystemExit(1)
+
     signal.signal(signal.SIGALRM, out_of_time)
+    signal.signal(signal.SIGTERM, stop)
     signal.alarm(DOC_TIMEOUT)
     pages: list[str] = []
     error = None
@@ -176,8 +180,12 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
     try:
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
             await asyncio.gather(*(one(session, *row) for row in todo))
-    finally:
+    except asyncio.CancelledError:
+        pool.kill()  # the PDF in progress is tried again next run; pool.shutdown() would wait it out
+        raise
+    else:
         pool.shutdown()
+    finally:
         store.commit()
         for key, n in sorted(outcome.items(), key=lambda kv: -kv[1]):
             print(f"{n:>7}  {key}")
