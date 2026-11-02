@@ -27,6 +27,8 @@ TOKEN_ENV = "GITHUB_TOKEN"
 CONCURRENCY = 5
 MAX_ATTEMPTS = 3
 MAX_GIST_FILE = 2**20
+MAX_NOTEBOOK = 64 * 2**20  # nearly all of it is outputs, which are dropped
+DATA_URI_RE = re.compile(r"data:[a-z]+/[a-z0-9.+-]+(?:;[a-z0-9=-]+)*,[^\"'\s>)]{256,}", re.I)
 
 MD_IMAGE_RE = re.compile(r"\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)|!\[[^\]]*\]\([^)]*\)")
 HTML_NOISE_RE = re.compile(r"<!--.*?-->|</?(?:a|img|picture|source|p|div|span|br|hr|center|sub|sup|kbd|details|summary"
@@ -49,6 +51,7 @@ def load_token() -> str | None:
 
 def clean_readme(text: str) -> str:
     """Drop badges, images and layout HTML, leaving fenced code alone."""
+    text = DATA_URI_RE.sub("", text)
     parts = re.split(r"(^```.*?^```[^\n]*$)", text, flags=re.M | re.S)
     for i in range(0, len(parts), 2):
         parts[i] = HTML_NOISE_RE.sub("", MD_IMAGE_RE.sub("", parts[i]))
@@ -147,11 +150,13 @@ async def _fetch_gist(gh: GitHub, gist_id: str) -> tuple[int, dict | None, dict[
     contents: dict[str, str] = {}
     for name, f in (gist.get("files") or {}).items():
         content = f.get("content")
-        if f.get("truncated") and f.get("raw_url") and (f.get("size") or 0) <= MAX_GIST_FILE:
+        is_notebook = name.lower().endswith(".ipynb")
+        limit = MAX_NOTEBOOK if is_notebook else MAX_GIST_FILE
+        if f.get("truncated") and f.get("raw_url") and (f.get("size") or 0) <= limit:
             raw_status, raw = await gh.get(f["raw_url"], raw=True)
             content = raw if raw_status == 200 else content
         if content:
-            contents[name] = notebook_text(content) if name.lower().endswith(".ipynb") else content
+            contents[name] = DATA_URI_RE.sub("", notebook_text(content) if is_notebook else content)
     return 200, gist, contents
 
 
@@ -198,7 +203,7 @@ async def run_github(store: Store) -> None:
         store.record(doc_key, "ok" if ok else "thin", None if ok else ("short" if has_text else "no_readme"),
                      chars=chars, http_status=200, final_url=meta.get("final_url"))
 
-    timeout = aiohttp.ClientTimeout(total=60)
+    timeout = aiohttp.ClientTimeout(total=120)
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
         gh = GitHub(session)
         await asyncio.gather(*(one(gh, key, url) for key, url in pending))
