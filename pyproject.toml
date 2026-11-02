@@ -16,6 +16,8 @@ dependencies = [
     "curl_cffi>=0.7",
     "pypdfium2>=4",
     "zstandard",
+    "youtube-transcript-api>=1.2",
+    "yt-dlp",
 ]
 
 [project.optional-dependencies]

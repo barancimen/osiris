@@ -6,9 +6,9 @@ import hashlib
 import ipaddress
 import re
 from dataclasses import dataclass, replace
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
-from .dedup import dedup_key
+from .dedup import YOUTUBE_HOST, dedup_key, youtube_target
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
 
@@ -28,8 +28,18 @@ SE_HOSTS = {"stackoverflow.com", "superuser.com", "serverfault.com", "askubuntu.
             "stackapps.com"}
 SE_QUESTION_RE = re.compile(r"^/(?:questions|q)/(\d+)(?:/|$)")
 
-# skipped by request; *.github.io sites are ordinary blogs/docs and stay in
 GITHUB_HOSTS = {"github.com", "gist.github.com", "raw.githubusercontent.com", "gist.githubusercontent.com"}
+# *.github.io sites and raw file hosts are ordinary pages and go through the generic lane
+GITHUB_REPO_RE = re.compile(r"^/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/|$)")
+GIST_RE = re.compile(r"^/(?:[\w-]+/)?([0-9a-f]{20,})(?:/|$)", re.I)
+# github.com's own pages, which look like /owner/repo but aren't
+GITHUB_RESERVED = {"about", "account", "apps", "codespaces", "collections", "contact", "customer-stories", "dashboard",
+                   "enterprise", "events", "explore", "features", "issues", "login", "marketplace", "new", "notifications",
+                   "orgs", "organizations", "pricing", "pulls", "search", "security", "sessions", "settings", "signup",
+                   "site", "sponsors", "stars", "team", "topics", "trending", "users", "watching"}
+
+# local files the archiver can read; anything else (images, /etc/hostname, ...) stays out
+LOCAL_READABLE = {"pdf", "html", "htm", "xhtml", "txt", "md", "markdown", "rst", "tex", "org"}
 
 # Logged-in chat apps: conversations are private and the pages are JS shells.
 PRIVATE_APP_HOSTS = {"chatgpt.com", "chat.openai.com", "claude.ai", "grok.com", "gemini.google.com"}
@@ -45,7 +55,7 @@ MEDIA_EXTS = {
 @dataclass(frozen=True)
 class Route:
     url: str  # normalized URL, primary key in the manifest
-    lane: str  # generic | twitter | arxiv | stackexchange | skip
+    lane: str  # generic | twitter | arxiv | stackexchange | reddit | github | youtube | localfile | skip
     doc_key: str | None = None  # URLs sharing a doc_key share one document
     reason: str | None = None  # why it was skipped
     # extract_urls.py's notion of "same page" (tracking params, host aliases, ...): a URL
@@ -66,6 +76,8 @@ def extract_url(line: str) -> str | None:
     if not line or line.startswith("#"):
         return None
     if line.lower().startswith(("http://", "https://")) and " " not in line:
+        return line
+    if line.lower().startswith("file:/"):
         return line
     m = URL_RE.search(line)
     return m.group(0) if m else None
@@ -112,7 +124,35 @@ def safe_dedup_key(url: str) -> str:
         return url
 
 
+def _route_file(found: str) -> Route:
+    parts = urlsplit(found)
+    netloc = "" if parts.netloc.lower() == "localhost" else parts.netloc
+    url = urlunsplit(("file", netloc, parts.path, "", ""))
+    name = unquote(parts.path).rsplit("/", 1)[-1]
+    ext = name.rpartition(".")[2].lower() if "." in name else ""
+    if ext not in LOCAL_READABLE:
+        return Route(url, "skip", reason="local_other")
+    return Route(url, "localfile", doc_key=f"file:{netloc}{unquote(parts.path)}")
+
+
+def _route_github(url: str, bare: str, path: str) -> Route:
+    if bare in ("raw.githubusercontent.com", "gist.githubusercontent.com"):
+        return Route(url, "generic", doc_key=url)
+    if bare == "gist.github.com":
+        m = GIST_RE.match(path)
+        return Route(url, "github", doc_key=f"gist:{m.group(1).lower()}") if m else Route(url, "skip", reason="github_account")
+    m = GITHUB_REPO_RE.match(path)
+    first = path.strip("/").split("/")[0].lower()
+    if first in GITHUB_RESERVED:
+        return Route(url, "skip", reason="github_other")
+    if not m:  # by request: a user or organization page would only add a name and bio
+        return Route(url, "skip", reason="github_account")
+    return Route(url, "github", doc_key=f"github:{m.group(1)}/{m.group(2)}".lower())
+
+
 def _route(found: str) -> Route:
+    if found.lower().startswith("file:/"):
+        return _route_file(found)
     url = normalize(found)
     if url is None:
         return Route(found, "skip", reason="bad_url")
@@ -127,7 +167,10 @@ def _route(found: str) -> Route:
     if bare in PRIVATE_APP_HOSTS:
         return Route(url, "skip", reason="private_app")
     if bare in GITHUB_HOSTS:
-        return Route(url, "skip", reason="github")
+        return _route_github(url, bare, path)
+    if YOUTUBE_HOST.search(host):
+        target = youtube_target(url)
+        return Route(url, "youtube", doc_key="youtube:" + ":".join(target)) if target else Route(url, "skip", reason="youtube_other")
     if bare in X_HOSTS:
         m = TWEET_PATH_RE.match(path)
         if m:

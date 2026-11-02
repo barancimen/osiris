@@ -1,4 +1,4 @@
-"""CLI: archiver run URLFILE | archiver stats | archiver export"""
+"""CLI: archiver run URLFILE | archiver import PATH | archiver stats | archiver export"""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 from . import cookies, extract
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
+from .github import run_github
+from .localfile import run_localfile
 from .reddit import run_reddit
 from .route import route
 from .scry import ScryClient
@@ -23,6 +25,7 @@ from .singlefile import run_import
 from .stackexchange import run_stackexchange
 from .store import Store
 from .twitter import run_twitter
+from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, run_youtube
 
 log = logging.getLogger("archiver")
 
@@ -30,7 +33,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
 DEFAULT_OUT = REPO_DIR / "data"
 
-LANES = ("twitter", "arxiv", "stackexchange", "reddit", "generic")
+LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
 
@@ -92,6 +95,9 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "arxiv": lambda: run_arxiv(store),
         "stackexchange": lambda: run_stackexchange(store),
         "reddit": lambda: run_reddit(store),
+        "github": lambda: run_github(store),
+        "youtube": lambda: run_youtube(store, args.youtube_delay),
+        "localfile": lambda: run_localfile(store, pool, args.workers, keep_raw=args.keep_raw),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw, wayback=not args.no_wayback,
@@ -100,12 +106,22 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
                                        render_concurrency=args.render_concurrency,
                                        chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait),
     }
+    tasks = {lane: asyncio.create_task(jobs[lane]()) for lane in lanes}
+
+    async def note_youtube_alone() -> None:
+        others = [task for lane, task in tasks.items() if lane != "youtube"]
+        await asyncio.gather(*others, return_exceptions=True)
+        if "youtube" in tasks and not tasks["youtube"].done():
+            log.info("only the YouTube lane is left; Ctrl-C is safe, and a re-run picks up where it stopped")
+
+    notice = asyncio.create_task(note_youtube_alone())
     try:
-        results = await asyncio.gather(*(jobs[lane]() for lane in lanes), return_exceptions=True)
-        for lane, result in zip(lanes, results):
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for lane, result in zip(tasks, results):
             if isinstance(result, BaseException):
                 log.error("%s lane crashed", lane, exc_info=result)
     finally:
+        notice.cancel()
         reporter.cancel()
         store.commit()
         pool.shutdown()
@@ -272,6 +288,9 @@ def main() -> None:
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
     run.add_argument("--skip", choices=LANES, action="append", default=[],
                      help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
+    run.add_argument("--youtube-delay", type=float, default=YOUTUBE_DELAY, metavar="SECONDS",
+                     help=f"seconds between YouTube requests (default {YOUTUBE_DELAY:.0f}); it's the lane most "
+                          "likely to get your IP blocked")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--retry-host", action="append", default=[], metavar="PATTERN",
                      help="re-queue only failed URLs on hosts matching the glob (repeatable), e.g. "

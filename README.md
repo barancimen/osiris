@@ -1,7 +1,7 @@
 # archiver
 
-Archives a list of saved URLs (bookmarks, Session Buddy tabs) as clean markdown for
-lexical and semantic indexing. Only text is kept. Images and video are never downloaded.
+Archives a list of saved URLs and local files (bookmarks, Session Buddy tabs) as clean markdown
+for lexical and semantic indexing. Only text is kept. Images and video are never downloaded.
 
 ## Pipeline
 
@@ -35,6 +35,7 @@ after the run has stopped.
 | variable | used for |
 |---|---|
 | `SCRY_API_KEY` (or `~/.config/scry/env`, `~/.scry/.env`) | tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives; free while Scry has spare capacity |
+| `GITHUB_TOKEN` (or `~/.config/archiver/env`) | the GitHub lane: 5,000 API calls/hour instead of 60. Unset: its URLs stay pending. A token with no scopes is enough for public repos. Keep the file private |
 | `TWITTERAPI_IO_KEY` | tweets Scry lacks, via twitterapi.io (billed per tweet). Unset: those become `not_in_scry` |
 | `STACKEXCHANGE_KEY` | raises the Stack Exchange API quota from 300 to 10,000 calls/day |
 | `OPENALEX_API_KEY` | your own OpenAlex budget instead of the shared per-IP one |
@@ -49,10 +50,28 @@ Each URL is routed to the cheapest source that actually returns its text:
 | `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | export API, 100 IDs per call, title/authors/abstract (arxiv.org's robots.txt sets a 15 s crawl delay) |
 | `stackexchange` | `*/questions/<id>` on SE sites | api.stackexchange.com, 100 IDs per call, question and all answers as markdown (the sites show Cloudflare challenges to datacenter IPs) |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | post + comment tree from Scry's Reddit archive, falling back to Arctic Shift for posts or comment trees Scry lacks. reddit.com refuses datacenter IPs and new API apps need approval |
+| `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files (Jupyter notebooks reduced to their markdown and code). All links into one repo share its document, so a file or issue link stores the repo's README, not that file or issue |
+| `youtube` | videos, playlists, channels | transcripts, or a list's title, description and video titles (up to 2,000, without their transcripts). See below |
+| `localfile` | `file://` links to `.pdf`, `.html`, `.txt`, `.md`, `.rst`, `.tex`, `.org` | read in place, never changed. See below |
 | `generic` | everything else | async fetch, then trafilatura main-content markdown, or pypdfium2 for PDFs, then the fallback passes below |
-| `skip` | GitHub (`github.com`, gists, raw files; `*.github.io` sites are kept), private chat links (ChatGPT/Claude/Grok), X profiles, media files, local hosts | recorded, not fetched |
+| `skip` | GitHub user and organization pages and GitHub's own pages, other YouTube pages (search, feeds, your Watch Later and Liked lists), other local files (images, no extension), private chat links (ChatGPT/Claude/Grok), X profiles, media files, local hosts | recorded, not fetched |
 
-`--skip LANE` leaves a lane's URLs pending (e.g. `--skip twitter`); `--only LANE` runs just one.
+`--skip LANE` leaves a lane's URLs pending (e.g. `--skip youtube`); `--only LANE` runs just one.
+
+`extract_urls.py` keeps web pages and `file://` links. It drops Google except Scholar, Gmail, local servers and browser-internal links (`chrome://`, `chrome-extension://`, `about:`, …).
+
+### YouTube lane
+
+- Transcripts come from `youtube_transcript_api`: English first, then the video's own language, with human captions ahead of automatic ones. Playlists and channels are read with `yt-dlp`. A video with no captions is stored as `thin`, with just its title and channel.
+- YouTube blocks most datacenter IPs and throttles bursts from any IP, so run this lane from a home connection. Requests go out one at a time, `--youtube-delay` (5) seconds apart.
+- The lane has its own worker thread and shares no limits with the others, so a block here can't hold up another document. A blocked item stays `pending`. The lane pauses for 5, 10, 20, then 40 minutes, and after 5 blocks in a row stops until the next run. Once only YouTube is left, the log says so, and Ctrl-C is safe.
+
+### Local files
+
+- `all_urls.md` holds them as `file:///path/to/My%20Paper.pdf`, one per line, and they run with `archiver run` like any URL. `file:///C:/…` is also looked up under `/mnt/c/…` for WSL.
+- **Your files are only ever read.** Nothing moves, changes or deletes them, and `--keep-raw` stores a copy under `raw/`.
+- A file that isn't there is `failed` with `file_missing`: run on the machine that has the files, or use `--retry-failed` once they're back. A scanned PDF with no text layer is `failed` with `no_text`, since there's no OCR.
+- Only the first 400 pages of any PDF are read, here and in the generic lane.
 
 ### Saved pages (`archiver import`)
 
@@ -90,7 +109,7 @@ Your browser session, the way ArchiveBox and Karakeep handle logged-in and bot-w
 ## Output (`data/`)
 
 - `manifest.sqlite`: one row per input URL with lane, status (`pending|ok|thin|failed|skipped`), reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path.
-- `md/<id[:2]>/<id>.md`: YAML front matter (url, title, author, date, site, source) plus the markdown body. `source` records where the text came from, e.g. `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`.
+- `md/<id[:2]>/<id>.md`: YAML front matter (url, title, author, date, site, source) plus the markdown body. `source` records where the text came from, e.g. `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `github:api`, `youtube:transcript:auto`, `file:pdf`.
 - `corpus.jsonl`: written by `archiver export`.
 - `raw/<id[:2]>/<id>.{html.zst,pdf}`: only with `--keep-raw`. HTML is zstd-compressed and PDFs are kept as-is. Budget about 1–1.5 GB for 20k pages plus about 2 MB per PDF.
 

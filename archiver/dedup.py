@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote
 
 # --- filtering ---------------------------------------------------------------
 
+FILE_URL = re.compile(r'^file:/', re.I)
 GOOGLE_HOST = re.compile(r'(^|\.)google(\.com?)?\.[a-z]{2,3}$')  # google.com, mail.google.com, google.co.uk, ...
 YOUTUBE_HOST = re.compile(r'(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$')
 LOCAL_HOST = re.compile(r'^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])$')
@@ -17,14 +18,15 @@ def bare_host(u):
     return (urlsplit(u).hostname or '').lower()
 
 def keep(u):
-    """Web pages only (http/https), no Google (except Scholar)/Gmail/YouTube, no local servers."""
+    """Web pages and local files, no Google (except Scholar)/Gmail, no local servers."""
+    if FILE_URL.match(u):
+        return True
     if not re.match(r'^https?://', u, re.I):
-        return False  # chrome://, chrome-extension://, file://, blob:, javascript:, data:, about:, ...
+        return False  # chrome://, chrome-extension://, blob:, javascript:, data:, about:, ...
     host = bare_host(u)
     if host.startswith('scholar.google.'):
         return True  # the one Google service worth keeping
-    if not host or LOCAL_HOST.match(host) or GOOGLE_HOST.search(host) or host.endswith('gmail.com')\
-            or YOUTUBE_HOST.search(host):
+    if not host or LOCAL_HOST.match(host) or GOOGLE_HOST.search(host) or host.endswith('gmail.com'):
         return False
     return True
 
@@ -55,8 +57,42 @@ def keep_fragment(frag, path):
         return False
     return frag[0] in '/!' or '=' in frag
 
+YOUTUBE_VIDEO_PATH = re.compile(r'^/(?:shorts|embed|live|v|e)/([\w-]{11})(?:/|$)')
+YOUTUBE_CHANNEL_PATH = re.compile(r'^/(?:(@[^/]+)|channel/(UC[\w-]+)|(?:c|user)/([^/]+))(?:/|$)')
+VIDEO_ID = re.compile(r'^[\w-]{11}$')
+# the viewer's own lists and auto-generated mixes: nothing public to fetch
+PRIVATE_PLAYLIST = re.compile(r'^(?:WL|LL|LM|RD.*)$')
+
+def youtube_target(u):
+    """('video', id), ('playlist', id) or ('channel', key) for a YouTube URL; None for other pages
+    and other sites. A watch link inside a playlist is that video."""
+    p = urlsplit(u)
+    if not YOUTUBE_HOST.search((p.hostname or '').lower()):
+        return None
+    query = dict(parse_qsl(p.query, keep_blank_values=True))
+    if (p.hostname or '').lower() == 'youtu.be':
+        vid = p.path.strip('/').split('/')[0]
+        return ('video', vid) if VIDEO_ID.match(vid) else None
+    if p.path.rstrip('/') == '/watch':
+        return ('video', query['v']) if VIDEO_ID.match(query.get('v', '')) else None
+    m = YOUTUBE_VIDEO_PATH.match(p.path)
+    if m:
+        return ('video', m.group(1))
+    if p.path.rstrip('/') == '/playlist' and query.get('list'):
+        return None if PRIVATE_PLAYLIST.match(query['list']) else ('playlist', query['list'])
+    m = YOUTUBE_CHANNEL_PATH.match(unquote(p.path))
+    if m:
+        handle, channel_id, legacy = m.groups()
+        return ('channel', channel_id or (handle or legacy).lower())
+    return None
+
 def dedup_key(u):
     p = urlsplit(u)
+    if p.scheme.lower() == 'file':  # same file whatever the viewer's #page=3 says
+        return 'file://' + unquote(p.path)
+    target = youtube_target(u)
+    if target:
+        return 'youtube:' + ':'.join(target)
     host = norm_host((p.hostname or '').lower())
     path = unquote(p.path).rstrip('/')
 

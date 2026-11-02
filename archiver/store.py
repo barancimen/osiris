@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -103,14 +104,16 @@ class Store:
     def reroute(self, route_fn: Callable[[str], Route | None]) -> int:
         """Apply the current routing rules to URLs not yet archived: pending ones, and failed or
         thin ones whose lane changed (e.g. Reddit posts that failed in the generic lane before
-        the Reddit lane existed). Finished documents and imported pages are never touched."""
+        the Reddit lane existed), and GitHub links skipped before the GitHub lane existed.
+        Finished documents and imported pages are never touched."""
         changed = []
         for url, lane, doc_key, reason, status in self.db.execute(
             "SELECT url, lane, doc_key, reason, status FROM urls"
-            " WHERE status IN ('pending', 'failed', 'thin') AND lane != 'singlefile'"
+            " WHERE (status IN ('pending', 'failed', 'thin') AND lane != 'singlefile')"
+            " OR (status = 'skipped' AND reason = 'github')"
         ).fetchall():
             r = route_fn(url)
-            if r is None or (status != "pending" and r.lane == lane):
+            if r is None or (status in ("failed", "thin") and r.lane == lane):
                 continue
             if (r.lane, r.doc_key, r.reason) != (lane, doc_key, reason):
                 new_status = "skipped" if r.lane == "skip" else "pending"
@@ -231,13 +234,19 @@ class Store:
         os.replace(tmp, path)
         return len(body)
 
-    def save_raw(self, doc_key: str, ext: str, data: bytes | None = None, move_from: str | None = None) -> str:
+    def save_raw(self, doc_key: str, ext: str, data: bytes | None = None, move_from: str | None = None,
+                 copy_from: str | None = None) -> str:
         """Keep a fetched body under raw/<id[:2]>/<id>.<ext>; returns the path relative to the output dir.
-        Bytes are zstd-compressed (ext should end in .zst); move_from (a finished PDF download) is kept as-is."""
+        Bytes are zstd-compressed (ext should end in .zst); move_from (a finished PDF download) is kept
+        as-is, and copy_from (one of your local files) is copied, leaving the original where it is."""
         did = doc_id(doc_key)
         path = self.out / "raw" / did[:2] / f"{did}.{ext}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if move_from is not None:
+        if copy_from is not None:
+            tmp = path.with_name(path.name + ".tmp")
+            shutil.copyfile(copy_from, tmp)
+            os.replace(tmp, path)
+        elif move_from is not None:
             os.replace(move_from, path)
         else:
             import zstandard

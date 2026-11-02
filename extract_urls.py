@@ -9,7 +9,7 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_DIR)  # works under python -I and from any cwd
 from archiver.dedup import keep, dedup_key  # noqa: E402  (shared with the archiver manifest)
 
-# Only explicitly saved links: bookmarks + Session Buddy.
+# Only explicitly saved links: bookmarks + Session Buddy, web pages and local files (file://).
 # htu_*.tsv (browser history) and twitter-Following-*.json are excluded.
 
 def unescape_attr(s):
