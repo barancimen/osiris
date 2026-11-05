@@ -1,9 +1,10 @@
-"""`archiver ocr`: read PDFs that have no text layer, usually scans.
+"""Read PDFs that have no text layer, usually scans.
 
-Separate from `archiver run` because OCR takes seconds per page: a long scan must not hold up
-anything else. It works through PDFs recorded with no usable text: a local file is read where it
-is and never changed, and a web PDF is downloaded again, since only its text was kept, to a
-temporary file that is then deleted. Each PDF is tried once, unless --retry is given.
+`archiver run` does this on its own once its generic and local-file lanes are done, and `archiver ocr`
+does it alone. OCR takes seconds per page, so a long scan must not hold up anything else. It works
+through PDFs recorded with no usable text: a local file is read where it is and never changed, and
+a web PDF is downloaded again, since only its text was kept, to a temporary file that is then
+deleted. Each PDF is tried once, unless --retry is given.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import uuid
+from collections.abc import Iterable
 from io import BytesIO
 from pathlib import Path
 
@@ -32,6 +34,7 @@ DPI = 200
 PAGE_TIMEOUT = 180  # seconds for one page
 DOC_TIMEOUT = 3 * 3600  # a whole book; what's read by then is kept
 TRIED = "ocr"
+LANES = ("generic", "localfile")  # the lanes whose PDFs can come back with no text
 
 
 class _DocTimeout(Exception):
@@ -89,14 +92,32 @@ def pdf_to_doc(path: str, lang: str) -> dict:
     return {"text": text, "title": title, "author": meta.get("Author"), "error": error}
 
 
-def candidates(store: Store, retry: bool = False) -> list[tuple]:
+def unavailable(lang: str) -> str | None:
+    """Why OCR can't run in these languages, if so. Checked up front because a page that fails for
+    this reason would otherwise count as the PDF's one try."""
+    if not shutil.which("tesseract"):
+        return ("tesseract isn't installed. On Debian/Ubuntu: apt install tesseract-ocr "
+                "(and tesseract-ocr-tur etc. for other languages); on macOS: brew install tesseract")
+    listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30)
+    have = set((listed.stdout + listed.stderr).split())
+    missing = [code for code in lang.split("+") if code not in have]
+    if missing:
+        return (f"tesseract has no language pack for {', '.join(missing)}. On Debian/Ubuntu: "
+                + " ".join(f"apt install tesseract-ocr-{code}" for code in missing))
+    return None
+
+
+def candidates(store: Store, retry: bool = False, lanes: Iterable[str] = LANES) -> list[tuple]:
     """(doc_key, url, final_url, lane, chars so far) for PDFs recorded with no usable text."""
     tried = "" if retry else f" AND instr(tried, ',{TRIED}') = 0"
+    lanes = tuple(lanes)
     rows = store.db.execute(
         "SELECT doc_key, MIN(url), MAX(final_url), lane, COALESCE(MAX(chars), 0) FROM urls"
-        " WHERE lane IN ('generic', 'localfile') AND ((status = 'failed' AND reason = 'no_text') OR status = 'thin')"
+        f" WHERE lane IN ({', '.join('?' * len(lanes))})"
+        " AND ((status = 'failed' AND reason = 'no_text') OR status = 'thin')"
         f" AND (content_type = 'application/pdf' OR lower(url) LIKE '%.pdf%'){tried}"
-        " GROUP BY doc_key ORDER BY MIN(rowid)"
+        " GROUP BY doc_key ORDER BY MIN(rowid)",
+        lanes,
     ).fetchall()
     return rows
 
@@ -122,12 +143,12 @@ async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str
     return None
 
 
-async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: bool, limit: int | None) -> None:
-    if not shutil.which("tesseract"):
-        raise SystemExit("tesseract isn't installed. On Debian/Ubuntu: apt install tesseract-ocr "
-                         "(and tesseract-ocr-tur etc. for other languages); on macOS: brew install tesseract")
-    todo = candidates(store, retry)[:limit]
+async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: bool = False, limit: int | None = None,
+                  lanes: Iterable[str] = LANES) -> None:
+    todo = candidates(store, retry, lanes)[:limit]
     log.info("ocr: %d PDFs with no usable text, language %s, %d at a time", len(todo), lang, workers)
+    if not todo:
+        return
     pool = extract.WorkerPool(workers, mem_mb)
     slots = asyncio.Semaphore(workers)
     outcome: dict[str, int] = {}

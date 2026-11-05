@@ -18,7 +18,7 @@ from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
 from .localfile import run_localfile
-from .ocr import DEFAULT_LANG as OCR_LANG, run_ocr
+from .ocr import DEFAULT_LANG as OCR_LANG, LANES as OCR_LANES, run_ocr, unavailable as ocr_unavailable
 from .reddit import run_reddit
 from .route import route
 from .scry import ScryClient
@@ -108,6 +108,19 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
                                        chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait),
     }
     tasks = {lane: asyncio.create_task(jobs[lane]()) for lane in lanes}
+
+    ocr_lanes = [lane for lane in OCR_LANES if lane in tasks]
+    if ocr_lanes and not args.no_ocr:
+        if problem := ocr_unavailable(args.ocr_lang):
+            log.warning("no OCR this run: %s. PDFs with no text wait for a later run", problem)
+        else:
+            async def ocr_when_read() -> None:
+                # after the lanes that find these PDFs, so a long scan holds up nothing; not after
+                # YouTube, which can take days
+                await asyncio.gather(*(tasks[lane] for lane in ocr_lanes), return_exceptions=True)
+                await run_ocr(store, args.ocr_lang, args.workers, args.worker_mem_mb, lanes=ocr_lanes)
+
+            tasks["ocr"] = asyncio.create_task(ocr_when_read())
 
     async def note_youtube_alone() -> None:
         others = [task for lane, task in tasks.items() if lane != "youtube"]
@@ -239,6 +252,9 @@ def cmd_import(args: argparse.Namespace) -> None:
 def cmd_ocr(args: argparse.Namespace) -> None:
     import uvloop
 
+    if problem := ocr_unavailable(args.lang):
+        sys.exit(problem)
+
     async def main() -> None:
         stop_on_signals()
         await run_ocr(store, args.lang, args.workers, args.worker_mem_mb, args.retry, args.limit)
@@ -313,6 +329,11 @@ def main() -> None:
     run.add_argument("--refetch-stackexchange", action="store_true",
                      help="update archived Stack Exchange threads to include comments; resumable, and a question "
                           "deleted since keeps its document")
+    run.add_argument("--no-ocr", action="store_true",
+                     help="don't read PDFs with no text layer with tesseract once the generic and local-file lanes "
+                          "are done; they wait for a later run or `archiver ocr`")
+    run.add_argument("--ocr-lang", default=OCR_LANG,
+                     help=f"tesseract languages for those PDFs, e.g. eng+tur (default {OCR_LANG})")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--retry-host", action="append", default=[], metavar="PATTERN",
                      help="re-queue only failed URLs on hosts matching the glob (repeatable), e.g. "
