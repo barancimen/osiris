@@ -48,6 +48,7 @@ MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
 DONE = ("ok", "thin")
+REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
 
 
 def now_iso() -> str:
@@ -155,6 +156,34 @@ class Store:
         self.db.executemany("UPDATE urls SET status = 'pending', tried = '' WHERE url = ?", urls)
         self.db.commit()
         return len(urls)
+
+    def start_refresh(self, lane: str) -> list[tuple[str, str, int]]:
+        """Begin or resume refreshing every PDF in a lane. Failed ones go back to pending. Returns
+        (doc_key, url, chars) for those that have text, which must only ever be replaced by more of
+        it; a thin one also gets its fallback passes again."""
+        docs: dict[str, tuple[str, str, int]] = {}
+        requeue = set()
+        for url, doc_key, status, content_type, chars, tried in self.db.execute(
+            "SELECT url, doc_key, status, content_type, COALESCE(chars, 0), tried FROM urls"
+            " WHERE lane = ? AND status IN ('ok', 'thin', 'failed') ORDER BY rowid", (lane,)
+        ).fetchall():
+            is_pdf = content_type == "application/pdf" or urlsplit(url).path.lower().endswith(".pdf")
+            if not is_pdf or f",{REFRESH}" in tried:
+                continue
+            if status == "failed":
+                requeue.add(doc_key)
+            else:
+                docs.setdefault(doc_key, (doc_key, url, chars))
+        self.db.executemany("UPDATE urls SET status = 'pending', tried = ? WHERE doc_key = ?",
+                            ((f",{REFRESH}", key) for key in requeue))
+        self.db.executemany("UPDATE urls SET tried = '' WHERE doc_key = ?", ((key,) for key in docs))
+        self.db.commit()
+        return list(docs.values())
+
+    def finish_refresh(self, lane: str) -> None:
+        """So the next refresh starts over rather than resuming this one."""
+        self.db.execute("UPDATE urls SET tried = replace(tried, ?, '') WHERE lane = ?", (f",{REFRESH}", lane))
+        self.db.commit()
 
     def retry_candidates(self, lane: str, pass_name: str, eligible: Callable[[str], bool]) -> list[tuple[str, int]]:
         """(doc_key, chars so far; -1 if failed) for thin docs and failures whose reason is

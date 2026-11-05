@@ -27,7 +27,7 @@ import aiohttp
 
 from . import extract
 from .cookies import BrowserCookie, into_aiohttp, to_cookiejar
-from .store import Store
+from .store import REFRESH, Store
 
 log = logging.getLogger(__name__)
 
@@ -437,8 +437,9 @@ class HostScheduler:
 class GenericPass:
     def __init__(self, store: Store, client, reader: Reader, pool: extract.WorkerPool, workers: int,
                  keep_raw: bool = False, prev_chars: dict[str, int] | None = None,
-                 pass_name: str | None = None, rules: tuple[HostRule, ...] = ()):
+                 pass_name: str | None = None, rules: tuple[HostRule, ...] = (), pdf_only: bool = False):
         self.store = store
+        self.pdf_only = pdf_only  # a refreshed PDF isn't replaced by whatever page its URL now serves
         self.keep_raw = keep_raw
         self.pass_name = pass_name  # fallback passes mark each URL they finish in `tried`
         self.rules = rules
@@ -460,6 +461,7 @@ class GenericPass:
         while (item := await sched.get()) is not None:
             key, url = item  # key: the host, or the HostRule pattern grouping several hosts
             requeue, cooldown, drop = None, 0.0, None
+            interrupted = False
             try:
                 fetched = await self.client.fetch(url)
                 self.attempts[url] += 1
@@ -483,11 +485,14 @@ class GenericPass:
                     cooldown = fetched.retry_after or min(2 ** self.attempts[url] + random.uniform(0, 2), MAX_COOLDOWN)
                 else:
                     self._fail(url, reason, fetched)
+            except asyncio.CancelledError:
+                interrupted = True  # not finished, so the next run must try it again
+                raise
             except Exception as e:
                 log.exception("unexpected error on %s", url)
                 self._fail(url, f"bug:{type(e).__name__}", Fetched())
             finally:
-                if requeue is None:
+                if requeue is None and not interrupted:
                     self._mark_tried(url)
                 for lost in sched.done(key, requeue, cooldown, drop is not None):
                     self._fail(lost, drop, Fetched())
@@ -509,6 +514,9 @@ class GenericPass:
         return self.store.save_raw(url, "html.zst" if f.kind == "html" else "txt.zst", data=f.body)
 
     async def _extract(self, url: str, f: Fetched) -> None:
+        if self.pdf_only and f.kind != "pdf":
+            self.reader.release_pdf(f)
+            return
         raw_path = None
         try:
             try:
@@ -561,7 +569,8 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                       contact: str | None, impersonate: bool, keep_raw: bool, wayback: bool, doi: bool = True,
                       rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
                       browser_ua: str | None = None, render: bool = False, render_concurrency: int = 2,
-                      chrome_profile: str | None = None, challenge_wait: float = 15.0) -> None:
+                      chrome_profile: str | None = None, challenge_wait: float = 15.0,
+                      refresh: list[tuple[str, str, int]] = ()) -> None:
     pdf_slots = asyncio.Semaphore(3)
     reader = Reader(store.tmp_dir, pdf_slots)
 
@@ -570,6 +579,12 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
     client = AiohttpClient(reader, concurrency, per_host, contact, cookies, browser_ua)
     try:
         await GenericPass(store, client, reader, pool, workers, keep_raw, rules=rules).run(urls, concurrency, per_host)
+        if refresh:
+            log.info("generic: refreshing %d PDFs that have text; each keeps its text unless the new copy has more",
+                     len(refresh))
+            await GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars={key: chars for key, _, chars in refresh},
+                              pass_name=REFRESH, rules=rules, pdf_only=True).run([key for key, _, _ in refresh],
+                                                                                 concurrency, per_host)
     finally:
         await client.close()
 

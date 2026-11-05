@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 
 from . import documents, extract
 from .singlefile import saved_page_to_doc
-from .store import Store
+from .store import REFRESH, Store
 
 log = logging.getLogger(__name__)
 
@@ -52,20 +52,35 @@ READERS = {
 }
 
 
-async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, keep_raw: bool = False) -> None:
+async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, keep_raw: bool = False,
+                        refresh: list[tuple[str, str, int]] = ()) -> None:
     pending = store.pending("localfile")
-    if not pending:
-        return
-    log.info("localfile: %d local files", len(pending))
+    # (doc_key, url, chars to beat): a refreshed document keeps its text unless the new read has more
+    todo = [(key, url, None) for key, url in pending]
+    if refresh:
+        todo += refresh
+        log.info("localfile: refreshing %d PDFs that have text; each keeps its text unless the new read has more",
+                 len(refresh))
+    if todo:
+        log.info("localfile: %d local files", len(todo))
     slots = asyncio.Semaphore(workers + 1)
 
-    async def one(doc_key: str, url: str) -> None:
+    async def one(doc_key: str, url: str, keep: int | None) -> None:
+        await read_one(doc_key, url, keep)
+        if keep is not None:
+            store.mark_tried(doc_key, REFRESH)
+
+    async def read_one(doc_key: str, url: str, keep: int | None) -> None:
+        def fail(reason: str) -> None:
+            if keep is None:
+                store.record(doc_key, "failed", reason)
+
         path = next((p for p in candidate_paths(url) if p.is_file()), None)
         if path is None:
-            store.record(doc_key, "failed", "file_missing")  # --retry-failed checks again
+            fail("file_missing")  # --retry-failed checks again
             return
         if not os.access(path, os.R_OK):
-            store.record(doc_key, "failed", "file_unreadable")
+            fail("file_unreadable")
             return
         ext = path.suffix.lower().lstrip(".")
         kind, worker = READERS[ext]
@@ -73,11 +88,13 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, ke
             try:
                 res = await pool.run(worker, str(path))
             except OSError as e:
-                store.record(doc_key, "failed", f"read_error:{type(e).__name__}")
+                fail(f"read_error:{type(e).__name__}")
                 return
         text = (res.get("text") or "").strip()
         if not text:
-            store.record(doc_key, "failed", res.get("error") or "no_text")
+            fail(res.get("error") or "no_text")
+            return
+        if keep is not None and len(text) <= keep:
             return
         raw_path = None
         if keep_raw:
@@ -91,5 +108,5 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, ke
         ok = chars >= extract.MIN_CHARS
         store.record(doc_key, "ok" if ok else "thin", None if ok else "short", chars=chars, raw_path=raw_path)
 
-    await asyncio.gather(*(one(key, url) for key, url in pending))
+    await asyncio.gather(*(one(*item) for item in todo))
     store.commit()

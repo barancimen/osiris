@@ -37,6 +37,7 @@ DEFAULT_OUT = REPO_DIR / "data"
 LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
+REFRESH_LANES = {"web": ("generic",), "local": ("localfile",), "both": ("generic", "localfile")}
 
 
 def lane_counts(store: Store) -> dict[str, Counter]:
@@ -83,7 +84,8 @@ def stop_on_signals() -> None:
         loop.add_signal_handler(sig, interrupt)
 
 
-async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -> None:
+async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
+                     refresh: dict[str, list[tuple[str, str, int]]]) -> None:
     browser_cookies = cookies.load(args.cookies) if args.cookies else []
     if args.cookies:
         log.info("using %d browser cookies for %d sites", len(browser_cookies),
@@ -98,29 +100,37 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str]) -
         "reddit": lambda: run_reddit(store),
         "github": lambda: run_github(store),
         "youtube": lambda: run_youtube(store, args.youtube_delay),
-        "localfile": lambda: run_localfile(store, pool, args.workers, keep_raw=args.keep_raw),
+        "localfile": lambda: run_localfile(store, pool, args.workers, keep_raw=args.keep_raw,
+                                           refresh=refresh.get("localfile", ())),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw, wayback=not args.no_wayback,
                                        doi=not args.no_doi, rules=host_rules(args.host_limit),
                                        cookies=browser_cookies, browser_ua=args.user_agent, render=args.render,
                                        render_concurrency=args.render_concurrency,
-                                       chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait),
+                                       chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait,
+                                       refresh=refresh.get("generic", ())),
     }
     tasks = {lane: asyncio.create_task(jobs[lane]()) for lane in lanes}
 
     ocr_lanes = [lane for lane in OCR_LANES if lane in tasks]
-    if ocr_lanes and not args.no_ocr:
-        if problem := ocr_unavailable(args.ocr_lang):
-            log.warning("no OCR this run: %s. PDFs with no text wait for a later run", problem)
-        else:
-            async def ocr_when_read() -> None:
-                # after the lanes that find these PDFs, so a long scan holds up nothing; not after
-                # YouTube, which can take days
-                await asyncio.gather(*(tasks[lane] for lane in ocr_lanes), return_exceptions=True)
-                await run_ocr(store, args.ocr_lang, args.workers, args.worker_mem_mb, lanes=ocr_lanes)
+    ocr = bool(ocr_lanes) and not args.no_ocr
+    if ocr and (problem := ocr_unavailable(args.ocr_lang)):
+        log.warning("no OCR this run: %s. PDFs with no text wait for a later run", problem)
+        ocr = False
 
-            tasks["ocr"] = asyncio.create_task(ocr_when_read())
+    async def after_reading() -> None:
+        # after the lanes that find these PDFs, so a long scan holds up nothing; not after YouTube,
+        # which can take days
+        read = await asyncio.gather(*(tasks[lane] for lane in ocr_lanes), return_exceptions=True)
+        if ocr:
+            await run_ocr(store, args.ocr_lang, args.workers, args.worker_mem_mb, lanes=ocr_lanes)
+        for lane, result in zip(ocr_lanes, read):
+            if lane in refresh and not isinstance(result, BaseException):
+                store.finish_refresh(lane)
+
+    if ocr_lanes:
+        tasks["ocr"] = asyncio.create_task(after_reading())
 
     async def note_youtube_alone() -> None:
         others = [task for lane, task in tasks.items() if lane != "youtube"]
@@ -151,6 +161,12 @@ def host_rules(specs: list[str]) -> tuple[HostRule, ...]:
 def cmd_run(args: argparse.Namespace) -> None:
     import uvloop
 
+    lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
+    refresh_lanes = [lane for lane in REFRESH_LANES.get(args.refresh_pdfs, ()) if lane in lanes]
+    if args.refresh_pdfs and not refresh_lanes:
+        sys.exit(f"--refresh-pdfs {args.refresh_pdfs} needs the {' and '.join(REFRESH_LANES[args.refresh_pdfs])} "
+                 "lane in this run, and --only or --skip leaves it out")
+
     store = Store(args.out)
     for stale in store.tmp_dir.glob("*.pdf"):
         stale.unlink()
@@ -170,13 +186,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     rerouted = store.reroute(route)
     if rerouted:
         log.info("%d unfinished URLs re-routed by the current rules", rerouted)
-    lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
     if args.retry_failed or args.retry_host:
         log.info("re-queued %d failed URLs%s", store.requeue(lanes, hosts=args.retry_host),
                  f" on {', '.join(args.retry_host)}" if args.retry_host else "")
+    refresh = {lane: store.start_refresh(lane) for lane in refresh_lanes}
 
     try:
-        uvloop.run(_run_lanes(store, args, lanes))
+        uvloop.run(_run_lanes(store, args, lanes, refresh))
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.warning("interrupted: progress is saved, re-run the same command to resume")
     finally:
@@ -334,6 +350,9 @@ def main() -> None:
                           "are done; they wait for a later run or `archiver ocr`")
     run.add_argument("--ocr-lang", default=OCR_LANG,
                      help=f"tesseract languages for those PDFs, e.g. eng+tur (default {OCR_LANG})")
+    run.add_argument("--refresh-pdfs", choices=REFRESH_LANES,
+                     help="read every PDF again, failed or not: web ones, local ones or both. A PDF keeps its text "
+                          "unless the new copy has more. An interrupted refresh resumes with the same command")
     run.add_argument("--retry-failed", action="store_true", help="re-queue previously failed URLs")
     run.add_argument("--retry-host", action="append", default=[], metavar="PATTERN",
                      help="re-queue only failed URLs on hosts matching the glob (repeatable), e.g. "
