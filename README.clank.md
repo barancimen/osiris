@@ -26,20 +26,6 @@ Optional system and Python extras:
 | OCR of scanned PDFs | `apt install tesseract-ocr` (plus `tesseract-ocr-tur` etc. for other languages), or `brew install tesseract` |
 | `--render` | `.venv/bin/pip install -e .[render]`, then `playwright install chromium` |
 
-### Upgrading a clone made before the rename from archiver
-
-The package and command are now `osiris`, so a clone that ran `archiver` needs a new venv once. `data/` works as it is. Pulling from the old GitHub URL still works, since GitHub redirects it.
-
-```sh
-mv archiver osiris && cd osiris   # optional; a venv can't be moved, and is rebuilt below anyway
-git remote set-url origin https://github.com/barancimen/osiris.git
-git pull
-rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -e .   # add [render] if you use it
-mv ~/.config/archiver ~/.config/osiris   # if you keep a GitHub token there; the old place still works
-```
-
-Playwright's browser lives in `~/.cache`, so `playwright install chromium` isn't needed again. The web interface sets a new cookie, so open the address `osiris ui` prints.
-
 ## Web interface
 
 `osiris ui` opens one page with three tabs. Choices are saved in `data/ui.json`, and a job keeps running if you close or reload the page.
