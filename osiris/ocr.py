@@ -1,6 +1,6 @@
 """Read PDFs that have no text layer, usually scans.
 
-`archiver run` does this on its own once its generic and local-file lanes are done, and `archiver ocr`
+`osiris run` does this on its own once its generic and local-file lanes are done, and `osiris ocr`
 does it alone. OCR takes seconds per page, so a long scan must not hold up anything else. It works
 through PDFs recorded with no usable text: a local file is read where it is and never changed, and
 a web PDF is downloaded again, since only its text was kept, to a temporary file that is then

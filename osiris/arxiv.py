@@ -23,7 +23,7 @@ DELAY = 3.1
 MAX_TRIES = 3
 NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 ENTRY_ID_RE = re.compile(r"arxiv\.org/abs/(.+?)(?:v\d+)?$")
-UA = "personal-archiver/0.1 (one-off abstract lookup for saved browser tabs)"
+UA = "osiris/0.1 (one-off abstract lookup for saved browser tabs)"
 
 
 def _clean(text: str | None) -> str:

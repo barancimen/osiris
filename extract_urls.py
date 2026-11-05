@@ -7,7 +7,7 @@ import sys
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_DIR)  # works under python -I and from any cwd
-from archiver.dedup import keep, dedup_key  # noqa: E402  (shared with the archiver manifest)
+from osiris.dedup import keep, dedup_key  # noqa: E402  (shared with the osiris manifest)
 
 # Only explicitly saved links: bookmarks + Session Buddy, web pages and local files (file://).
 # htu_*.tsv (browser history) and twitter-Following-*.json are excluded.
@@ -56,7 +56,7 @@ def extract_session_buddy(path):
     return urls
 
 INPUT_DIR = os.path.normpath(os.path.join(REPO_DIR, '..', 'tab-backups'))
-OUTPUT = os.path.join(REPO_DIR, 'all_urls.md')  # default input of `archiver run`
+OUTPUT = os.path.join(REPO_DIR, 'all_urls.md')  # default input of `osiris run`
 
 def refuse_to_overwrite(path, input_dir):
     """This rewrites its output, so that must never be one of your files: not in the backup folder,
@@ -70,7 +70,7 @@ def refuse_to_overwrite(path, input_dir):
             lines = [line for line in f if line.strip()]
     except (OSError, ValueError):
         lines = ['not a list']
-    # Lists are one URL per line, with anything else ignored by `archiver run`.
+    # Lists are one URL per line, with anything else ignored by `osiris run`.
     if not all(re.match(r'[a-z][a-z0-9+.-]*:', line.strip(), re.I) for line in lines):
         sys.exit(f"{path} exists and isn't a list of URLs, so it won't be overwritten. Choose another path.")
 

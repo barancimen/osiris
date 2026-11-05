@@ -1,7 +1,7 @@
 """GitHub lane: name, description and README of each saved repo, plus gists, from the REST API.
 
 Every link into a repo (files, issues, pull requests) shares that repo's document. The token
-comes from GITHUB_TOKEN or ~/.config/archiver/env and allows 5,000 calls an hour; without one
+comes from GITHUB_TOKEN or ~/.config/osiris/env and allows 5,000 calls an hour; without one
 GitHub allows 60, so the lane leaves its URLs pending.
 """
 
@@ -38,8 +38,12 @@ HTML_NOISE_RE = re.compile(r"<!--.*?-->|</?(?:a|img|picture|source|p|div|span|br
 def load_token() -> str | None:
     if os.environ.get(TOKEN_ENV):
         return os.environ[TOKEN_ENV]
+    config = Path.home() / ".config"
+    env = config / "osiris" / "env"
+    if not env.exists():
+        env = config / "archiver" / "env"  # where it lived before the rename from archiver
     try:
-        lines = (Path.home() / ".config" / "archiver" / "env").read_text().splitlines()
+        lines = env.read_text().splitlines()
     except OSError:
         return None
     for line in lines:
@@ -170,7 +174,7 @@ async def run_github(store: Store) -> None:
         return
     log.info("github: %d repos and gists", len(pending))
     slots = asyncio.Semaphore(CONCURRENCY)
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "personal-archiver", "X-GitHub-Api-Version": "2022-11-28"}
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "osiris", "X-GitHub-Api-Version": "2022-11-28"}
 
     async def one(gh: GitHub, doc_key: str, url: str) -> None:
         async with slots:

@@ -1,7 +1,7 @@
-"""`archiver ui`: the whole process from one local web page.
+"""`osiris ui`: the whole process from one local web page.
 
 It listens on this machine only, and every request needs a token kept in the output directory,
-because the page can read your files and start jobs. Work runs as ordinary `archiver` subprocesses,
+because the page can read your files and start jobs. Work runs as ordinary `osiris` subprocesses,
 one job at a time, so the page never holds up a run and a run never depends on the page's state.
 Originals are only served for files the manifest already knows about, never for an arbitrary path.
 """
@@ -125,8 +125,8 @@ class Job:
             raise _StepFailed(f"{label} failed with exit code {code}")
         return output
 
-    def archiver(self, *args: str) -> list[str]:
-        return [sys.executable, "-m", "archiver", *args, "--out", str(self.out)]
+    def osiris(self, *args: str) -> list[str]:
+        return [sys.executable, "-m", "osiris", *args, "--out", str(self.out)]
 
     def stop(self) -> None:
         proc = self.proc
@@ -199,10 +199,10 @@ async def guard(request: web.Request, handler):
     given = request.query.get("token")
     if given and secrets.compare_digest(given, app["token"]):
         response = web.HTTPFound("/")
-        response.set_cookie("archiver_ui", app["token"], httponly=True, samesite="Strict", max_age=31536000)
+        response.set_cookie("osiris_ui", app["token"], httponly=True, samesite="Strict", max_age=31536000)
         raise response
-    if not secrets.compare_digest(request.cookies.get("archiver_ui", ""), app["token"]):
-        raise web.HTTPForbidden(text="Open the address that `archiver ui` printed in your terminal.")
+    if not secrets.compare_digest(request.cookies.get("osiris_ui", ""), app["token"]):
+        raise web.HTTPForbidden(text="Open the address that `osiris ui` printed in your terminal.")
     if request.method == "POST":
         origin = request.headers.get("Origin")
         if origin and urlsplit(origin).netloc != request.host:
@@ -414,10 +414,10 @@ async def start_archive(request: web.Request) -> web.Response:
                 n = await asyncio.to_thread(_write_local_urls, config["local"], f)
             j.log(f"--- Listed {n:,} local files")
         if config["saved"]:
-            await j.run("Importing saved pages", j.archiver("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
-        await j.run("Archiving", j.archiver(*run_args))
+            await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
+        await j.run("Archiving", j.osiris(*run_args))
         if options.get("audit_after", True):
-            await j.run("Checking for garbage", j.archiver("audit", "scan"))
+            await j.run("Checking for garbage", j.osiris("audit", "scan"))
 
     # twitterapi.io bills per tweet, so a run only sees that key when you've said so
     job.start("Archive", flow, env={} if options.get("billed_twitter") else {BILLED_KEY: None})
@@ -430,7 +430,7 @@ async def start_audit(request: web.Request) -> web.Response:
         raise web.HTTPConflict(text="A job is already running.")
 
     async def flow(j: Job) -> None:
-        await j.run("Checking for garbage", j.archiver("audit", "scan"))
+        await j.run("Checking for garbage", j.osiris("audit", "scan"))
 
     job.start("Garbage check", flow)
     return web.json_response({"ok": True})
@@ -446,13 +446,13 @@ async def start_fixes(request: web.Request) -> web.Response:
     empty.write_text("", encoding="utf-8")
 
     async def flow(j: Job) -> None:
-        output = await j.run("Applying fixes", j.archiver("audit", "apply", "--lang", lang))
+        output = await j.run("Applying fixes", j.osiris("audit", "apply", "--lang", lang))
         lanes = next((ln.removeprefix("lanes to run:").split() for ln in reversed(output)
                       if ln.startswith("lanes to run:")), [])
         if lanes:
             only = [arg for lane in lanes for arg in ("--only", lane)]
-            await j.run("Fetching again", j.archiver("run", str(empty), *only, "--no-ocr"))
-        await j.run("Checking the results", j.archiver("audit", "scan"))
+            await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr"))
+        await j.run("Checking the results", j.osiris("audit", "scan"))
 
     job.start("Fixes", flow, env={BILLED_KEY: None})
     return web.json_response({"ok": True})
@@ -464,7 +464,7 @@ async def start_export(request: web.Request) -> web.Response:
         raise web.HTTPConflict(text="A job is already running.")
 
     async def flow(j: Job) -> None:
-        await j.run("Exporting", j.archiver("export"))
+        await j.run("Exporting", j.osiris("export"))
 
     job.start("Export", flow)
     return web.json_response({"ok": True})
@@ -829,7 +829,7 @@ def serve(out: str | os.PathLike, port: int, no_browser: bool) -> None:
     address = f"http://127.0.0.1:{port}/?token={app['token']}"
 
     async def announce(_: web.Application) -> None:
-        print(f"\narchiver is open at\n\n  {address}\n\nPress Ctrl-C here to stop it.", flush=True)
+        print(f"\nosiris is open at\n\n  {address}\n\nPress Ctrl-C here to stop it.", flush=True)
         if os.environ.get("SSH_CONNECTION"):
             print(f"Over ssh, first run this on your own machine: ssh -N -L {port}:127.0.0.1:{port} <this server>",
                   flush=True)

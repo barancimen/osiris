@@ -1,6 +1,6 @@
 """Which saved URLs to keep, and when two URLs are the same page.
 
-Shared by extract_urls.py (building the URL list) and the archiver manifest (skipping
+Shared by extract_urls.py (building the URL list) and the osiris manifest (skipping
 URLs already archived when a new list is loaded).
 """
 

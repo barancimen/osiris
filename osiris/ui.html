@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Archiver</title>
+<title>Osiris</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -150,7 +150,7 @@ dialog::backdrop { background: rgb(0 0 0 / .35); }
 </head>
 <body>
 <header>
-  <h1>Archiver</h1>
+  <h1>Osiris</h1>
   <nav role="tablist">
     <button role="tab" data-tab="archive" aria-selected="true">Archive</button>
     <button role="tab" data-tab="review" aria-selected="false">Review <span class="count" id="review-count" hidden></span></button>
@@ -603,7 +603,7 @@ document.addEventListener("keydown", e => {
     renderArchive();
     await tick();
     setInterval(tick, 1500);
-  } catch (e) { $("#archive-column").replaceChildren(h("div", {class: "notice warn"}, "Couldn't reach the archiver. Is it still running?")); }
+  } catch (e) { $("#archive-column").replaceChildren(h("div", {class: "notice warn"}, "Couldn't reach osiris. Is it still running?")); }
 })();
 </script>
 </body>

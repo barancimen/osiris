@@ -1,4 +1,4 @@
-# archiver
+# osiris
 
 Archives saved URLs and local files as clean markdown for lexical and semantic indexing. Only text is kept: images and video are never downloaded.
 
@@ -7,16 +7,16 @@ Archives saved URLs and local files as clean markdown for lexical and semantic i
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -e .
-.venv/bin/archiver ui
+.venv/bin/osiris ui
 ```
 
 This opens the [web interface](#web-interface), which covers the whole process. The same work from the command line:
 
 ```sh
 python3 extract_urls.py    # ../tab-backups -> all_urls.md
-.venv/bin/archiver run     # all_urls.md -> data/ (resumable, Ctrl-C safe)
-.venv/bin/archiver stats --failed --thin
-.venv/bin/archiver export  # data/corpus.jsonl, one document per line
+.venv/bin/osiris run     # all_urls.md -> data/ (resumable, Ctrl-C safe)
+.venv/bin/osiris stats --failed --thin
+.venv/bin/osiris export  # data/corpus.jsonl, one document per line
 ```
 
 Optional system and Python extras:
@@ -26,9 +26,23 @@ Optional system and Python extras:
 | OCR of scanned PDFs | `apt install tesseract-ocr` (plus `tesseract-ocr-tur` etc. for other languages), or `brew install tesseract` |
 | `--render` | `.venv/bin/pip install -e .[render]`, then `playwright install chromium` |
 
+### Upgrading a clone made before the rename from archiver
+
+The package and command are now `osiris`, so a clone that ran `archiver` needs a new venv once. `data/` works as it is. Pulling from the old GitHub URL still works, since GitHub redirects it.
+
+```sh
+mv archiver osiris && cd osiris   # optional; a venv can't be moved, and is rebuilt below anyway
+git remote set-url origin https://github.com/barancimen/osiris.git
+git pull
+rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -e .   # add [render] if you use it
+mv ~/.config/archiver ~/.config/osiris   # if you keep a GitHub token there; the old place still works
+```
+
+Playwright's browser lives in `~/.cache`, so `playwright install chromium` isn't needed again. The web interface sets a new cookie, so open the address `osiris ui` prints.
+
 ## Web interface
 
-`archiver ui` opens one page with three tabs. Choices are saved in `data/ui.json`, and a job keeps running if you close or reload the page.
+`osiris ui` opens one page with three tabs. Choices are saved in `data/ui.json`, and a job keeps running if you close or reload the page.
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing progress and a live log. **Stop** saves progress, and starting again resumes.
 - **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
@@ -45,7 +59,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 **Things to know:**
 
 - **Access:** every request needs the token in the printed address, stored in `data/ui-token`. Don't share that address, since the page can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
-- **One job at a time:** don't run `archiver run` in a terminal while the page is running a job.
+- **One job at a time:** don't run `osiris run` in a terminal while the page is running a job.
 - **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
 - **twitterapi.io:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you turn on the billed option under Advanced. Tweets still come from Scry.
 - **Older imports:** pages imported before this version only recorded a file name, so they have no Original view.
@@ -77,14 +91,14 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 
 If your indexer reads `data/md` directly, `data/audit-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
 
-From the command line: `archiver audit scan`, then `archiver audit apply`, which also prints the lanes to run for documents queued to fetch again.
+From the command line: `osiris audit scan`, then `osiris audit apply`, which also prints the lanes to run for documents queued to fetch again.
 
 ## Your originals
 
-Nothing in archiver deletes, moves or changes your local files, tab backups or saved pages. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
+Nothing in osiris deletes, moves or changes your local files, tab backups or saved pages. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
 
-- **Guard:** every archiver process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`archiver/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium only reads.
-- **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `archiver export -o` won't overwrite anything but an earlier export.
+- **Guard:** every osiris process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`osiris/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium only reads.
+- **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
 - **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
 
 **What can change:** files in `data/`. **Fetch again** and **OCR it** replace a document's saved text, though never the original. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
@@ -93,15 +107,15 @@ Nothing in archiver deletes, moves or changes your local files, tab backups or s
 
 | Command | What it does |
 |---|---|
-| `archiver ui` | Opens the web interface |
-| `archiver audit {scan,apply}` | Finds probable garbage, or carries out queued fixes |
-| `archiver run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
-| `archiver import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
-| `archiver ocr` | Runs only OCR, with `--retry` and `--limit` |
-| `archiver stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
-| `archiver export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
+| `osiris ui` | Opens the web interface |
+| `osiris audit {scan,apply}` | Finds probable garbage, or carries out queued fixes |
+| `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
+| `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
+| `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
+| `osiris stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
+| `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
 
-Common `archiver run` options:
+Common `osiris run` options:
 
 | Option | Effect |
 |---|---|
@@ -116,18 +130,18 @@ Common `archiver run` options:
 | `--no-impersonate`, `--no-doi`, `--no-wayback` | Skip a fallback pass |
 | `--workers N`, `--worker-mem-mb N` | Extraction and OCR processes, and the memory cap for each |
 
-`archiver run --help` lists the rest.
+`osiris run --help` lists the rest.
 
 ## Adding more to the archive
 
-`archiver run` only queues URLs whose dedup key isn't already in the manifest, so it's safe to repeat. The key comes from `archiver/dedup.py`, which `extract_urls.py` shares. It removes tracking parameters and treats `twitter.com` as `x.com`, `www.`, `m.` and `old.` hosts as the same site, and arXiv abs, pdf and html links as one paper.
+`osiris run` only queues URLs whose dedup key isn't already in the manifest, so it's safe to repeat. The key comes from `osiris/dedup.py`, which `extract_urls.py` shares. It removes tracking parameters and treats `twitter.com` as `x.com`, `www.`, `m.` and `old.` hosts as the same site, and arXiv abs, pdf and html links as one paper.
 
 To archive tab backups and a folder of local files in one run:
 
 ```sh
 python3 extract_urls.py --input-dir ~/tab_backups
 find ~/local_files -type f -print0 | python3 -c 'import sys,pathlib; [print(pathlib.Path(p).resolve().as_uri()) for p in sys.stdin.read().split("\0") if p]' >> all_urls.md
-.venv/bin/archiver run
+.venv/bin/osiris run
 ```
 
 `extract_urls.py` rewrites `all_urls.md` each time, so run it first. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`.
@@ -143,7 +157,7 @@ All are optional.
 | Variable | Used for | If unset |
 |---|---|---|
 | `SCRY_API_KEY` (or `~/.config/scry/env`, `~/.scry/.env`) | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives | Those sources are skipped |
-| `GITHUB_TOKEN` (or `~/.config/archiver/env`) | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos. Keep the file private | GitHub URLs stay pending |
+| `GITHUB_TOKEN` (or `~/.config/osiris/env`) | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos. Keep the file private | GitHub URLs stay pending |
 | `TWITTERAPI_IO_KEY` | Tweets Scry lacks, from twitterapi.io, billed per tweet | They're marked `not_in_scry` |
 | `STACKEXCHANGE_KEY` | 10,000 Stack Exchange API calls a day instead of 300 | The lower quota applies |
 | `OPENALEX_API_KEY` | Your own OpenAlex budget | The shared per-IP budget applies |
@@ -173,7 +187,7 @@ All links into one GitHub repo share one document, so a link to a file or issue 
 Threads archived before comments were collected gain them with this command, which updates each thread once:
 
 ```sh
-.venv/bin/archiver run --only stackexchange --refetch-stackexchange
+.venv/bin/osiris run --only stackexchange --refetch-stackexchange
 ```
 
 Without `STACKEXCHANGE_KEY` the API allows 300 calls a day. If that runs out, the same command carries on the next day. A question deleted since it was archived keeps its document.
@@ -230,7 +244,7 @@ These run over what's still failed or thin, cheapest first. Each keeps a result 
 This helps with Scholar, Medium and other logged-in or bot-walled sites:
 
 ```sh
-.venv/bin/archiver run --cookies ~/cookies.txt --user-agent "<your browser's UA>" --render
+.venv/bin/osiris run --cookies ~/cookies.txt --user-agent "<your browser's UA>" --render
 ```
 
 - `--cookies FILE` takes a Netscape `cookies.txt` or a JSON cookie export. Each cookie is sent only to its own site, including across redirects.
@@ -245,7 +259,7 @@ Only the first 400 pages of any PDF are read.
 
 ### OCR
 
-`archiver run` reads PDFs with no usable text with [tesseract](https://github.com/tesseract-ocr/tesseract), both web and local. It starts once the generic and local-file lanes finish, so a long scan holds up nothing, and it doesn't wait for YouTube.
+`osiris run` reads PDFs with no usable text with [tesseract](https://github.com/tesseract-ocr/tesseract), both web and local. It starts once the generic and local-file lanes finish, so a long scan holds up nothing, and it doesn't wait for YouTube.
 
 - **Scope:** it covers only the lanes in that run. `--only localfile` leaves web PDFs alone, and `--only youtube` does no OCR.
 - **Earlier PDFs:** it also works through PDFs left from earlier runs, so the first run after installing tesseract can take a while.
@@ -256,14 +270,14 @@ Only the first 400 pages of any PDF are read.
 - **Missing tesseract:** if tesseract or a language pack is missing, the run logs a warning and carries on, and those PDFs wait without using up their try.
 - **Limitation:** a PDF with a few readable pages and many scanned ones counts as having text, so it isn't picked up.
 
-`archiver ocr` runs OCR on its own. It takes `--lang`, `--workers`, `--limit`, and `--retry` to try PDFs again, for example in another language.
+`osiris ocr` runs OCR on its own. It takes `--lang`, `--workers`, `--limit`, and `--retry` to try PDFs again, for example in another language.
 
 ### Refreshing PDFs
 
 ```sh
-.venv/bin/archiver run --refresh-pdfs web     # web PDFs only
-.venv/bin/archiver run --refresh-pdfs local   # local PDFs only
-.venv/bin/archiver run --refresh-pdfs both
+.venv/bin/osiris run --refresh-pdfs web     # web PDFs only
+.venv/bin/osiris run --refresh-pdfs local   # local PDFs only
+.venv/bin/osiris run --refresh-pdfs both
 ```
 
 This downloads or reads every PDF again, whatever its status.
@@ -283,11 +297,11 @@ This downloads or reads every PDF again, whatever its status.
 
 ## Saved pages
 
-`archiver import DIR [DIR|FILE ...]` stores pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension like every other document. Subdirectories are searched for `.html` and `.htm` files, and the originals are left alone. These documents appear as the `singlefile` lane, with `source: singlefile`.
+`osiris import DIR [DIR|FILE ...]` stores pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension like every other document. Subdirectories are searched for `.html` and `.htm` files, and the originals are left alone. These documents appear as the `singlefile` lane, with `source: singlefile`.
 
 - **URL and date:** these come from the comment SingleFile writes at the top of the file, and the date becomes `fetched_at`. A file with no comment uses its `<link rel=canonical>`, and failing that is stored under a `file:` key.
-- **Dedup:** URLs go through the same dedup as `archiver run`, and imported URLs are never queued for fetching. A saved copy replaces a failed or pending entry, and replaces an archived document only when it has more text. Complete Stack Exchange and Reddit documents are always kept.
-- **Skipped sites:** URLs `archiver run` skips on purpose, such as GitHub, chat apps and X profiles, are stored, since you saved them deliberately.
+- **Dedup:** URLs go through the same dedup as `osiris run`, and imported URLs are never queued for fetching. A saved copy replaces a failed or pending entry, and replaces an archived document only when it has more text. Complete Stack Exchange and Reddit documents are always kept.
+- **Skipped sites:** URLs `osiris run` skips on purpose, such as GitHub, chat apps and X profiles, are stored, since you saved them deliberately.
 - **Re-running:** files are tracked by content hash, so only new or changed files are read. Files that failed are tried again.
 - **Cleaning:** inlined CSS, scripts and images are cut before parsing, as are elements SingleFile marked hidden. Saved shadow DOM is kept.
 - **X pages:** these are read from X's own tweet markup, so a saved conversation keeps every tweet with its author and date, and any X Article.
@@ -301,7 +315,7 @@ Everything goes in `data/`.
 |---|---|
 | `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source) and the markdown body |
-| `corpus.jsonl` | Written by `archiver export` |
+| `corpus.jsonl` | Written by `osiris export` |
 | `audit.sqlite` | Garbage scores and your review decisions |
 | `audit-exclude.txt` | Paths of documents marked Bad or Can't fix |
 | `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |

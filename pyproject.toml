@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "archiver"
+name = "osiris"
 version = "0.1.0"
 description = "Archive a URL list as clean markdown for lexical/semantic indexing"
 requires-python = ">=3.10"
@@ -29,10 +29,10 @@ dependencies = [
 render = ["playwright>=1.49"]
 
 [project.scripts]
-archiver = "archiver.__main__:main"
+osiris = "osiris.__main__:main"
 
 [tool.setuptools]
-packages = ["archiver"]
+packages = ["osiris"]
 
 [tool.setuptools.package-data]
-archiver = ["ui.html"]
+osiris = ["ui.html"]

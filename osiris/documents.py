@@ -156,7 +156,7 @@ def kindle_to_doc(path: str) -> dict:
 
     with _limits():
         try:
-            with tempfile.TemporaryDirectory(prefix="archiver-kindle-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="osiris-kindle-") as tmp:
                 with contextlib.redirect_stdout(io.StringIO()):  # it narrates every step
                     unpackBook(path, tmp, epubver="A")
                 epubs = glob.glob(os.path.join(glob.escape(tmp), "mobi8", "*.epub"))

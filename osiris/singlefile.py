@@ -1,10 +1,10 @@
-"""`archiver import`: pages you saved yourself with the SingleFile browser extension, stored
+"""`osiris import`: pages you saved yourself with the SingleFile browser extension, stored
 as markdown like every other document.
 
 SingleFile records where a page came from in a comment at the top of the file. That URL goes
-through the same dedup as `archiver run`: a page already in the manifest is upgraded when the
+through the same dedup as `osiris run`: a page already in the manifest is upgraded when the
 saved copy has more text, and a URL imported here is never queued for fetching afterwards.
-Saved pages are often logged-in or paywalled ones no fetcher can reach, so URLs that `archiver
+Saved pages are often logged-in or paywalled ones no fetcher can reach, so URLs that `osiris
 run` skips on purpose (chat apps, GitHub, X profiles) are stored too.
 
 The files are mostly inlined CSS and images (a 20 MB page can hold 100 KB of text), which are

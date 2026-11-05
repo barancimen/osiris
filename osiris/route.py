@@ -38,7 +38,7 @@ GITHUB_RESERVED = {"about", "account", "apps", "codespaces", "collections", "con
                    "orgs", "organizations", "pricing", "pulls", "search", "security", "sessions", "settings", "signup",
                    "site", "sponsors", "stars", "team", "topics", "trending", "users", "watching"}
 
-# local files the archiver can read; anything else (images, /etc/hostname, ...) stays out
+# local files osiris can read; anything else (images, /etc/hostname, ...) stays out
 LOCAL_READABLE = {"pdf", "html", "htm", "xhtml", "txt", "md", "markdown", "rst", "tex", "org",
                   "docx", "epub", "mobi", "azw", "azw3"}
 

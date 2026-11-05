@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 POST_ID_RE = re.compile(r"^[a-z0-9]{1,12}$")
 DELETED = {"[deleted]", "[removed]", ""}
-UA = "personal-archiver/0.1 (one-off archive of saved Reddit threads)"
+UA = "osiris/0.1 (one-off archive of saved Reddit threads)"
 
 
 @dataclass

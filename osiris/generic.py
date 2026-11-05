@@ -3,8 +3,8 @@
 Pass 1 uses aiohttp. Then fallback passes over what it couldn't get, cheapest first, each
 keeping a result only when it beats what came before:
 - impersonate: blocked/thin pages again with curl_cffi's Chrome TLS fingerprint
-- render (--render): blocked/thin pages in headless Chromium (archiver/render.py)
-- doi: title/authors/abstract for paper links, via OpenAlex (archiver/doi.py)
+- render (--render): blocked/thin pages in headless Chromium (osiris/render.py)
+- doi: title/authors/abstract for paper links, via OpenAlex (osiris/doi.py)
 - wayback: the newest 200 capture in the Wayback Machine for anything still failed or thin
 Each URL gets each fallback pass once (manifest column `tried`); --retry-failed resets that.
 """
@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
-BOT_UA = "personal-archiver/0.1 (https://github.com/barancimen/archiver; one-off text archive of saved browser tabs)"
+BOT_UA = "osiris/0.1 (https://github.com/barancimen/osiris; one-off text archive of saved browser tabs)"
 # Wikimedia wants automated clients to send a descriptive User-Agent with contact details: a
 # browser UA, or one without a URL or email, gets 403 "Please respect our robot policy"
 WIKIMEDIA = (

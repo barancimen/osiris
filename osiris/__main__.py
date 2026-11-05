@@ -1,4 +1,4 @@
-"""CLI: archiver ui | run URLFILE | import PATH | ocr | audit | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | stats | export"""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from .store import Store
 from .twitter import run_twitter
 from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, run_youtube
 
-log = logging.getLogger("archiver")
+log = logging.getLogger("osiris")
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
@@ -401,7 +401,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="archiver", description=__doc__)
+    parser = argparse.ArgumentParser(prog="osiris", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     run = sub.add_parser("run", help="fetch and extract every pending URL (resumable)")
@@ -425,7 +425,7 @@ def main() -> None:
                           "deleted since keeps its document")
     run.add_argument("--no-ocr", action="store_true",
                      help="don't read PDFs with no text layer with tesseract once the generic and local-file lanes "
-                          "are done; they wait for a later run or `archiver ocr`")
+                          "are done; they wait for a later run or `osiris ocr`")
     run.add_argument("--ocr-lang", default=OCR_LANG,
                      help=f"tesseract languages for those PDFs, e.g. eng+tur (default {OCR_LANG})")
     run.add_argument("--refresh-pdfs", choices=REFRESH_LANES,

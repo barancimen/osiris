@@ -29,13 +29,13 @@ CREATE TABLE IF NOT EXISTS urls (
     chars        INTEGER,
     attempts     INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT,
-    dedup_key    TEXT,  -- archiver.dedup.dedup_key of the URL as it appeared in the input
+    dedup_key    TEXT,  -- osiris.dedup.dedup_key of the URL as it appeared in the input
     raw_path     TEXT,  -- relative to the output dir, only with --keep-raw
     tried        TEXT NOT NULL DEFAULT ''  -- fallback passes already run on it, e.g. ",impersonate,wayback"
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
 CREATE INDEX IF NOT EXISTS urls_doc_key ON urls(doc_key);
-CREATE TABLE IF NOT EXISTS imported_files (  -- saved pages `archiver import` has handled, by content
+CREATE TABLE IF NOT EXISTS imported_files (  -- saved pages `osiris import` has handled, by content
     sha1        TEXT PRIMARY KEY,
     name        TEXT,
     url         TEXT,
@@ -48,7 +48,7 @@ MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
 DONE = ("ok", "thin")
-TMP_DIR = ".archiver-tmp"
+TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
 
 
@@ -62,6 +62,9 @@ class Store:
         self.md_dir = self.out / "md"
         self.tmp_dir = self.out / TMP_DIR  # its own name: --out may be a folder with a tmp/ of yours
         self.md_dir.mkdir(parents=True, exist_ok=True)
+        legacy = self.out / ".archiver-tmp"  # its name before the rename from archiver
+        if legacy.is_dir() and not self.tmp_dir.exists():
+            legacy.rename(self.tmp_dir)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.out / "manifest.sqlite")
         self.db.execute("PRAGMA journal_mode=WAL")

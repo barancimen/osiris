@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOTS_ENV = "ARCHIVER_WRITE_ROOTS"
+ROOTS_ENV = "OSIRIS_WRITE_ROOTS"
 WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 # event -> which arguments are paths whose target gets changed
 EVENTS = {"os.remove": (0,), "os.rename": (0, 1), "os.rmdir": (0,), "os.truncate": (0,), "os.link": (1,),
@@ -54,7 +54,7 @@ def allowed(location: str) -> bool:
 
 
 def _refuse(action: str, location: str) -> None:
-    message = f"archiver refused to {action} {location}: it's outside the folders archiver writes to"
+    message = f"osiris refused to {action} {location}: it's outside the folders osiris writes to"
     print(message, file=sys.stderr)
     raise PermissionError(message)
 
