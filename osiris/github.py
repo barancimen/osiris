@@ -38,12 +38,8 @@ HTML_NOISE_RE = re.compile(r"<!--.*?-->|</?(?:a|img|picture|source|p|div|span|br
 def load_token() -> str | None:
     if os.environ.get(TOKEN_ENV):
         return os.environ[TOKEN_ENV]
-    config = Path.home() / ".config"
-    env = config / "osiris" / "env"
-    if not env.exists():
-        env = config / "archiver" / "env"  # where it lived before the rename from archiver
     try:
-        lines = env.read_text().splitlines()
+        lines = (Path.home() / ".config" / "osiris" / "env").read_text().splitlines()
     except OSError:
         return None
     for line in lines:

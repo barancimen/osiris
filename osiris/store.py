@@ -62,9 +62,6 @@ class Store:
         self.md_dir = self.out / "md"
         self.tmp_dir = self.out / TMP_DIR  # its own name: --out may be a folder with a tmp/ of yours
         self.md_dir.mkdir(parents=True, exist_ok=True)
-        legacy = self.out / ".archiver-tmp"  # its name before the rename from archiver
-        if legacy.is_dir() and not self.tmp_dir.exists():
-            legacy.rename(self.tmp_dir)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.out / "manifest.sqlite")
         self.db.execute("PRAGMA journal_mode=WAL")
