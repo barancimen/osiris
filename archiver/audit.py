@@ -31,6 +31,7 @@ OUTSIDE_LIST = ("fine", "unfixable")
 EXCLUDED = ("bad", "unfixable")  # left out of `archiver export` and audit-exclude.txt
 DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
 EXCLUDE_FILE = "audit-exclude.txt"
+CANNOT_REFETCH = "singlefile"
 
 # The most frequent words of the languages expected here. Ordinary prose is around 40% these; text
 # from a broken PDF font map is close to none.
@@ -302,12 +303,18 @@ def pending_fixes(db: sqlite3.Connection) -> tuple[list[str], list[tuple[str, st
 def apply_refetch(store: Store, db: sqlite3.Connection) -> list[str]:
     """Queue documents for fetching again. Returns the lanes that now have work to do."""
     _, refetch = pending_fixes(db)
-    for key, _ in refetch:
+    lanes = set()
+    for key, lane in refetch:
+        if lane == CANNOT_REFETCH:  # no source to go back to, so queueing it would only strand it
+            db.execute("UPDATE decisions SET decision = 'bad', note = 'A saved page can only be imported again'"
+                       " WHERE doc_id = ?", (doc_id(key),))
+            continue
         store.db.execute("UPDATE urls SET status = 'pending', tried = '' WHERE doc_key = ?", (key,))
         db.execute("UPDATE decisions SET applied_at = ? WHERE doc_id = ?", (now_iso(), doc_id(key)))
+        lanes.add(lane)
     store.commit()
     db.commit()
-    return sorted({lane for _, lane in refetch})
+    return sorted(lanes)
 
 
 def mark_ocr_applied(db: sqlite3.Connection, keys: list[str]) -> None:

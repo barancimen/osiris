@@ -9,6 +9,7 @@ import resource
 import signal
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from . import safety
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def _on_alarm(signum, frame):
 
 
 def init_worker(mem_mb: int = 0) -> None:
+    safety.install_from_env()
     # the parent handles Ctrl-C and shuts the pool down
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     if mem_mb:

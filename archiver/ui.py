@@ -30,7 +30,7 @@ from .github import load_token
 from .localfile import candidate_paths
 from .route import LOCAL_READABLE
 from .scry import load_key
-from .store import Store
+from .store import TMP_DIR, Store
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).with_name("ui.html")
@@ -401,7 +401,7 @@ async def start_archive(request: web.Request) -> web.Response:
         with open(url_file, "w", encoding="utf-8"):
             pass
         for folder in config["backups"]:
-            part = out / "tmp" / "ui_extract.txt"
+            part = out / TMP_DIR / "ui_extract.txt"
             await j.run(f"Extracting URLs from {folder}",
                         [sys.executable, str(REPO_DIR / "extract_urls.py"), "--input-dir",
                          str(Path(folder).expanduser()), "--output", str(part)])

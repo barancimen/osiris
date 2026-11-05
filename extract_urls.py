@@ -58,6 +58,22 @@ def extract_session_buddy(path):
 INPUT_DIR = os.path.normpath(os.path.join(REPO_DIR, '..', 'tab-backups'))
 OUTPUT = os.path.join(REPO_DIR, 'all_urls.md')  # default input of `archiver run`
 
+def refuse_to_overwrite(path, input_dir):
+    """This rewrites its output, so that must never be one of your files: not in the backup folder,
+    and if something's already there, only an earlier list of URLs."""
+    if os.path.realpath(os.path.dirname(path) or '.') == os.path.realpath(input_dir):
+        sys.exit(f'{path} is in the backup folder {input_dir}: choose another output path')
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = [line for line in f if line.strip()]
+    except (OSError, ValueError):
+        lines = ['not a list']
+    # Lists are one URL per line, with anything else ignored by `archiver run`.
+    if not all(re.match(r'[a-z][a-z0-9+.-]*:', line.strip(), re.I) for line in lines):
+        sys.exit(f"{path} exists and isn't a list of URLs, so it won't be overwritten. Choose another path.")
+
 def main():
     ap = argparse.ArgumentParser(description='Collect unique saved URLs from bookmark and Session Buddy backups.')
     ap.add_argument('--input-dir', default=INPUT_DIR, help=f'backup directory (default: {INPUT_DIR})')
@@ -65,6 +81,7 @@ def main():
     args = ap.parse_args()
 
     d = args.input_dir
+    refuse_to_overwrite(args.output, d)
     files = []
     files += sorted(glob.glob(os.path.join(d, 'bookmarks_*.html')))
     files += sorted(glob.glob(os.path.join(d, 'session-buddy-*.json')))

@@ -79,6 +79,16 @@ If your indexer reads `data/md` directly, `data/audit-exclude.txt` lists the pat
 
 From the command line: `archiver audit scan`, then `archiver audit apply`, which also prints the lanes to run for documents queued to fetch again.
 
+## Your originals
+
+Nothing in archiver deletes, moves or changes your local files, tab backups or saved pages. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
+
+- **Guard:** every archiver process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`archiver/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium only reads.
+- **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `archiver export -o` won't overwrite anything but an earlier export.
+- **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
+
+**What can change:** files in `data/`. **Fetch again** and **OCR it** replace a document's saved text, though never the original. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
+
 ## Commands
 
 | Command | What it does |

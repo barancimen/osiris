@@ -501,9 +501,9 @@ const Review = {
     if (self.items[self.at]?.id !== it.id) return;
     self.doc = d;
     const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
-    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? "Only available for PDFs" : "", onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
+    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only available for PDFs" : "Saved pages can only be imported again") : "", onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
     const actions = h("div", {class: "decide-row"},
-      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"), btn("o", "OCR it", "ocr", !d.pdf), btn("r", "Fetch again", "refetch"), btn("x", "Can't fix", "unfixable"),
+      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"), btn("o", "OCR it", "ocr", !d.pdf), btn("r", "Fetch again", "refetch", d.lane === "singlefile"), btn("x", "Can't fix", "unfixable"),
       d.decision && h("button", {class: "btn", onclick: guarded(() => self.decide(null))}, "Undo", h("kbd", {}, "u")),
       note);
     renderDetail($("#review-detail"), d, {actions});
@@ -590,7 +590,8 @@ document.addEventListener("keydown", e => {
   const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];
   if (go) { e.preventDefault(); const n = Review.at + go; if (n >= 0 && n < Review.items.length) Review.open(n); return; }
   const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
-  if (decision && !(decision === "ocr" && !Review.doc?.pdf)) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }
+  const blocked = (decision === "ocr" && !Review.doc?.pdf) || (decision === "refetch" && Review.doc?.lane === "singlefile");
+  if (decision && !blocked) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }
   if (e.key === "u" && Review.doc?.decision) { e.preventDefault(); guarded(() => Review.decide(null))(); }
   if (e.key === "n") { e.preventDefault(); $("#review-note")?.focus(); }
 });

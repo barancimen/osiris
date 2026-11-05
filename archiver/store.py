@@ -48,6 +48,7 @@ MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
 DONE = ("ok", "thin")
+TMP_DIR = ".archiver-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
 
 
@@ -59,7 +60,7 @@ class Store:
     def __init__(self, out_dir: str | os.PathLike):
         self.out = Path(out_dir)
         self.md_dir = self.out / "md"
-        self.tmp_dir = self.out / "tmp"
+        self.tmp_dir = self.out / TMP_DIR  # its own name: --out may be a folder with a tmp/ of yours
         self.md_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.out / "manifest.sqlite")

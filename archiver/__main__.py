@@ -7,13 +7,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import audit, cookies, extract
+from . import audit, cookies, extract, safety
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
@@ -37,6 +38,7 @@ DEFAULT_OUT = REPO_DIR / "data"
 LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
+TEMP_DOWNLOAD = re.compile(r"[0-9a-f]{32}\.pdf")
 REFRESH_LANES = {"web": ("generic",), "local": ("localfile",), "both": ("generic", "localfile")}
 
 
@@ -158,9 +160,21 @@ def host_rules(specs: list[str]) -> tuple[HostRule, ...]:
     return (*rules, *(r for r in DEFAULT_HOST_RULES if r.pattern not in given))
 
 
+def refuse_real_chrome_profile(path: str) -> None:
+    """Chrome rewrites the profile it runs on, and this guard can't see other programs."""
+    home = Path.home()
+    real = (home / ".config/google-chrome", home / ".config/chromium", home / ".config/BraveSoftware",
+            home / "Library/Application Support/Google/Chrome", home / "AppData/Local/Google/Chrome")
+    given = Path(path).expanduser().resolve()
+    if any(given == r or r in given.parents for r in real):
+        sys.exit(f"--chrome-profile needs a copy of your profile, not your real one: {given}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     import uvloop
 
+    if args.chrome_profile:
+        refuse_real_chrome_profile(args.chrome_profile)
     lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
     refresh_lanes = [lane for lane in REFRESH_LANES.get(args.refresh_pdfs, ()) if lane in lanes]
     if args.refresh_pdfs and not refresh_lanes:
@@ -169,7 +183,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     store = Store(args.out)
     for stale in store.tmp_dir.glob("*.pdf"):
-        stale.unlink()
+        if TEMP_DOWNLOAD.fullmatch(stale.name):
+            stale.unlink()
 
     routes = []
     with open(args.urlfile, encoding="utf-8", errors="replace") as f:
@@ -336,9 +351,24 @@ def cmd_stats(args: argparse.Namespace) -> None:
     store.close()
 
 
+def refuse_to_overwrite(path: Path) -> None:
+    """Replacing an earlier export is fine. Anything else at that path may be yours."""
+    if not path.exists():
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            first = f.readline()
+        ours = path.is_file() and (not first or "text" in json.loads(first))
+    except (OSError, ValueError, TypeError):
+        ours = False
+    if not ours:
+        sys.exit(f"{path} already exists and isn't an earlier export, so it won't be overwritten. Choose another path.")
+
+
 def cmd_export(args: argparse.Namespace) -> None:
     store = Store(args.out)
     out = Path(args.output) if args.output else store.out / "corpus.jsonl"
+    refuse_to_overwrite(out)
     tmp = out.with_suffix(out.suffix + ".tmp")
     n = left_out = 0
     excluded = audit.excluded(store.out)
@@ -472,6 +502,8 @@ def main() -> None:
     export.set_defaults(func=cmd_export)
 
     args = parser.parse_args()
+    # everything below may run third-party parsers on your files
+    safety.install(args.out, *([Path(args.output).resolve().parent] if getattr(args, "output", None) else []))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S",
                         stream=sys.stderr)
     args.func(args)
