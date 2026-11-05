@@ -33,3 +33,6 @@ archiver = "archiver.__main__:main"
 
 [tool.setuptools]
 packages = ["archiver"]
+
+[tool.setuptools.package-data]
+archiver = ["ui.html"]

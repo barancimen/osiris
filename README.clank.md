@@ -7,7 +7,12 @@ Archives saved URLs and local files as clean markdown for lexical and semantic i
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -e .
+.venv/bin/archiver ui
+```
 
+This opens the [web interface](#web-interface), which covers the whole process. The same work from the command line:
+
+```sh
 python3 extract_urls.py    # ../tab-backups -> all_urls.md
 .venv/bin/archiver run     # all_urls.md -> data/ (resumable, Ctrl-C safe)
 .venv/bin/archiver stats --failed --thin
@@ -21,15 +26,70 @@ Optional system and Python extras:
 | OCR of scanned PDFs | `apt install tesseract-ocr` (plus `tesseract-ocr-tur` etc. for other languages), or `brew install tesseract` |
 | `--render` | `.venv/bin/pip install -e .[render]`, then `playwright install chromium` |
 
+## Web interface
+
+`archiver ui` opens one page with three tabs. Choices are saved in `data/ui.json`, and a job keeps running if you close or reload the page.
+
+- **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing progress and a live log. **Stop** saves progress, and starting again resumes.
+- **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
+- **Documents:** search titles, URLs or the text inside documents, filter by source and status, and see why something failed. Each document shows its saved text and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw` copy. Web documents link to the live page.
+
+**Keyboard in Review:** `j`/`k` move, `f` fine, `b` bad, `o` OCR it, `r` fetch again, `x` can't fix, `u` undo, `n` write a note.
+
+**Over ssh:** the page only listens on this machine, so forward the port from your own machine, then open the printed address:
+
+```sh
+ssh -N -L 8321:127.0.0.1:8321 <server>
+```
+
+**Things to know:**
+
+- **Access:** every request needs the token in the printed address, stored in `data/ui-token`. Don't share that address, since the page can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
+- **One job at a time:** don't run `archiver run` in a terminal while the page is running a job.
+- **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
+- **twitterapi.io:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you turn on the billed option under Advanced. Tweets still come from Scry.
+- **Older imports:** pages imported before this version only recorded a file name, so they have no Original view.
+- **Quitting:** Ctrl-C in the terminal stops the page and any running job, with progress saved.
+
+## Finding garbage
+
+**Check for garbage** scores every document from cheap text signals, then lists anything scoring 0.35 or higher, worst first. Unchanged documents aren't scored again. It's a ranking for you to read, not a verdict, so expect some false alarms, such as tables, code and languages other than English and Turkish.
+
+| Signal | What it catches |
+|---|---|
+| `encoding` | `�`, `Ã`, `â€`, `(cid:12)` and control characters: wrong encoding and failed PDF extraction |
+| `few common words` | Text from broken PDF font maps, random characters |
+| `odd words` | Words with no vowels or with digits inside, usually from bad OCR |
+| `symbols` | Leftover code or markup |
+| `no spaces` | PDFs that lost their word spacing |
+| `repeated lines` | Repeating headers and navigation |
+| `block page` | Short pages saying "enable JavaScript", "unusual traffic", "access denied" and the like |
+
+| Decision | What happens |
+|---|---|
+| **Fine** | Stays off the list unless its text changes |
+| **Bad** | Left out of `export` and listed in `data/audit-exclude.txt`. It stays under **Bad** until you decide otherwise |
+| **OCR it** | PDFs only. Reads the PDF with OCR, and replaces the text if the new text scores better, even if it's shorter |
+| **Fetch again** | Fetches or reads it from scratch, replacing what's there. If that fails, the document is no longer exported |
+| **Can't fix** | Like Bad, but no longer counted as something to come back to |
+
+**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that changed nothing comes back as Bad, with a note saying so.
+
+If your indexer reads `data/md` directly, `data/audit-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
+
+From the command line: `archiver audit scan`, then `archiver audit apply`, which also prints the lanes to run for documents queued to fetch again.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `archiver ui` | Opens the web interface |
+| `archiver audit {scan,apply}` | Finds probable garbage, or carries out queued fixes |
 | `archiver run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `archiver import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
 | `archiver ocr` | Runs only OCR, with `--retry` and `--limit` |
 | `archiver stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
-| `archiver export` | Writes `data/corpus.jsonl` |
+| `archiver export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
 
 Common `archiver run` options:
 
@@ -232,6 +292,9 @@ Everything goes in `data/`.
 | `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source) and the markdown body |
 | `corpus.jsonl` | Written by `archiver export` |
+| `audit.sqlite` | Garbage scores and your review decisions |
+| `audit-exclude.txt` | Paths of documents marked Bad or Can't fix |
+| `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw`. Budget about 1–1.5 GB for 20,000 pages, plus about 2 MB per PDF |
 
 | Status | Meaning |

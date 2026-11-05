@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archiver</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2; --panel: #ffffff; --sunk: #efede8; --line: #dedbd3; --line-strong: #c6c2b8;
+  --text: #22211e; --muted: #6c695f; --accent: #2b5fa8; --accent-text: #ffffff; --accent-soft: #e3ebf6;
+  --good: #2c7a4b; --good-soft: #e1f1e7; --warn: #99610c; --warn-soft: #f8ecd6; --bad: #b3362b; --bad-soft: #f8e3e0;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a; --panel: #212125; --sunk: #1b1b1e; --line: #33333a; --line-strong: #484850;
+    --text: #e9e7e2; --muted: #a09d94; --accent: #79a6e6; --accent-text: #10151c; --accent-soft: #24303f;
+    --good: #6cc592; --good-soft: #1d3026; --warn: #e0ad5c; --warn-soft: #362b18; --bad: #ee8176; --bad-soft: #3b2220;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+h1, h2, h3, p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+header { display: flex; align-items: center; gap: 20px; padding: 0 16px; height: 48px; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+nav { display: flex; gap: 2px; height: 100%; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 0 12px; cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+nav button:hover { color: var(--text); }
+nav button[aria-selected=true] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.count { background: var(--sunk); border-radius: 9px; padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+#jobline { margin-left: auto; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+main { flex: 1; min-height: 0; overflow: hidden; }
+.tab { height: 100%; display: none; }
+.tab.on { display: flex; }
+
+/* archive tab */
+#archive { overflow-y: auto; justify-content: center; }
+.column { width: 100%; max-width: 900px; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.card > h2 { font-size: 13px; font-weight: 650; margin-bottom: 10px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
+.stat b { display: block; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.stat span { color: var(--muted); font-size: 12.5px; }
+.source { padding: 10px 0; border-top: 1px solid var(--line); }
+.source:first-of-type { border-top: 0; padding-top: 0; }
+.source-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.source-head h3 { font-size: 13.5px; font-weight: 600; }
+.source-head p { color: var(--muted); font-size: 12.5px; }
+.folder { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 5px 0 0; font-size: 13px; }
+.folder code { font: 12.5px var(--mono); overflow-wrap: anywhere; }
+.folder .note { color: var(--muted); font-size: 12.5px; order: 3; flex-basis: 100%; }
+.folder .btn.link { margin-left: auto; }
+.folder .note.bad { color: var(--bad); }
+.btn { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; color: var(--text); }
+.btn:hover:not(:disabled) { background: var(--sunk); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; padding: 7px 16px; }
+.btn.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.btn.link { background: none; border: 0; color: var(--muted); padding: 0 4px; text-decoration: underline; }
+.btn kbd { font: 11px var(--mono); color: var(--muted); margin-left: 4px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 20px; }
+label.opt { display: flex; align-items: center; gap: 7px; }
+label.opt input[type=text], label.opt input[type=number], label.opt select { flex: 1; min-width: 0; }
+input[type=text], input[type=number], input[type=search], select { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 14px; padding: 2px 10px 2px 7px; cursor: pointer; font-size: 13px; }
+.chip:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+.chip input { margin: 0; }
+details summary { cursor: pointer; color: var(--muted); margin-top: 12px; font-size: 13px; }
+details .opts { margin-top: 10px; }
+.hint { color: var(--muted); font-size: 12.5px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th { text-align: right; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 2px 0 6px 12px; }
+td { text-align: right; padding: 3px 0 3px 12px; border-top: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; padding-left: 0; }
+td.zero { color: var(--line-strong); }
+#log { background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 var(--mono); padding: 8px 10px; height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pill { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
+.pill.good { background: var(--good-soft); color: var(--good); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.accent { background: var(--accent-soft); color: var(--accent); }
+
+/* two-pane tabs */
+.list-pane { width: 40%; min-width: 300px; max-width: 520px; border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--panel); min-height: 0; }
+.list-tools { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; flex: none; }
+.segments { display: flex; flex-wrap: wrap; gap: 4px; }
+.segments button { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 8px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.segments button:hover { background: var(--sunk); }
+.segments button[aria-pressed=true] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.tool-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tool-row select, .tool-row input { min-width: 0; flex: 1; }
+.rows { flex: 1; overflow-y: auto; min-height: 0; }
+.row { display: block; width: 100%; background: none; text-align: left; border: 0; border-bottom: 1px solid var(--line); padding: 8px 12px; cursor: pointer; }
+.row:hover { background: var(--sunk); }
+.row[aria-current=true] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.row .title { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .sub { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.row .sub span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .sub .right { margin-left: auto; flex: none; }
+.row .snippet { color: var(--muted); font-size: 12.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.scorebar { width: 42px; height: 5px; border-radius: 3px; background: var(--sunk); overflow: hidden; flex: none; }
+.scorebar i { display: block; height: 100%; background: var(--bad); }
+.more { padding: 10px; text-align: center; }
+.detail { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.empty { margin: auto; color: var(--muted); text-align: center; padding: 24px; max-width: 420px; }
+.empty h3 { color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.empty .btn { margin-top: 12px; }
+.detail-head { padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex: none; display: flex; flex-direction: column; gap: 6px; }
+.detail-head h2 { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 5px 8px; align-items: center; color: var(--muted); font-size: 12.5px; }
+.meta a { color: var(--accent); overflow-wrap: anywhere; }
+.decide-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.decide-row input { flex: 1; min-width: 120px; }
+.btn[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.view-switch { display: flex; gap: 4px; }
+.body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; }
+.body.mono { font: 12.5px/1.55 var(--mono); }
+.frame { flex: 1; border: 0; width: 100%; min-height: 0; background: #fff; }
+.notice { margin: 16px; padding: 10px 12px; background: var(--sunk); border-radius: 6px; color: var(--muted); }
+.notice.warn { background: var(--warn-soft); color: var(--warn); }
+.banner { padding: 7px 12px; background: var(--accent-soft); display: flex; gap: 10px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 13px; }
+
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 0; width: min(560px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgb(0 0 0 / .35); }
+.picker-head { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.picker-head h3 { font-size: 14px; }
+.picker-head input { width: 100%; font: 12.5px var(--mono); }
+.picker-list { height: 320px; overflow-y: auto; }
+.picker-list button { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 6px 14px; cursor: pointer; overflow-wrap: anywhere; }
+.picker-list button:hover { background: var(--sunk); }
+.picker-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.picker-foot .hint { flex: 1; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 6px; display: none; z-index: 10; max-width: calc(100vw - 32px); }
+@media (max-width: 760px) {
+  .tab.on.split { flex-direction: column; }
+  .list-pane { width: 100%; max-width: none; height: 45%; border-right: 0; border-bottom: 1px solid var(--line); }
+  #jobline { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Archiver</h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="archive" aria-selected="true">Archive</button>
+    <button role="tab" data-tab="review" aria-selected="false">Review <span class="count" id="review-count" hidden></span></button>
+    <button role="tab" data-tab="documents" aria-selected="false">Documents</button>
+  </nav>
+  <div id="jobline"></div>
+</header>
+<main>
+  <section class="tab on" id="archive"><div class="column" id="archive-column"></div></section>
+  <section class="tab split" id="review"></section>
+  <section class="tab split" id="documents"></section>
+</main>
+<dialog id="picker"></dialog>
+<div id="toast" role="status"></div>
+<script>
+"use strict";
+const $ = (s, root = document) => root.querySelector(s);
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "value" || k === "checked" || k === "disabled" || k === "hidden") el[k] = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid);
+  return el;
+}
+function fill(el, ...kids) { el.replaceChildren(...kids.flat().filter(k => k !== null && k !== undefined && k !== false)); }
+const fmt = n => (n ?? 0).toLocaleString("en-US");
+const shortChars = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n ?? 0);
+function toast(text) { const t = $("#toast"); t.textContent = text; t.style.display = "block"; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 3500); }
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!res.ok) { const text = await res.text(); throw new Error(text || res.statusText); }
+  return res.json();
+}
+const guarded = fn => async (...args) => { try { return await fn(...args); } catch (e) { toast(e.message); } };
+
+/* ---- tabs ---- */
+let currentTab = "archive";
+function showTab(name) {
+  currentTab = name;
+  for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === name);
+  for (const s of document.querySelectorAll(".tab")) s.classList.toggle("on", s.id === name);
+  if (name === "review") Review.load();
+  if (name === "documents") Docs.load();
+}
+for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+
+/* ---- archive tab ---- */
+const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", skip: "Skipped on purpose"};
+const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "stackexchange", "arxiv", "twitter"];
+const SOURCES = [
+  {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files. URLs are extracted for you."},
+  {key: "local", title: "Local files", text: "Folders of PDFs, ebooks, Word files and text. Your files are only read, never changed."},
+  {key: "saved", title: "Saved pages", text: "Folders of pages saved with the SingleFile browser extension."},
+];
+let config = null, lastState = null, logSeen = 0, jobKey = null;
+const scans = {};
+
+const saveConfig = guarded(async () => { config = await api("/api/config", config); });
+
+function renderArchive() {
+  const col = $("#archive-column");
+  col.replaceChildren(
+    h("div", {class: "card stats", id: "stats"}),
+    renderSources(),
+    renderOptions(),
+    h("div", {class: "card", id: "progress"},
+      h("div", {class: "status-line"}, h("h2", {id: "progress-title", style: "font-size:13px;font-weight:650"}, "Nothing running"), h("span", {id: "progress-pill"})),
+      h("div", {class: "actions", style: "margin-bottom:10px"},
+        h("button", {class: "btn primary", id: "start", onclick: guarded(() => startJob("archive"))}, "Start archiving"),
+        h("button", {class: "btn", id: "stop", onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
+        h("button", {class: "btn", id: "audit", onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
+        h("button", {class: "btn", id: "export", onclick: guarded(() => startJob("export"))}, "Export corpus"),
+      ),
+      h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
+      h("div", {id: "log", tabindex: 0, "aria-label": "Job output"})),
+    h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
+    h("p", {class: "hint", id: "keys"}),
+  );
+  for (const key of ["backups", "local", "saved"]) for (const p of config[key]) scanFolder(key, p);
+}
+
+function renderSources() {
+  return h("div", {class: "card", id: "sources"}, h("h2", {}, "1. What to archive"),
+    SOURCES.map(s => h("div", {class: "source"},
+      h("div", {class: "source-head"},
+        h("div", {}, h("h3", {}, s.title), h("p", {}, s.text)),
+        h("button", {class: "btn", onclick: () => Picker.open(s)}, "Add folder")),
+      config[s.key].map(p => h("div", {class: "folder"},
+        h("code", {}, p),
+        h("span", {class: "note", id: scanId(s.key, p)}, scans[s.key + p]?.summary ?? "Checking…"),
+        h("button", {class: "btn link", "aria-label": `Remove ${p}`, onclick: () => { config[s.key] = config[s.key].filter(x => x !== p); saveConfig(); $("#sources").replaceWith(renderSources()); }}, "Remove"))),
+    )));
+}
+const scanId = (key, path) => "scan-" + key + "-" + btoa(unescape(encodeURIComponent(path))).replace(/[^a-zA-Z0-9]/g, "");
+async function scanFolder(key, path) {
+  try {
+    const r = await api(`/api/scan?kind=${key}&path=${encodeURIComponent(path)}`);
+    scans[key + path] = r;
+    const el = document.getElementById(scanId(key, path));
+    if (el) { el.textContent = r.summary; el.classList.toggle("bad", !r.ok); }
+  } catch (e) { /* the folder row just stays as it is */ }
+}
+
+function renderOptions() {
+  const o = config.options;
+  const set = (name, value) => { o[name] = value; saveConfig(); };
+  const check = (name, label) => h("label", {class: "opt"}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => set(name, e.target.checked)}), label);
+  const text = (name, label, placeholder, type = "text") => h("label", {class: "opt"}, label, h("input", {type, value: o[name] ?? "", placeholder, onchange: e => set(name, e.target.value.trim())}));
+  return h("div", {class: "card"}, h("h2", {}, "2. How to archive it"),
+    h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip"},
+      h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => {
+        o.lanes = e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane); saveConfig();
+      }}), LANE_LABEL[lane]))),
+    h("div", {class: "opts"},
+      check("ocr", "Read scanned PDFs with OCR"),
+      text("ocr_lang", "OCR languages", "eng+tur"),
+      h("label", {class: "opt"}, "Refresh PDFs", h("select", {onchange: e => set("refresh", e.target.value)},
+        [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))),
+      check("retry_failed", "Try failed URLs again"),
+      check("audit_after", "Check for garbage afterwards"),
+    ),
+    h("details", {}, h("summary", {}, "Advanced"),
+      h("div", {class: "opts"},
+        text("cookies", "Cookies file", "~/cookies.txt"),
+        text("user_agent", "Browser user agent", "Matches the cookies"),
+        check("render", "Use a headless browser for blocked pages"),
+        check("keep_raw", "Keep raw copies of pages and PDFs"),
+        text("workers", "Worker processes", "All cores", "number"),
+        text("youtube_delay", "Seconds between YouTube requests", "5", "number"),
+        check("billed_twitter", "Allow twitterapi.io (billed per tweet)"),
+      ),
+    ),
+  );
+}
+
+async function startJob(kind) {
+  await api("/api/job/" + kind, {});
+  logSeen = 0; $("#log").textContent = "";
+  await tick();
+}
+
+const JOB_PILL = {running: ["Running", "accent"], stopping: ["Stopping", "warn"], done: ["Finished", "good"], stopped: ["Stopped", "warn"], failed: ["Failed", "bad"]};
+function renderState(s) {
+  lastState = s;
+  const lanes = s.lanes, sum = st => Object.values(lanes).reduce((a, c) => a + (c[st] || 0), 0);
+  const stats = $("#stats");
+  if (stats) stats.replaceChildren(...[
+    [fmt(s.documents), "documents"], [shortChars(s.chars), "characters of text"],
+    [fmt(sum("pending")), "waiting"], [fmt(sum("failed")), "failed"],
+    [fmt(s.review.to_review), "to review"],
+  ].map(([n, l]) => h("div", {class: "stat"}, h("b", {}, n), h("span", {}, l))));
+
+  const laneEl = $("#lanes");
+  if (laneEl) {
+    const names = Object.keys(lanes).sort((a, b) => (a === "skip") - (b === "skip") || Object.values(lanes[b]).reduce((x, y) => x + y, 0) - Object.values(lanes[a]).reduce((x, y) => x + y, 0));
+    laneEl.replaceChildren(names.length ? h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Source"), ["Waiting", "Saved", "Thin", "Failed", "Skipped"].map(c => h("th", {scope: "col"}, c)))),
+      h("tbody", {}, names.map(n => h("tr", {}, h("td", {}, LANE_LABEL[n] || n),
+        ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = lanes[n][st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }))))
+    ) : h("p", {class: "hint"}, "Nothing archived yet."));
+  }
+
+  const keys = $("#keys");
+  if (keys) keys.textContent = "Saved in " + s.out + ". Keys found: " + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ".";
+
+  const j = s.job;
+  const newLog = j.count < logSeen || jobKey !== j.started;
+  if (newLog) { logSeen = 0; jobKey = j.started; if ($("#log")) $("#log").textContent = ""; }
+  if (j.lines.length && $("#log")) {
+    const log = $("#log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+    log.append(j.lines.join("\n") + "\n");
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  }
+  logSeen = j.count;
+  if ($("#progress-title")) {
+    $("#progress-title").textContent = j.state === "idle" ? "Nothing running" : (j.active ? j.step || j.name : j.name);
+    const pill = JOB_PILL[j.state];
+    $("#progress-pill").replaceChildren(...(pill ? [h("span", {class: "pill " + pill[1]}, pill[0])] : []));
+    for (const id of ["start", "audit", "export"]) $("#" + id).disabled = j.active;
+    $("#stop").disabled = !j.active;
+    $("#stop").textContent = j.state === "stopping" ? "Stop now" : "Stop";
+  }
+  $("#jobline").replaceChildren(...(j.active ? [h("span", {class: "dot"}), j.step || j.name] : []));
+
+  const c = $("#review-count");
+  c.hidden = !s.review.to_review;
+  c.textContent = fmt(s.review.to_review);
+  if (Review.fixing && !j.active) { Review.fixing = false; if (currentTab === "review") Review.load(); }
+}
+async function tick() { try { renderState(await api("/api/state?since=" + logSeen)); } catch (e) { /* the next tick retries */ } }
+
+/* ---- folder picker ---- */
+const Picker = {
+  source: null,
+  open(source) { this.source = source; $("#picker").showModal(); this.go(""); },
+  async go(path) {
+    const dlg = $("#picker");
+    let d;
+    try { d = await api("/api/browse?path=" + encodeURIComponent(path)); }
+    catch (e) { toast(e.message); if (!path) dlg.close(); return; }
+    dlg.replaceChildren(
+      h("div", {class: "picker-head"},
+        h("h3", {}, "Add a folder to " + this.source.title),
+        h("input", {type: "text", value: d.path, "aria-label": "Folder path", onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); this.go(e.target.value); } }})),
+      h("div", {class: "picker-list"},
+        d.parent && h("button", {onclick: () => this.go(d.parent)}, "↑ Up one level"),
+        d.folders.map(f => h("button", {onclick: () => this.go(d.path.replace(/\/$/, "") + "/" + f)}, f)),
+        !d.folders.length && h("p", {class: "hint", style: "padding:10px 14px"}, "No folders inside this one.")),
+      h("div", {class: "picker-foot"},
+        h("span", {class: "hint"}, `${fmt(d.files)} files in this folder`),
+        h("button", {class: "btn", onclick: () => dlg.close()}, "Cancel"),
+        h("button", {class: "btn primary", onclick: () => {
+          const key = this.source.key;
+          if (!config[key].includes(d.path)) config[key].push(d.path);
+          saveConfig(); dlg.close();
+          $("#sources").replaceWith(renderSources());
+          scanFolder(key, d.path);
+        }}, "Use this folder")),
+    );
+  },
+};
+
+/* ---- shared document view ---- */
+function renderDetail(host, d, opts = {}) {
+  const hasText = !!d.body;
+  const url = d.web_url;
+  let mode = opts.mode || (hasText ? "text" : "original");
+  const viewEl = h("div", {style: "flex:1;min-height:0;display:flex;flex-direction:column"});
+  const switcher = h("div", {class: "view-switch"});
+  function draw() {
+    fill(switcher,
+      hasText && h("button", {class: "btn", "aria-pressed": mode === "text", onclick: () => { mode = "text"; draw(); }}, "Saved text"),
+      d.original.available && d.original.viewer !== "download" && h("button", {class: "btn", "aria-pressed": mode === "original", onclick: () => { mode = "original"; draw(); }}, "Original"),
+      hasText && h("a", {class: "btn", href: `/saved/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, "Open .md"),
+      d.original.available && h("a", {class: "btn", href: `/original/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, d.original.viewer === "download" ? "Download original" : "Open original"),
+      url && h("a", {class: "btn", href: url, target: "_blank", rel: "noreferrer noopener", style: "text-decoration:none"}, "Open web page"),
+    );
+    if (mode === "text" && hasText) {
+      viewEl.replaceChildren(
+        d.truncated ? h("div", {class: "notice"}, `Showing the first ${fmt(d.body.length)} of ${fmt(d.length)} characters. Open .md shows it all.`) : "",
+        h("div", {class: "body", tabindex: 0, "aria-label": "Saved text"}, d.body));
+    } else if (d.original.available && d.original.viewer !== "download") {
+      const frameProps = {class: "frame", src: `/original/${d.id}`, title: "Original document"};
+      if (d.original.viewer !== "pdf") frameProps.sandbox = "";
+      viewEl.replaceChildren(h("iframe", frameProps));
+    } else {
+      viewEl.replaceChildren(h("div", {class: "notice" + (d.local_missing ? " warn" : "")},
+        d.local_missing ? "The original file isn't at its saved path on this machine." :
+        hasText ? "This file type can't be previewed here. Use the download button." :
+        d.status === "failed" ? `No text was saved: ${d.reason || "unknown reason"}.` :
+        d.status === "pending" ? "This one hasn't been archived yet." : "No text was saved for this one."));
+    }
+  }
+  draw();
+  const location = url ? h("a", {href: url, target: "_blank", rel: "noreferrer noopener"}, url) : d.original.path ? h("span", {}, d.original.path) : h("span", {}, d.url);
+  host.replaceChildren(
+    h("div", {class: "detail-head"},
+      h("h2", {}, d.meta.title || d.original.name || d.url),
+      h("div", {class: "meta"}, location),
+      h("div", {class: "meta"},
+        statusPill(d),
+        d.meta.source && h("span", {}, d.meta.source),
+        d.length ? h("span", {}, fmt(d.length) + " characters") : "",
+        d.meta.fetched_at && h("span", {}, "saved " + d.meta.fetched_at.slice(0, 10)),
+        d.score !== null && d.score >= 0.35 ? h("span", {class: "pill bad"}, "Garbage score " + d.score.toFixed(2)) : "",
+        Object.entries(d.signals).filter(([, v]) => v >= 0.25).map(([k]) => h("span", {class: "pill warn"}, k)),
+      ),
+      opts.actions,
+      switcher,
+    ),
+    viewEl);
+}
+function statusPill(d) {
+  const map = {ok: ["Saved", "good"], thin: ["Thin", "warn"], failed: ["Failed", "bad"], pending: ["Waiting", ""], skipped: ["Skipped", ""]};
+  const [label, cls] = map[d.status] || [d.status, ""];
+  return h("span", {class: "pill " + cls}, label + (d.reason && d.status !== "ok" ? `: ${d.reason}` : ""));
+}
+
+/* ---- review tab ---- */
+const VIEWS = [["to_review", "To review"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
+const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix"};
+const Review = {
+  view: "to_review", host: "", items: [], total: 0, hosts: [], counts: {}, at: 0, doc: null, built: false, fixing: false,
+  build() {
+    if (this.built) return; this.built = true;
+    $("#review").append(
+      h("div", {class: "list-pane"},
+        h("div", {class: "list-tools"},
+          h("div", {class: "segments", id: "review-views", role: "group", "aria-label": "Filter by decision"}),
+          h("div", {class: "tool-row"},
+            h("select", {id: "review-host", "aria-label": "Filter by site", onchange: e => { this.host = e.target.value; this.at = 0; this.load(); }}),
+            h("button", {class: "btn", id: "host-bad", onclick: guarded(() => this.markHost("bad"))}, "All bad"),
+            h("button", {class: "btn", id: "host-fine", onclick: guarded(() => this.markHost("fine"))}, "All fine"))),
+        h("div", {id: "fix-banner"}),
+        h("div", {class: "rows", id: "review-rows"})),
+      h("div", {class: "detail", id: "review-detail"}));
+  },
+  load: guarded(async function () {
+    Review.build();
+    const self = Review;
+    const r = await api(`/api/review?view=${self.view}&host=${encodeURIComponent(self.host)}`);
+    Object.assign(self, {items: r.items, total: r.total, hosts: r.hosts, counts: r.counts});
+    self.at = Math.min(self.at, Math.max(self.items.length - 1, 0));
+    self.renderList();
+    if (self.items.length) await self.open(self.at);
+    else self.renderEmpty();
+  }),
+  renderList() {
+    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load(); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
+    const sel = $("#review-host");
+    sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(this.view === "to_review" && !this.host ? this.total : this.hosts.reduce((a, x) => a + x.count, 0))})`),
+      ...this.hosts.map(x => h("option", {value: x.host, selected: this.host === x.host}, `${x.host} (${fmt(x.count)})`)));
+    const groupable = this.view === "to_review" && this.host;
+    for (const id of ["host-bad", "host-fine"]) $("#" + id).hidden = !groupable;
+    const queued = (this.counts.ocr || 0) + (this.counts.refetch || 0);
+    $("#fix-banner").replaceChildren(...(queued ? [h("div", {class: "banner"},
+      `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
+      h("button", {class: "btn", onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
+    const rows = $("#review-rows");
+    rows.replaceChildren(...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
+      h("div", {class: "title"}, it.title || it.url),
+      h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "scorebar", title: `Score ${it.score}`, "aria-label": `Score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})), h("span", {class: "right"}, topSignal(it.signals))),
+      it.note && h("div", {class: "snippet"}, it.note),
+    )));
+    if (this.total > this.items.length) rows.append(h("div", {class: "more hint"}, `Showing the worst ${fmt(this.items.length)} of ${fmt(this.total)}. Decide on these and the next ones appear.`));
+  },
+  renderEmpty() {
+    const scored = this.counts.scored_total;
+    $("#review-detail").replaceChildren(h("div", {class: "empty"},
+      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", onclick: guarded(async () => { await api("/api/job/audit", {}); showTab("archive"); tick(); })}, "Check for garbage")]
+      : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
+      : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
+    this.doc = null;
+  },
+  open: guarded(async function (i) {
+    const self = Review;
+    self.at = i;
+    const it = self.items[i];
+    if (!it) return;
+    for (const [n, el] of [...$("#review-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
+    $("#review-rows").querySelectorAll(".row")[i]?.scrollIntoView({block: "nearest"});
+    const d = await api("/api/document/" + it.id);
+    if (self.items[self.at]?.id !== it.id) return;
+    self.doc = d;
+    const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
+    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? "Only available for PDFs" : "", onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
+    const actions = h("div", {class: "decide-row"},
+      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"), btn("o", "OCR it", "ocr", !d.pdf), btn("r", "Fetch again", "refetch"), btn("x", "Can't fix", "unfixable"),
+      d.decision && h("button", {class: "btn", onclick: guarded(() => self.decide(null))}, "Undo", h("kbd", {}, "u")),
+      note);
+    renderDetail($("#review-detail"), d, {actions});
+  }),
+  async decide(decision) {
+    if (!this.doc) return;
+    const note = $("#review-note")?.value || null;
+    const r = await api("/api/decide", {ids: [this.doc.id], decision, note});
+    this.counts = r.counts;
+    toast(decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared");
+    await this.load();
+  },
+  async markHost(decision) {
+    const n = this.total;
+    if (!confirm(`Mark all ${fmt(n)} documents from ${this.host} as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
+    await api("/api/decide", {host: this.host, decision});
+    this.host = ""; this.at = 0;
+    await this.load();
+  },
+};
+const topSignal = sig => Object.entries(sig).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+
+/* ---- documents tab ---- */
+const Docs = {
+  built: false, items: [], at: -1, total: 0, offset: 0, q: "", lane: "", status: "", inText: false, note: "",
+  build() {
+    if (this.built) return; this.built = true;
+    const refresh = () => { this.offset = 0; this.at = -1; this.load(); };
+    let timer;
+    $("#documents").append(
+      h("div", {class: "list-pane"},
+        h("div", {class: "list-tools"},
+          h("div", {class: "tool-row"},
+            h("input", {type: "search", id: "doc-q", placeholder: "Search titles and URLs", "aria-label": "Search", oninput: e => {
+              this.q = e.target.value; clearTimeout(timer); if (!this.inText) timer = setTimeout(refresh, 250);
+            }, onkeydown: e => { if (e.key === "Enter") refresh(); }})),
+          h("div", {class: "tool-row"},
+            h("label", {class: "opt", style: "flex:none"}, h("input", {type: "checkbox", onchange: e => { this.inText = e.target.checked; $("#doc-q").placeholder = this.inText ? "Search inside documents, then press Enter" : "Search titles and URLs"; if (!this.inText || this.q.length > 1) refresh(); }}), "Inside documents"),
+            h("select", {"aria-label": "Source", onchange: e => { this.lane = e.target.value; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l}, LANE_LABEL[l]))),
+            h("select", {"aria-label": "Status", onchange: e => { this.status = e.target.value; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v}, l))))),
+        h("div", {class: "rows", id: "doc-rows"})),
+      h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here."))));
+  },
+  load: guarded(async function (more) {
+    const self = Docs;
+    self.build();
+    let r;
+    if (self.inText && self.q.trim().length > 1) {
+      $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
+      r = await api(`/api/search?q=${encodeURIComponent(self.q.trim())}`);
+      r.items = r.items.filter(i => (!self.lane || i.lane === self.lane) && (!self.status || i.status === self.status));
+      self.note = r.limited ? `First ${fmt(r.items.length)} matches. Search for something more specific to narrow it.` : `${fmt(r.items.length)} matches in ${fmt(r.searched)} documents.`;
+      self.items = r.items; self.total = r.items.length;
+    } else {
+      const off = more ? self.items.length : 0;
+      r = await api(`/api/documents?q=${encodeURIComponent(self.q)}&lane=${self.lane}&status=${self.status}&offset=${off}`);
+      self.items = more ? [...self.items, ...r.items] : r.items;
+      self.total = r.total; self.note = `${fmt(r.total)} documents`;
+    }
+    self.renderList();
+  }),
+  renderList() {
+    const rows = $("#doc-rows");
+    rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note),
+      ...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
+        h("div", {class: "title"}, it.title || it.url),
+        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right"}, it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${it.reason}` : it.status)),
+        it.snippet && h("div", {class: "snippet"}, it.snippet))));
+    if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
+  },
+  open: guarded(async function (i) {
+    const self = Docs;
+    self.at = i;
+    for (const [n, el] of [...$("#doc-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
+    renderDetail($("#doc-detail"), await api("/api/document/" + self.items[i].id));
+  }),
+};
+
+/* ---- keys ---- */
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || currentTab !== "review" || $("#picker").open) return;
+  const typing = e.target.matches("input, select, textarea");
+  if (typing) { if (e.key === "Escape") e.target.blur(); return; }
+  const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];
+  if (go) { e.preventDefault(); const n = Review.at + go; if (n >= 0 && n < Review.items.length) Review.open(n); return; }
+  const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
+  if (decision && !(decision === "ocr" && !Review.doc?.pdf)) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }
+  if (e.key === "u" && Review.doc?.decision) { e.preventDefault(); guarded(() => Review.decide(null))(); }
+  if (e.key === "n") { e.preventDefault(); $("#review-note")?.focus(); }
+});
+
+/* ---- start ---- */
+(async () => {
+  try {
+    config = await api("/api/config");
+    renderArchive();
+    await tick();
+    setInterval(tick, 1500);
+  } catch (e) { $("#archive-column").replaceChildren(h("div", {class: "notice warn"}, "Couldn't reach the archiver. Is it still running?")); }
+})();
+</script>
+</body>
+</html>

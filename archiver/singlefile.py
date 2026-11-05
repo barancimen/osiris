@@ -247,7 +247,7 @@ async def run_import(store: Store, paths: list[Path], pool: extract.WorkerPool, 
             failures.append((path, res.get("error") or "no_text"))  # not recorded: a later run tries again
             return
         outcomes[_store_page(store, path, sha, res)] += 1
-        store.mark_imported(sha, path.name, res["url"])
+        store.mark_imported(sha, str(path.resolve()), res["url"])
         done = sum(outcomes.values()) + len(failures)
         if done % 100 == 0:
             log.info("%d of %d files", done, len(files))

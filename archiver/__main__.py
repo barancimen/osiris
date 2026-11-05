@@ -1,4 +1,4 @@
-"""CLI: archiver run URLFILE | archiver import PATH | archiver ocr | archiver stats | archiver export"""
+"""CLI: archiver ui | run URLFILE | import PATH | ocr | audit | stats | export"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import cookies, extract
+from . import audit, cookies, extract
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
@@ -286,6 +286,50 @@ def cmd_ocr(args: argparse.Namespace) -> None:
         store.close()
 
 
+def cmd_audit(args: argparse.Namespace) -> None:
+    store = Store(args.out)
+    db = audit.connect(args.out)
+    try:
+        if args.action == "scan":
+            for name, n in audit.scan(store, args.out).items():
+                print(f"{n:>8}  {name.replace('_', ' ')}")
+        else:
+            cmd_audit_apply(store, db, args)
+    finally:
+        db.close()
+        store.close()
+
+
+def cmd_audit_apply(store: Store, db, args: argparse.Namespace) -> None:
+    """Carry out queued fixes. Fetching again happens in the next run, for the lanes this prints."""
+    import uvloop
+
+    forced, _ = audit.pending_fixes(db)
+    lanes = audit.apply_refetch(store, db)
+    if forced and (problem := ocr_unavailable(args.lang)):
+        log.warning("not running OCR: %s", problem)
+    elif forced:
+        async def main() -> None:
+            stop_on_signals()
+            await run_ocr(store, args.lang, args.workers, args.worker_mem_mb, forced=forced)
+
+        try:
+            uvloop.run(main())
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            log.warning("interrupted: progress is saved, re-run the same command to resume")
+            store.commit()
+            sys.exit(130)
+        audit.mark_ocr_applied(db, forced)
+    store.commit()
+    print("lanes to run: " + " ".join(lanes))
+
+
+def cmd_ui(args: argparse.Namespace) -> None:
+    from .ui import serve
+
+    serve(args.out, args.port, args.no_browser)
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     store = Store(args.out)
     print_stats(store, failed=args.failed, thin=args.thin)
@@ -296,13 +340,17 @@ def cmd_export(args: argparse.Namespace) -> None:
     store = Store(args.out)
     out = Path(args.output) if args.output else store.out / "corpus.jsonl"
     tmp = out.with_suffix(out.suffix + ".tmp")
-    n = 0
+    n = left_out = 0
+    excluded = audit.excluded(store.out)
     with open(tmp, "w", encoding="utf-8") as f:
         for did, lane, urls in store.done_docs():
             doc = store.read_doc(did)
             if doc is None:
                 continue
             meta, body = doc
+            if did in excluded and excluded[did] == audit.text_hash(body):
+                left_out += 1
+                continue
             record = {
                 "id": did,
                 "url": meta.get("url"),
@@ -319,7 +367,7 @@ def cmd_export(args: argparse.Namespace) -> None:
             n += 1
     os.replace(tmp, out)
     store.close()
-    print(f"wrote {n} documents to {out}")
+    print(f"wrote {n} documents to {out}" + (f", leaving out {left_out} marked bad in review" if left_out else ""))
 
 
 def main() -> None:
@@ -397,6 +445,20 @@ def main() -> None:
     ocr.add_argument("--retry", action="store_true", help="also try PDFs OCR has already tried, e.g. in a new language")
     ocr.add_argument("--limit", type=int, help="stop after this many PDFs")
     ocr.set_defaults(func=cmd_ocr)
+
+    ui = sub.add_parser("ui", help="open the web interface")
+    ui.add_argument("--out", default=DEFAULT_OUT)
+    ui.add_argument("--port", type=int, default=8321, help="local port (default 8321)")
+    ui.add_argument("--no-browser", action="store_true", help="just print the address")
+    ui.set_defaults(func=cmd_ui)
+
+    aud = sub.add_parser("audit", help="find probable garbage (scan), or carry out queued review fixes (apply)")
+    aud.add_argument("action", choices=("scan", "apply"))
+    aud.add_argument("--out", default=DEFAULT_OUT)
+    aud.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages for apply (default {OCR_LANG})")
+    aud.add_argument("--workers", type=int, default=1, help="PDFs at a time for apply (default 1)")
+    aud.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
+    aud.set_defaults(func=cmd_audit)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)

@@ -22,9 +22,10 @@ from pathlib import Path
 
 import aiohttp
 
-from . import extract
+from . import audit, extract
 from .generic import PDF_CAP
 from .localfile import candidate_paths
+from .route import doc_id
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -122,6 +123,19 @@ def candidates(store: Store, retry: bool = False, lanes: Iterable[str] = LANES) 
     return rows
 
 
+def forced_rows(store: Store, keys: list[str]) -> list[tuple]:
+    """The same row as candidates(), for PDFs you've chosen to OCR whatever their status."""
+    rows = []
+    for key in keys:
+        row = store.db.execute(
+            "SELECT doc_key, MIN(url), MAX(final_url), lane, COALESCE(MAX(chars), 0) FROM urls WHERE doc_key = ?"
+            " AND lane IN ('generic', 'localfile') GROUP BY doc_key", (key,)
+        ).fetchone()
+        if row:
+            rows.append(row)
+    return rows
+
+
 async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str | None:
     """None when the PDF is on disk, else why it isn't."""
     try:
@@ -144,8 +158,10 @@ async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str
 
 
 async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: bool = False, limit: int | None = None,
-                  lanes: Iterable[str] = LANES) -> None:
-    todo = candidates(store, retry, lanes)[:limit]
+                  lanes: Iterable[str] = LANES, forced: list[str] | None = None) -> None:
+    """With `forced` (doc keys), only those are read, and the result replaces the text when it scores
+    better rather than when it's longer: a garbage text layer can be longer than the truth."""
+    todo = forced_rows(store, forced) if forced is not None else candidates(store, retry, lanes)[:limit]
     log.info("ocr: %d PDFs with no usable text, language %s, %d at a time", len(todo), lang, workers)
     if not todo:
         return
@@ -181,7 +197,12 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
         store.mark_tried(doc_key, TRIED)
         text = (res.get("text") or "").strip()
         finished += 1
-        if len(text) <= chars:
+        if forced is not None:
+            old = store.read_doc(doc_id(doc_key))
+            improved = bool(text) and (old is None or audit.score_text(text, lane) < audit.score_text(old[1], lane))
+        else:
+            improved = len(text) > chars
+        if not improved:
             key = res.get("error") or "no_more_text"
             outcome[key] = outcome.get(key, 0) + 1
             log.info("ocr: %d of %d, nothing new from %s", finished, len(todo), url[:90])
