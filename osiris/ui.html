@@ -162,6 +162,7 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 .report-row .context { color: var(--muted); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
 .report-row .where { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
 .sym { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 2px; margin: 0 1px; }
+.term { text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; cursor: help; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 6px; display: none; z-index: 10; max-width: calc(100vw - 32px); }
 @media (max-width: 760px) {
   .tab.on.split { flex-direction: column; }
@@ -226,6 +227,161 @@ function showTab(name) {
 }
 for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => showTab(b.dataset.tab));
 
+/* ---- explanations, shown when you hover ---- */
+const HELP = {
+  // tabs
+  "tab-archive": "Choose what to save, then turn it into searchable text.",
+  "tab-review": "Look over documents whose text might have come out garbled, and decide what to do with each.",
+  "tab-documents": "Browse and search everything you've saved.",
+  "review-count": "Documents waiting for you to look at them.",
+  // archive tab
+  start: "Go through everything you've added, and fetch or read whatever isn't saved yet. Anything already saved is skipped, so it's fine to press this again.",
+  stop: "Pause the current job. Everything done so far is kept, and starting again carries on from there. Press again to stop right away.",
+  audit: "Look through your saved documents for text that came out garbled, like broken characters or \"please enable JavaScript\" pages. This only reads them, it doesn't change anything.",
+  export: "Put all your saved documents into one file, corpus.jsonl, for other tools to load. Documents you marked Bad are left out.",
+  "add-folder": "Pick a folder on this computer to include.",
+  "remove-folder": "Stop including this folder. Nothing inside it is touched.",
+  ocr: "Some PDFs are just pictures of pages, with no text inside. This reads the words off the pictures (that's OCR). It's slow, so it runs after everything else.",
+  ocr_lang: "The languages your scanned PDFs are in, joined with +, like eng+tur. Each language needs its Tesseract language pack installed.",
+  refresh: "Read PDFs you've already saved once more, in case they come out better now. A document is only replaced if the new copy has more text.",
+  retry_failed: "Give every link that failed before another try. Without this, failed links are left alone.",
+  audit_after: "When archiving is done, check for garbled text right away.",
+  advanced: "Settings most people never need to touch.",
+  cookies: "A file with your browser's cookies. With it, osiris can open pages as you see them when you're logged in. Keep this file private.",
+  user_agent: "How your browser introduces itself to websites. Copy it from the same browser the cookies came from, or some sites won't accept them.",
+  render: "For pages that block plain downloads or need JavaScript, open them in an invisible Chrome window instead. Slower, and it uses a lot more memory.",
+  keep_raw: "Also keep the downloaded pages and PDFs themselves, not just their text. Takes a lot more disk space.",
+  workers: "How many documents to work on at once. Leave it empty to use every processor core.",
+  youtube_delay: "How long to wait between videos. Going faster makes it more likely YouTube blocks you for a while.",
+  billed_twitter: "Get posts the free archives don't have from twitterapi.io, which charges for each post.",
+  "retry-sites": "Sites whose failed links the next archive run will try again. Add one from a failed document on the Documents tab.",
+  // numbers
+  documents: "Pages and files saved as text so far.",
+  chars: "How much text that adds up to.",
+  waiting: "Links and files that haven't been processed yet.",
+  failed: "Links and files where no text could be saved. The Documents tab shows why for each one.",
+  "to-review": "Documents that might be garbled, waiting for you on the Review tab.",
+  "status-pending": "Not processed yet.",
+  "status-ok": "Saved, with a good amount of text.",
+  "status-thin": "Saved, but with very little text, under 200 characters. Often a login wall, a cookie banner, or a page that needs JavaScript.",
+  "status-failed": "No text could be saved.",
+  "status-skipped": "Left alone on purpose, like chat links, social media profiles and image files.",
+  keys: "API keys are like passwords for outside services. Each one lets osiris get more, or get it faster, from that service.",
+  index: "A lookup table of every word in your documents, which makes searching fast. It's kept up to date by itself.",
+  // text cleanup
+  "clean-preview": "See what a cleanup would change, without changing anything.",
+  "clean-run": "Fix the text of your saved documents. Only documents that need it are touched, and you can undo it.",
+  "clean-undo": "Put the documents back exactly as they were before the last cleanup.",
+  "clean-report": "See each change one by one, and open any document to check it in context.",
+  // documents and review
+  "saved-text": "The text osiris saved. This is what gets searched and exported.",
+  original: "The original file or page, as it's kept on this computer.",
+  "open-md": "Open the saved text in a new tab.",
+  "open-original": "Open the original file in a new tab.",
+  "download-original": "Download the original file.",
+  "web-page": "Go to the live page. It may have changed since it was saved, or be gone.",
+  "prev-match": "Previous match (Shift+N)",
+  "next-match": "Next match (N)",
+  "garbage-score": "How likely this text is to be garbled, from 0 (looks fine) to 1 (clearly broken). Anything from 0.35 up shows up on the Review tab.",
+  "doc-search": "Searches titles and web addresses. Tick \"Inside documents\" to search the text itself.",
+  "doc-search-indexed": "Searches titles, web addresses and the text, best matches first.",
+  "inside-documents": "Search the text of every document. It's slower, so it starts when you press Enter.",
+  "doc-lane": "Show only one kind of source.",
+  "doc-status": "Show only documents in one state.",
+  "doc-reason": "Show only documents that failed for one reason.",
+  "review-host": "Show only documents from one site.",
+  "host-bad": "Mark everything from this site that's still waiting for a decision as Bad. You can change each one later.",
+  "host-fine": "Mark everything from this site that's still waiting for a decision as Fine. You can change each one later.",
+  "run-fixes": "Carry out the OCR and fetch-again jobs you've queued.",
+  "decide-fine": "This one looks OK. It won't come up for review again unless its text changes.",
+  "decide-bad": "This one is garbage. It's left out of exports.",
+  "decide-ocr": "Read this PDF again from pictures of its pages. The new text is only kept if it looks better.",
+  "decide-refetch": "Download or read this again from scratch, replacing what's saved.",
+  "decide-unfixable": "Garbage that can't be repaired. It's left out of exports and off your to-do list.",
+  "decide-undo": "Take back your decision.",
+  score: "Garbage score: the longer the bar, the more likely the text is garbled.",
+};
+const LANE_HELP = {
+  generic: "Ordinary web pages, and PDFs on the web.",
+  localfile: "Files on this computer: PDFs, ebooks, Word documents and text files. They're only read, never changed.",
+  youtube: "Video captions, plus the titles in playlists and channels. It goes slowly on purpose, so YouTube doesn't block you.",
+  github: "A repository's description and README, and gists.",
+  reddit: "Reddit posts with their comments.",
+  stackexchange: "Questions with all their answers and comments, from Stack Overflow and its sister sites.",
+  arxiv: "The title, authors and summary of arXiv papers.",
+  twitter: "Posts on X (Twitter), from archives that keep copies of them.",
+  singlefile: "Pages you saved yourself with the SingleFile browser extension.",
+  skip: "Links left alone on purpose, like chat links, profiles and image files.",
+};
+const VIEW_HELP = {
+  to_review: "Documents that might be garbled and that you haven't decided on yet, worst first.",
+  bad: "Ones you marked as garbage. They're left out of exports.",
+  ocr: "Scanned PDFs waiting to be read again when you press Run fixes.",
+  refetch: "Waiting to be downloaded or read again when you press Run fixes.",
+  fine: "Ones you looked at and decided are OK.",
+  unfixable: "Garbage that can't be repaired. Left out of exports, and off your to-do list.",
+};
+const SIGNAL_HELP = {
+  "encoding": "Characters that came out wrong, like � or Ã©. Usually a broken PDF, or text read in the wrong encoding.",
+  "few common words": "Hardly any everyday words like \"the\" or \"and\". That happens when a PDF's letters come out scrambled.",
+  "odd words": "Lots of \"words\" with no vowels, or with digits in the middle. Typical of a bad OCR read.",
+  "symbols": "Lots of symbols, usually leftover code or page markup.",
+  "no spaces": "Long runs of letters with no spaces, from PDFs that lost their word spacing.",
+  "repeated lines": "The same lines over and over, like menus or a header repeated on every page.",
+  "block page": "A short page saying things like \"enable JavaScript\" or \"access denied\" instead of the real content.",
+};
+const RULE_HELP = {
+  "ligature spelled out": "Some PDFs store pairs like \"fi\" or \"fl\" as one special character, which searches miss. It's written out as normal letters.",
+  "invisible character removed": "An invisible character sat inside a word and split it in two for searching. It's taken out.",
+  "accents joined (NFC)": "An accent was stored apart from its letter. They're put back together: it looks the same, but searches now find it.",
+  "byte-order mark removed": "An invisible marker some programs put at the start of a file.",
+  "hyphen restored": "A hyphen that came out as an odd character is a normal hyphen again.",
+  "join: soft hyphen": "That hyphen only split the word across two lines, so the word is joined back up.",
+  "join: Chrome's hyphenation": "Chrome split this word across two lines when it printed the page to PDF, so it's joined back up.",
+  "keep: hyphen the page had (Chrome PDF)": "This hyphen was in the web page itself, so it stays.",
+  "join: same document": "This document spells the word without a hyphen elsewhere, so it's written that way here too.",
+  "keep: same document": "This document spells the word with a hyphen elsewhere, so it keeps it here too.",
+  "keep: capital after the break": "A capital letter after the hyphen, as in Anglo-Saxon, usually means the hyphen is real.",
+  "join: rest of the archive": "Your other documents mostly spell this word without a hyphen.",
+  "keep: rest of the archive": "Your other documents mostly spell this word with a hyphen.",
+  "keep: unsure": "Nothing showed which spelling is right, so it's left the way it was printed.",
+  "title": "The document's title had one of the problems above.",
+  "text re-read with its encoding detected": "This text file wasn't saved in the usual format (UTF-8), so some characters were lost. It was read again from the original file, in the format it was really saved in.",
+};
+const help = key => HELP[key] ?? "";
+// a word with an explanation: dotted underline, and the explanation when you hover
+const term = (text, explanation) => explanation ? h("span", {class: "term", title: explanation}, text) : text;
+// where a document's text came from, from its source label (pdf:wayback, file:pdf:ocr, reddit:scry+arctic_shift, ...)
+const SOURCE_WHAT = {
+  html: "Text taken from the web page", pdf: "Text taken from a PDF on the web", text: "A plain text file on the web",
+  singlefile: "A page you saved with the SingleFile extension", html_file: "A saved web page",
+  doi: "The paper's title, authors and summary, found through its DOI", arxiv: "The paper's title, authors and summary from arXiv",
+  github: "The repository's description and README", reddit: "The post and its comments", tweet: "The post",
+  stackexchange: "The question with its answers and comments", youtube: "From YouTube",
+};
+const FILE_KIND = {pdf: "A PDF on this computer", text: "A text file on this computer", html: "A web page saved on this computer",
+                   docx: "A Word document on this computer", epub: "An ebook on this computer", kindle: "A Kindle ebook on this computer"};
+const SOURCE_HOW = {
+  wayback: "from a copy in the Internet Archive's Wayback Machine, because the live page didn't work",
+  render: "opened in an invisible browser, because a plain download didn't work",
+  impersonate: "fetched while looking like a regular Chrome browser, because a plain download was refused",
+  ocr: "read from pictures of the pages (OCR)", transcript: "the video's captions", auto: "made automatically by YouTube",
+  manual: "written by people", metadata: "the title and description only", playlist: "the playlist's title and video titles",
+  channel: "the channel's title and video titles", api: "from the official API",
+};
+const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io"};
+function sourceHelp(source) {
+  if (!source) return "";
+  let parts = source.split(":"), first;
+  if (parts[0] === "file" && FILE_KIND[parts[1]]) { first = FILE_KIND[parts[1]]; parts = parts.slice(2); }
+  else { first = SOURCE_WHAT[parts[0]] ?? "Where the text came from"; parts = parts.slice(1); }
+  const rest = parts.map(part => {
+    const names = part.split("+");
+    return names.every(n => PROVIDER[n]) ? "from " + names.map(n => PROVIDER[n]).join(" and ") : SOURCE_HOW[part];
+  }).filter(Boolean);
+  return `${first}${rest.length ? ", " + rest.join(", ") : ""}. (${source})`;
+}
+
 /* ---- archive tab ---- */
 const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", skip: "Skipped on purpose"};
 const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "stackexchange", "arxiv", "twitter"];
@@ -249,10 +405,10 @@ function renderArchive() {
     h("div", {class: "card", id: "progress"},
       h("div", {class: "status-line"}, h("h2", {id: "progress-title", style: "font-size:13px;font-weight:650"}, "Nothing running"), h("span", {id: "progress-pill"})),
       h("div", {class: "actions", style: "margin-bottom:10px"},
-        h("button", {class: "btn primary", id: "start", onclick: guarded(() => startJob("archive"))}, "Start archiving"),
-        h("button", {class: "btn", id: "stop", onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
-        h("button", {class: "btn", id: "audit", onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
-        h("button", {class: "btn", id: "export", onclick: guarded(() => startJob("export"))}, "Export corpus"),
+        h("button", {class: "btn primary", id: "start", title: help("start"), onclick: guarded(() => startJob("archive"))}, "Start archiving"),
+        h("button", {class: "btn", id: "stop", title: help("stop"), onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
+        h("button", {class: "btn", id: "audit", title: help("audit"), onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
+        h("button", {class: "btn", id: "export", title: help("export"), onclick: guarded(() => startJob("export"))}, "Export corpus"),
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
@@ -269,11 +425,11 @@ function renderSources() {
     SOURCES.map(s => h("div", {class: "source"},
       h("div", {class: "source-head"},
         h("div", {}, h("h3", {}, s.title), h("p", {}, s.text)),
-        h("button", {class: "btn", onclick: () => Picker.open(s)}, "Add folder")),
+        h("button", {class: "btn", title: help("add-folder"), onclick: () => Picker.open(s)}, "Add folder")),
       config[s.key].map(p => h("div", {class: "folder"},
         h("code", {}, p),
         h("span", {class: "note", id: scanId(s.key, p)}, scans[s.key + p]?.summary ?? "Checking…"),
-        h("button", {class: "btn link", "aria-label": `Remove ${p}`, onclick: () => { config[s.key] = config[s.key].filter(x => x !== p); saveConfig(); $("#sources").replaceWith(renderSources()); }}, "Remove"))),
+        h("button", {class: "btn link", "aria-label": `Remove ${p}`, title: help("remove-folder"), onclick: () => { config[s.key] = config[s.key].filter(x => x !== p); saveConfig(); $("#sources").replaceWith(renderSources()); }}, "Remove"))),
     )));
 }
 const scanId = (key, path) => "scan-" + key + "-" + btoa(unescape(encodeURIComponent(path))).replace(/[^a-zA-Z0-9]/g, "");
@@ -289,22 +445,22 @@ async function scanFolder(key, path) {
 function renderOptions() {
   const o = config.options;
   const set = (name, value) => { o[name] = value; saveConfig(); };
-  const check = (name, label) => h("label", {class: "opt"}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => set(name, e.target.checked)}), label);
-  const text = (name, label, placeholder, type = "text") => h("label", {class: "opt"}, label, h("input", {type, value: o[name] ?? "", placeholder, onchange: e => set(name, e.target.value.trim())}));
+  const check = (name, label) => h("label", {class: "opt", title: help(name)}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => set(name, e.target.checked)}), label);
+  const text = (name, label, placeholder, type = "text") => h("label", {class: "opt", title: help(name)}, label, h("input", {type, value: o[name] ?? "", placeholder, onchange: e => set(name, e.target.value.trim())}));
   return h("div", {class: "card", id: "options"}, h("h2", {}, "2. How to archive it"),
-    h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip"},
+    h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip", title: LANE_HELP[lane]},
       h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => {
         o.lanes = e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane); saveConfig();
       }}), LANE_LABEL[lane]))),
     h("div", {class: "opts"},
       check("ocr", "Read scanned PDFs with OCR"),
       text("ocr_lang", "OCR languages", "eng+tur"),
-      h("label", {class: "opt"}, "Refresh PDFs", h("select", {onchange: e => set("refresh", e.target.value)},
+      h("label", {class: "opt", title: help("refresh")}, "Refresh PDFs", h("select", {onchange: e => set("refresh", e.target.value)},
         [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))),
       check("retry_failed", "Try failed URLs again"),
       check("audit_after", "Check for garbage afterwards"),
     ),
-    h("details", {}, h("summary", {}, "Advanced"),
+    h("details", {}, h("summary", {title: help("advanced")}, "Advanced"),
       h("div", {class: "opts"},
         text("cookies", "Cookies file", "~/cookies.txt"),
         text("user_agent", "Browser user agent", "Matches the cookies"),
@@ -315,7 +471,7 @@ function renderOptions() {
         check("billed_twitter", "Allow twitterapi.io (billed per tweet)"),
       ),
     ),
-    o.retry_hosts.length > 0 && h("div", {class: "retry-list"},
+    o.retry_hosts.length > 0 && h("div", {class: "retry-list", title: help("retry-sites")},
       h("span", {class: "hint"}, o.retry_failed ? "Every failed URL is tried again, including on" : "Next run tries failed URLs again on"),
       o.retry_hosts.map(host => h("span", {class: "chip"}, host,
         h("button", {"aria-label": `Don't retry ${host}`, title: "Don't retry this site", onclick: () => setRetry(host, false)}, "×")))),
@@ -340,28 +496,30 @@ function renderState(s) {
   const lanes = s.lanes, sum = st => Object.values(lanes).reduce((a, c) => a + (c[st] || 0), 0);
   const stats = $("#stats");
   if (stats) stats.replaceChildren(...[
-    [fmt(s.documents), "documents"], [shortChars(s.chars), "characters of text"],
-    [fmt(sum("pending")), "waiting"], [fmt(sum("failed")), "failed"],
-    [fmt(s.review.to_review), "to review"],
-  ].map(([n, l]) => h("div", {class: "stat"}, h("b", {}, n), h("span", {}, l))));
+    [fmt(s.documents), "documents", "documents"], [shortChars(s.chars), "characters of text", "chars"],
+    [fmt(sum("pending")), "waiting", "waiting"], [fmt(sum("failed")), "failed", "failed"],
+    [fmt(s.review.to_review), "to review", "to-review"],
+  ].map(([n, l, key]) => h("div", {class: "stat"}, h("b", {}, n), h("span", {}, term(l, help(key))))));
 
   const laneEl = $("#lanes");
   if (laneEl) {
     const names = Object.keys(lanes).sort((a, b) => (a === "skip") - (b === "skip") || Object.values(lanes[b]).reduce((x, y) => x + y, 0) - Object.values(lanes[a]).reduce((x, y) => x + y, 0));
     laneEl.replaceChildren(names.length ? h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Source"), ["Waiting", "Saved", "Thin", "Failed", "Skipped"].map(c => h("th", {scope: "col"}, c)))),
-      h("tbody", {}, names.map(n => h("tr", {}, h("td", {}, LANE_LABEL[n] || n),
+      h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Source"),
+        [["Waiting", "pending"], ["Saved", "ok"], ["Thin", "thin"], ["Failed", "failed"], ["Skipped", "skipped"]].map(([c, st]) => h("th", {scope: "col"}, term(c, help("status-" + st)))))),
+      h("tbody", {}, names.map(n => h("tr", {}, h("td", {}, term(LANE_LABEL[n] || n, LANE_HELP[n])),
         ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = lanes[n][st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }))))
     ) : h("p", {class: "hint"}, "Nothing archived yet."));
   }
 
   const keys = $("#keys");
   const ix = s.index;
-  if (keys) keys.textContent = "Saved in " + s.out + ". Keys found: " + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ". "
-    + (!ix ? ""
-       : ix.error ? "The search index couldn't be updated: " + ix.error
-       : ix.updating && ix.total ? `Updating the search index: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`
-       : `${fmt(ix.documents)} documents in the search index.`);
+  if (keys) keys.replaceChildren("Saved in " + s.out + ". ", term("Keys found", help("keys")), ": "
+    + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ". ",
+    ...(!ix ? []
+       : ix.error ? [term("The search index", help("index")), " couldn't be updated: " + ix.error]
+       : ix.updating && ix.total ? ["Updating the ", term("search index", help("index")), `: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`]
+       : [`${fmt(ix.documents)} documents in the `, term("search index", help("index")), "."]));
   renderProgress(s.job, lanes);
 
   const j = s.job;
@@ -473,10 +631,10 @@ const Cleanup = {
       h("p", {class: "hint", style: "margin-bottom:10px"}, "Repairs broken characters and words split at line ends in documents archived before this existed. New documents are repaired as they're archived. Preview changes nothing: it lists every change it would make, so you can check them first."),
       h("p", {id: "clean-status", style: "margin-bottom:10px"}, "Checking…"),
       h("div", {class: "actions"},
-        h("button", {class: "btn", id: "clean-preview", onclick: guarded(() => startJob("clean", {mode: "preview"}))}, "Preview"),
-        h("button", {class: "btn", id: "clean-run", onclick: guarded(() => confirm("Repair the text of your archived documents? Only documents that change are rewritten, and Undo cleanup puts the originals back.") && startJob("clean", {mode: "clean"}))}, "Clean up text"),
-        h("button", {class: "btn", id: "clean-undo", onclick: guarded(() => confirm(`Put back the originals of ${fmt(this.state?.kept)} cleaned documents? Any fetched again since are left as they are.`) && startJob("clean", {mode: "undo"}))}, "Undo cleanup"),
-        h("button", {class: "btn", id: "clean-report", onclick: () => Report.open()}, "View report")));
+        h("button", {class: "btn", id: "clean-preview", title: help("clean-preview"), onclick: guarded(() => startJob("clean", {mode: "preview"}))}, "Preview"),
+        h("button", {class: "btn", id: "clean-run", title: help("clean-run"), onclick: guarded(() => confirm("Repair the text of your archived documents? Only documents that change are rewritten, and Undo cleanup puts the originals back.") && startJob("clean", {mode: "clean"}))}, "Clean up text"),
+        h("button", {class: "btn", id: "clean-undo", title: help("clean-undo"), onclick: guarded(() => confirm(`Put back the originals of ${fmt(this.state?.kept)} cleaned documents? Any fetched again since are left as they are.`) && startJob("clean", {mode: "undo"}))}, "Undo cleanup"),
+        h("button", {class: "btn", id: "clean-report", title: help("clean-report"), onclick: () => Report.open()}, "View report")));
   },
   refresh: guarded(async function () {
     const self = Cleanup;
@@ -515,10 +673,11 @@ const Report = {
         h("p", {class: "hint"}, `${fmt(s.changed)} of ${fmt(s.checked)} documents. Each line-end decision is listed, with a few examples per document of the other repairs. Choose a row to open its document.`),
         h("select", {"aria-label": "Repair", onchange: e => { self.rule = e.target.value; self.load(); }},
           h("option", {value: ""}, `Every repair (${fmt(r.rules.reduce((a, [, n]) => a + n, 0))} rows)`),
-          r.rules.map(([rule, n]) => h("option", {value: rule, selected: rule === self.rule}, `${rule} (${fmt(n)})`)))),
+          r.rules.map(([rule, n]) => h("option", {value: rule, selected: rule === self.rule, title: RULE_HELP[rule] ?? ""}, `${rule} (${fmt(n)})`)))),
       h("div", {class: "report-list"},
         self.items.map(it => h("button", {class: "report-row", onclick: () => self.show(it.doc_id)},
-          h("div", {class: "meta"}, h("span", {class: "pill " + (it.rule.startsWith("keep") ? "warn" : "accent")}, it.rule)),
+          h("div", {class: "meta"}, h("span", {class: "pill " + (it.rule.startsWith("keep") ? "warn" : "accent"), title: RULE_HELP[it.rule] ?? ""}, it.rule),
+            RULE_HELP[it.rule] && h("span", {}, RULE_HELP[it.rule])),
           h("div", {class: "change"}, h("del", {}, ...(it.before ? visible(it.before) : ["(nothing)"])), " → ", h("ins", {}, ...(it.after ? visible(it.after) : ["(removed)"]))),
           it.context && h("div", {class: "context"}, ...self.marked(it.context, it.before)),
           h("div", {class: "where"}, it.url))),
@@ -625,11 +784,11 @@ function renderDetail(host, d, opts = {}) {
   const matchBar = h("div", {class: "matches", role: "status"});
   function draw() {
     fill(switcher,
-      hasText && h("button", {class: "btn", "aria-pressed": mode === "text", onclick: () => { mode = "text"; draw(); }}, "Saved text"),
-      d.original.available && d.original.viewer !== "download" && h("button", {class: "btn", "aria-pressed": mode === "original", onclick: () => { mode = "original"; draw(); }}, "Original"),
-      hasText && h("a", {class: "btn", href: `/saved/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, "Open .md"),
-      d.original.available && h("a", {class: "btn", href: `/original/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, d.original.viewer === "download" ? "Download original" : "Open original"),
-      url && h("a", {class: "btn", href: url, target: "_blank", rel: "noreferrer noopener", style: "text-decoration:none"}, "Open web page"),
+      hasText && h("button", {class: "btn", "aria-pressed": mode === "text", title: help("saved-text"), onclick: () => { mode = "text"; draw(); }}, "Saved text"),
+      d.original.available && d.original.viewer !== "download" && h("button", {class: "btn", "aria-pressed": mode === "original", title: help("original"), onclick: () => { mode = "original"; draw(); }}, "Original"),
+      hasText && h("a", {class: "btn", title: help("open-md"), href: `/saved/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, "Open .md"),
+      d.original.available && h("a", {class: "btn", title: help(d.original.viewer === "download" ? "download-original" : "open-original"), href: `/original/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, d.original.viewer === "download" ? "Download original" : "Open original"),
+      url && h("a", {class: "btn", title: help("web-page"), href: url, target: "_blank", rel: "noreferrer noopener", style: "text-decoration:none"}, "Open web page"),
     );
     matchBar.replaceChildren();
     if (mode === "text" && hasText) {
@@ -647,8 +806,8 @@ function renderDetail(host, d, opts = {}) {
           marks[at].scrollIntoView({block: "center"});
           label.textContent = `${fmt(at + 1)} of ${fmt(marks.length)}${marks.length >= 2000 ? "+" : ""} matches`;
         };
-        matchBar.append(label, h("button", {class: "btn", onclick: () => go(-1), "aria-label": "Previous match"}, "↑"),
-                        h("button", {class: "btn", onclick: () => go(1), "aria-label": "Next match"}, "↓", h("kbd", {}, "n")));
+        matchBar.append(label, h("button", {class: "btn", onclick: () => go(-1), "aria-label": "Previous match", title: help("prev-match")}, "↑"),
+                        h("button", {class: "btn", onclick: () => go(1), "aria-label": "Next match", title: help("next-match")}, "↓", h("kbd", {}, "n")));
         Matches.go = go;
         requestAnimationFrame(() => go(0));
       }
@@ -673,11 +832,11 @@ function renderDetail(host, d, opts = {}) {
       h("div", {class: "meta"}, location),
       h("div", {class: "meta"},
         statusPill(d),
-        d.meta.source && h("span", {}, d.meta.source),
+        d.meta.source && term(d.meta.source, sourceHelp(d.meta.source)),
         d.length ? h("span", {}, fmt(d.length) + " characters") : "",
         d.meta.fetched_at && h("span", {}, "saved " + d.meta.fetched_at.slice(0, 10)),
-        d.score !== null && d.score >= 0.35 ? h("span", {class: "pill bad"}, "Garbage score " + d.score.toFixed(2)) : "",
-        Object.entries(d.signals).filter(([, v]) => v >= 0.25).map(([k]) => h("span", {class: "pill warn"}, k)),
+        d.score !== null && d.score >= 0.35 ? h("span", {class: "pill bad", title: help("garbage-score")}, "Garbage score " + d.score.toFixed(2)) : "",
+        Object.entries(d.signals).filter(([, v]) => v >= 0.25).map(([k]) => h("span", {class: "pill warn", title: SIGNAL_HELP[k] ?? ""}, k)),
       ),
       failureBox(d),
       opts.actions,
@@ -689,7 +848,9 @@ const Matches = {go: null};  // stepping through the open document's matches, fo
 function statusPill(d) {
   const map = {ok: ["Saved", "good"], thin: ["Thin", "warn"], failed: ["Failed", "bad"], pending: ["Waiting", ""], skipped: ["Skipped", ""]};
   const [label, cls] = map[d.status] || [d.status, ""];
-  return h("span", {class: "pill " + cls}, label + (d.reason && d.status !== "ok" ? ": " + reasonLabel(d.reason) : ""));
+  const why = d.status === "failed" ? explainReason(d.reason) : "";
+  return h("span", {class: "pill " + cls, title: [help("status-" + d.status), why].filter(Boolean).join(" ")},
+           label + (d.reason && d.status !== "ok" ? ": " + reasonLabel(d.reason) : ""));
 }
 
 /* ---- review tab ---- */
@@ -704,9 +865,9 @@ const Review = {
         h("div", {class: "list-tools"},
           h("div", {class: "segments", id: "review-views", role: "group", "aria-label": "Filter by decision"}),
           h("div", {class: "tool-row"},
-            h("select", {id: "review-host", "aria-label": "Filter by site", onchange: e => { this.host = e.target.value; this.at = 0; this.load(); }}),
-            h("button", {class: "btn", id: "host-bad", onclick: guarded(() => this.markHost("bad"))}, "All bad"),
-            h("button", {class: "btn", id: "host-fine", onclick: guarded(() => this.markHost("fine"))}, "All fine"))),
+            h("select", {id: "review-host", "aria-label": "Filter by site", title: help("review-host"), onchange: e => { this.host = e.target.value; this.at = 0; this.load(); }}),
+            h("button", {class: "btn", id: "host-bad", title: help("host-bad"), onclick: guarded(() => this.markHost("bad"))}, "All bad"),
+            h("button", {class: "btn", id: "host-fine", title: help("host-fine"), onclick: guarded(() => this.markHost("fine"))}, "All fine"))),
         h("div", {id: "fix-banner"}),
         h("div", {class: "rows", id: "review-rows"})),
       h("div", {class: "detail", id: "review-detail"}));
@@ -722,7 +883,7 @@ const Review = {
     else self.renderEmpty();
   }),
   renderList() {
-    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load(); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
+    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, title: VIEW_HELP[v], onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load(); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
     const sel = $("#review-host");
     sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(this.view === "to_review" && !this.host ? this.total : this.hosts.reduce((a, x) => a + x.count, 0))})`),
       ...this.hosts.map(x => h("option", {value: x.host, selected: this.host === x.host}, `${x.host} (${fmt(x.count)})`)));
@@ -731,11 +892,11 @@ const Review = {
     const queued = (this.counts.ocr || 0) + (this.counts.refetch || 0);
     $("#fix-banner").replaceChildren(...(queued ? [h("div", {class: "banner"},
       `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
-      h("button", {class: "btn", onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
+      h("button", {class: "btn", title: help("run-fixes"), onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
     const rows = $("#review-rows");
     rows.replaceChildren(...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
       h("div", {class: "title"}, it.title || it.url),
-      h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "scorebar", title: `Score ${it.score}`, "aria-label": `Score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})), h("span", {class: "right"}, topSignal(it.signals))),
+      h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})), h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))),
       it.note && h("div", {class: "snippet"}, it.note),
     )));
     if (this.total > this.items.length) rows.append(h("div", {class: "more hint"}, `Showing the worst ${fmt(this.items.length)} of ${fmt(this.total)}. Decide on these and the next ones appear.`));
@@ -743,7 +904,7 @@ const Review = {
   renderEmpty() {
     const scored = this.counts.scored_total;
     $("#review-detail").replaceChildren(h("div", {class: "empty"},
-      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", onclick: guarded(async () => { await api("/api/job/audit", {}); showTab("archive"); tick(); })}, "Check for garbage")]
+      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("audit"), onclick: guarded(async () => { await api("/api/job/audit", {}); showTab("archive"); tick(); })}, "Check for garbage")]
       : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
       : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
     this.doc = null;
@@ -759,10 +920,10 @@ const Review = {
     if (self.items[self.at]?.id !== it.id) return;
     self.doc = d;
     const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
-    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only available for PDFs" : "Saved pages can only be imported again") : "", onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
+    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only for PDFs: OCR reads pictures of a PDF's pages." : "A saved page has nowhere to be fetched from again. Import it again instead.") : help("decide-" + decision), onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
     const actions = h("div", {class: "decide-row"},
       btn("f", "Fine", "fine"), btn("b", "Bad", "bad"), btn("o", "OCR it", "ocr", !d.pdf), btn("r", "Fetch again", "refetch", d.lane === "singlefile"), btn("x", "Can't fix", "unfixable"),
-      d.decision && h("button", {class: "btn", onclick: guarded(() => self.decide(null))}, "Undo", h("kbd", {}, "u")),
+      d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => self.decide(null))}, "Undo", h("kbd", {}, "u")),
       note);
     renderDetail($("#review-detail"), d, {actions});
   }),
@@ -802,17 +963,17 @@ const Docs = {
       h("div", {class: "list-pane"},
         h("div", {class: "list-tools"},
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-q", placeholder: placeholder(), "aria-label": "Search", oninput: e => {
+            h("input", {type: "search", id: "doc-q", placeholder: placeholder(), "aria-label": "Search", title: help(indexed ? "doc-search-indexed" : "doc-search"), oninput: e => {
               this.q = e.target.value; clearTimeout(timer); if (indexed || !this.inText) timer = setTimeout(refresh, 250);
             }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }})),
           h("div", {class: "tool-row"},
-            !indexed && h("label", {class: "opt", style: "flex:none"}, h("input", {type: "checkbox", onchange: e => {
+            !indexed && h("label", {class: "opt", style: "flex:none", title: help("inside-documents")}, h("input", {type: "checkbox", onchange: e => {
               this.inText = e.target.checked; $("#doc-q").placeholder = placeholder();
               if (!this.inText || this.q.trim().length > 1) refresh();
             }}), "Inside documents"),
-            h("select", {"aria-label": "Source", onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l}, LANE_LABEL[l]))),
-            h("select", {"aria-label": "Status", id: "doc-status", onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v}, l))),
-            h("select", {"aria-label": "Why it failed", id: "doc-reason", hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }})),
+            h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
+            h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),
+            h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }})),
           h("p", {class: "hint", id: "doc-help"}, 'All words must appear. "Quoted words" appear together, and -word leaves out documents with it.')),
         h("div", {class: "rows", id: "doc-rows"})),
       h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here."))));
@@ -862,7 +1023,8 @@ const Docs = {
     rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note),
       ...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
         h("div", {class: "title"}, it.title || it.url),
-        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right"}, it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
+        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right", title: [help("status-" + it.status), it.status === "failed" ? explainReason(it.reason) : ""].filter(Boolean).join(" ")},
+          it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
         it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)))));
     if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
   },
@@ -920,6 +1082,8 @@ document.addEventListener("keydown", e => {
 (async () => {
   try {
     config = await api("/api/config");
+    for (const b of document.querySelectorAll("nav button")) b.title = help("tab-" + b.dataset.tab);
+    $("#review-count").title = help("review-count");
     renderArchive();
     Cleanup.refresh();
     followHash();

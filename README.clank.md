@@ -35,6 +35,8 @@ Optional system and Python extras:
 - **Documents:** search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw` copy. Web documents link to the live page.
 - **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
 
+**Explanations:** hover over any button, option or status to see what it does or means. A word with a dotted underline, such as **thin** or a garbage signal, has an explanation too.
+
 **Keyboard in Review:** `j`/`k` move, `f` fine, `b` bad, `o` OCR it, `r` fetch again, `x` can't fix, `u` undo, `n` write a note.
 
 **Keyboard in Documents:** `/` search, `j`/`k` move, `n`/`N` next or previous match in the open document.
