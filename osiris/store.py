@@ -13,6 +13,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import clean
 from .route import Route, doc_id, safe_dedup_key
 
 SCHEMA = """
@@ -275,9 +276,14 @@ class Store:
         return md_path(self.out, did)
 
     def write_doc(self, doc_key: str, meta: dict, body: str) -> int:
-        """Write md/<id[:2]>/<id>.md with YAML front matter; returns body length."""
+        """Write md/<id[:2]>/<id>.md with YAML front matter; returns body length. The text gets the
+        repairs in clean.py: extraction workers have done them already, and the API lanes haven't."""
         did = doc_id(doc_key)
         meta = {"id": did, "fetched_at": now_iso(), **meta}
+        body = clean.clean_text(body.strip(), pdf=clean.is_pdf_source(meta.get("source")),
+                                lexicon=clean.lexicon_at(self.out / clean.LEXICON_FILE))
+        if isinstance(meta.get("title"), str):
+            meta["title"] = clean.clean_title(meta["title"])
         lines = ["---"]
         for key in FRONT_MATTER_KEYS:
             value = meta.get(key)

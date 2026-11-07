@@ -1,4 +1,4 @@
-"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | search QUERY | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | clean | search QUERY | stats | export"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import audit, cookies, extract, safety
+from . import audit, clean, cookies, extract, safety
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
@@ -340,6 +340,31 @@ def cmd_audit_apply(store: Store, db, args: argparse.Namespace) -> None:
     print("lanes to run: " + " ".join(lanes))
 
 
+def cmd_clean(args: argparse.Namespace) -> None:
+    from . import cleanup
+
+    store = Store(args.out)
+    try:
+        if args.undo:
+            restored, skipped = cleanup.undo(store)
+            print(f"put back {restored} original document{'' if restored == 1 else 's'}"
+                  + (f"; left {skipped} alone, since they've changed since they were cleaned" if skipped else ""))
+            return
+        totals = cleanup.clean_archive(store, dry_run=args.dry_run)
+    except KeyboardInterrupt:
+        log.warning("interrupted: every finished document is saved, and running it again carries on")
+        sys.exit(130)
+    finally:
+        store.close()
+    print(f"\n{totals.checked} documents checked, {totals.changed} "
+          + ("would change" if args.dry_run else "changed")
+          + (f"; finished {totals.finished} an interrupted run had cleaned" if totals.finished else ""))
+    for rule, n in sorted(totals.rules.items(), key=lambda kv: -kv[1]):
+        print(f"  {n:>8}  {rule}")
+    print(f"\nevery change is listed in {Path(args.out) / cleanup.REPORT_FILE}"
+          + ("" if args.dry_run else "; `osiris clean --undo` puts the originals back"))
+
+
 def cmd_ui(args: argparse.Namespace) -> None:
     from .ui import serve
 
@@ -538,6 +563,15 @@ def main() -> None:
     find.add_argument("--json", action="store_true", help="one JSON object per match, for other tools")
     find.set_defaults(func=cmd_search)
 
+    cln = sub.add_parser("clean", help="repair characters and line-end hyphens that conversion broke, in "
+                                       "documents already archived (only changed files are rewritten)")
+    cln.add_argument("--out", default=DEFAULT_OUT)
+    cln.add_argument("--dry-run", action="store_true",
+                     help="change nothing: only list what would change in <out>/clean-report.tsv")
+    cln.add_argument("--undo", action="store_true",
+                     help="put back the originals of documents cleaned before, unless they've changed since")
+    cln.set_defaults(func=cmd_clean)
+
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)
     stats.add_argument("--failed", action="store_true", help="break failures down by host")
@@ -552,6 +586,8 @@ def main() -> None:
     args = parser.parse_args()
     # everything below may run third-party parsers on your files
     safety.install(args.out, *([Path(args.output).resolve().parent] if getattr(args, "output", None) else []))
+    # for the extraction workers, which repair line-end hyphens with the archive's own vocabulary
+    os.environ[clean.LEXICON_ENV] = str(Path(args.out).resolve() / clean.LEXICON_FILE)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S",
                         stream=sys.stderr)
     args.func(args)

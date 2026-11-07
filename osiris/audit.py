@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import clean
 from .route import doc_id
 from .store import Store, now_iso
 
@@ -241,6 +242,22 @@ def _settle(db: sqlite3.Connection, current: set[str]) -> dict[str, int]:
     return {"text_changed": changed, "fix_did_nothing": no_change}
 
 
+def carry_decision(db: sqlite3.Connection, did: str, old_hash: str, new_hash: str) -> None:
+    """A document's text was repaired in place, not replaced: what was decided about it still holds."""
+    db.execute("UPDATE decisions SET hash = ? WHERE doc_id = ? AND hash = ?", (new_hash, did, old_hash))
+
+
+def rescore(db: sqlite3.Connection, did: str, title: str | None, body: str, path: Path) -> None:
+    """Score a document rewritten in place now, so the next check doesn't take it for a new text."""
+    row = db.execute("SELECT lane FROM scores WHERE doc_id = ?", (did,)).fetchone()
+    if row is None:  # never scored: the next check does it
+        return
+    stat, found = path.stat(), signals(body)
+    db.execute("UPDATE scores SET title = ?, chars = ?, mtime = ?, size = ?, hash = ?, score = ?, signals = ?,"
+               " excerpt = ? WHERE doc_id = ?", (title, len(body), stat.st_mtime, stat.st_size, text_hash(body),
+                                                 score(found, row[0]), json.dumps(found), _excerpt(body), did))
+
+
 def counts(db: sqlite3.Connection) -> dict[str, int]:
     decided = dict(db.execute("SELECT decision, COUNT(*) FROM decisions GROUP BY decision"))
     to_review = db.execute(
@@ -286,8 +303,7 @@ def write_exclude(db: sqlite3.Connection, store: Store) -> Path:
     return path
 
 
-def is_pdf_source(source: str | None) -> bool:
-    return bool(source) and (source.startswith("pdf") or source.startswith("file:pdf"))
+is_pdf_source = clean.is_pdf_source
 
 
 def pending_fixes(db: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]]]:

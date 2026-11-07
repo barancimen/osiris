@@ -27,6 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 # headless-browser fallback (--render); then run: playwright install chromium
 render = ["playwright>=1.49"]
+test = ["pytest"]
 
 [project.scripts]
 osiris = "osiris.__main__:main"

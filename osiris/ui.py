@@ -549,6 +549,18 @@ async def start_export(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def start_clean(request: web.Request) -> web.Response:
+    job = request.app["job"]
+    if job.active:
+        raise web.HTTPConflict(text="A job is already running.")
+
+    async def flow(j: Job) -> None:
+        await j.run("Cleaning up text", j.osiris("clean"))
+
+    job.start("Text cleanup", flow)
+    return web.json_response({"ok": True})
+
+
 async def stop_job(request: web.Request) -> web.Response:
     request.app["job"].stop()
     return web.json_response({"ok": True})
@@ -950,6 +962,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.post("/api/job/audit", start_audit),
         web.post("/api/job/fixes", start_fixes),
         web.post("/api/job/export", start_export),
+        web.post("/api/job/clean", start_clean),
         web.post("/api/job/stop", stop_job),
         web.get("/api/review", review),
         web.post("/api/decide", decide),

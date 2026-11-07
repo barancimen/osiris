@@ -242,6 +242,8 @@ function renderArchive() {
         h("button", {class: "btn", id: "stop", onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
         h("button", {class: "btn", id: "audit", onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
         h("button", {class: "btn", id: "export", onclick: guarded(() => startJob("export"))}, "Export corpus"),
+        h("button", {class: "btn", id: "clean", title: "Repair characters and line-end hyphens that conversion broke, in documents already archived. New documents get this as they're archived.",
+          onclick: guarded(() => confirm("Repair broken characters and words split at line ends in your archived documents? Only changed files are rewritten, every change is listed in clean-report.tsv, and `osiris clean --undo` puts the originals back.") && startJob("clean"))}, "Clean up text"),
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
@@ -365,7 +367,7 @@ function renderState(s) {
     $("#progress-title").textContent = j.state === "idle" ? "Nothing running" : (j.active ? j.step || j.name : j.name);
     const pill = JOB_PILL[j.state];
     $("#progress-pill").replaceChildren(...(pill ? [h("span", {class: "pill " + pill[1]}, pill[0])] : []));
-    for (const id of ["start", "audit", "export"]) $("#" + id).disabled = j.active;
+    for (const id of ["start", "audit", "export", "clean"]) $("#" + id).disabled = j.active;
     $("#stop").disabled = !j.active;
     $("#stop").textContent = j.state === "stopping" ? "Stop now" : "Stop";
   }

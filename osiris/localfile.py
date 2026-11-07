@@ -38,7 +38,7 @@ def text_to_doc(path: str) -> dict:
         data = f.read(MAX_TEXT_BYTES + 1)
     if len(data) > MAX_TEXT_BYTES:
         return {"text": "", "error": "too_large"}
-    return {"text": data.decode("utf-8", errors="replace")}
+    return {"text": extract.decode_text(data)}
 
 
 # extension -> (name used in `source`, reader); route.LOCAL_READABLE lists the same extensions

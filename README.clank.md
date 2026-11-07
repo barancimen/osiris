@@ -84,6 +84,46 @@ If your indexer reads `data/md` directly, `data/audit-exclude.txt` lists the pat
 
 From the command line: `osiris audit scan`, then `osiris audit apply`, which also prints the lanes to run for documents queued to fetch again.
 
+## Text cleanup
+
+Converting a document to text leaves damage that splits or hides words, so searching for the right word misses the passage. osiris repairs it as each document is archived, and `osiris clean`, or **Clean up text** in the web interface, repairs documents archived before. It only repairs what has one right answer or clear evidence, and leaves anything unsure as it was printed.
+
+| Repair | Where | Example |
+|---|---|---|
+| Separated accents joined to their letter (NFC) | Everywhere | `e` + `◌́` → `é` |
+| A ligature inside a word spelled out | Everywhere | `ﬁnding` → `finding`, but a lone `ﬁ` stays |
+| An invisible character inside a word removed | Everywhere, between letters of scripts that put spaces between words | `co​operate` (zero-width space), `infor­mation` (soft hyphen) → `cooperate`, `information` |
+| A byte-order mark at the very start removed | Everywhere | |
+| A word broken at a line end rejoined, or given back its hyphen | PDFs and OCR only | `infor-⏎mation` → `information`, `well-⏎known` → `well-known` |
+
+**Never touched:** code in markdown (fenced, indented or inline), spaces of any kind, full-width letters, superscripts and fractions, mojibake, and the damage markers the garbage check looks for (`�`, `(cid:12)`, control characters). There's no spelling or OCR correction, and no folding of case or accents.
+
+**Words broken at line ends** are decided by the first rule that knows, in this order:
+
+1. **Soft hyphen** at a line end: joined.
+2. **Chrome-printed PDFs:** Chrome hyphenates with `‐` (U+2010), which is joined. A hyphen pdfium marks as printed was in the page itself, so it stays.
+3. **The same document:** if it spells the word elsewhere only one way, or one way at least 3 times as often, that way.
+4. **A capital after the break**, as in `Anglo-⏎Saxon`: the hyphen stays.
+5. **The rest of the archive:** the same count over all your documents, from `data/lexicon.sqlite`. `osiris clean` builds it, and later runs use it.
+6. **Otherwise the hyphen stays**, as printed. A wrong join would invent a word, such as `wellknown`.
+
+Digits on either side (`1990-⏎1995`) and page boundaries are left alone. Plain-text files get no line-end repairs, since books such as Project Gutenberg's wrap lines at spaces, so every hyphen at a line end in them is real.
+
+### Cleaning documents already archived
+
+```sh
+.venv/bin/osiris clean --dry-run   # changes nothing, and lists what would change in data/clean-report.tsv
+.venv/bin/osiris clean
+.venv/bin/osiris clean --undo      # puts the originals back
+```
+
+- **The report** lists every line-end decision with its rule and context, and a few examples of each other repair per document. Read it after a dry run to check for anything that shouldn't change.
+- **Only changed files are rewritten.** Their front matter stays as it was, `fetched_at` included, apart from a repaired title. Character counts in the manifest follow the new text.
+- **Your review decisions are kept.** A decision holds for the exact text it was made about, so `clean` carries it over to the repaired text and scores the document again. Without that, a document marked Bad would come back into exports.
+- **Undo:** each original is kept, compressed, in `data/clean-backup.sqlite` before its file is replaced. `--undo` puts back every one that hasn't changed since, and leaves alone any that were fetched again.
+- **Interrupting** is safe, and running it again carries on. Don't run it while an archive run is going.
+- **Text files in other encodings:** local text files whose stored text has `�` are read again from the original, if it's still there, with the encoding detected (see [Local files](#local-files)).
+
 ## Searching
 
 Without an index, the web page's **Inside documents** search reads the documents one by one, newest first, and stops at 100 matches. For ranked search, keep a full-text index, `data/search.sqlite`. It's off by default, since it takes disk space and some CPU. To turn it on:
@@ -132,6 +172,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
+| `osiris clean` | Repairs text in documents already archived. `--dry-run`, `--undo`. See [Text cleanup](#text-cleanup) |
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
 | `osiris stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
 | `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
@@ -239,6 +280,7 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 - **Other formats:** these are `skipped` with `local_other`, and are picked up automatically if a later version supports them. Newer `.kfx` files and old binary `.doc` files aren't supported.
 - **DRM:** books under DRM are `failed` with `drm_protected` and aren't worked around.
 - **Missing files:** a file that isn't there is `failed` with `file_missing`. Run on the machine that has it, or use `--retry-failed` once it's back.
+- **Text that isn't UTF-8:** UTF-8 and files with a byte-order mark are read as such. Anything else is tried in each common legacy encoding, such as Windows cp1252 English with curly quotes, cp1254 Turkish or cp1251 Russian. A reading is kept only if it's beyond doubt: it has no control characters, symbols where letters belong or words mixing scripts, and no other reading is as plausible. When readings tie, the archive's vocabulary decides, by a clear margin only. Otherwise undecodable bytes become `�`, which the garbage check flags, rather than wrong letters that look right. Web pages served as plain text are read the same way, after any charset the server declares.
 
 Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdown)'s recipe, which keeps all the text rather than guessing at a main content block.
 
@@ -339,6 +381,8 @@ Everything goes in `data/`.
 | `corpus.jsonl` | Written by `osiris export` |
 | `audit.sqlite` | Garbage scores and your review decisions |
 | `audit-exclude.txt` | Paths of documents marked Bad or Can't fix |
+| `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
+| `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
 | `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw`. Budget about 1–1.5 GB for 20,000 pages, plus about 2 MB per PDF |
@@ -354,3 +398,12 @@ Everything goes in `data/`.
 `source` records where the text came from, for example `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `github:api`, `youtube:transcript:auto` or `file:pdf`.
 
 Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 1536), which are replaced every 500 documents and rebuilt after a crash. Only the document that crashed a worker is lost.
+
+## Tests
+
+```sh
+.venv/bin/pip install -e .[test]
+.venv/bin/python -m pytest
+```
+
+One test prints a page to PDF with Chrome, and is skipped if there's none.

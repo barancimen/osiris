@@ -93,6 +93,9 @@ def pdf_to_doc(path: str, lang: str) -> dict:
     return {"text": text, "title": title, "author": meta.get("Author"), "error": error}
 
 
+pdf_to_doc.pdf_text = True  # tesseract breaks words at line ends like a typesetter: clean.py rejoins them
+
+
 def unavailable(lang: str) -> str | None:
     """Why OCR can't run in these languages, if so. Checked up front because a page that fails for
     this reason would otherwise count as the PDF's one try."""

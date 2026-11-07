@@ -9,7 +9,8 @@ import resource
 import signal
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from . import safety
+
+from . import clean, safety
 
 log = logging.getLogger(__name__)
 
@@ -123,7 +124,46 @@ def pdf_to_doc(path: str) -> dict:
         _release_memory()
     text = "\n\n".join(p for p in pages if p)
     title = meta.get("Title") or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
-    return {"text": text, "title": title, "author": meta.get("Author")}
+    return {"text": text, "title": title, "author": meta.get("Author"), "producer": meta.get("Producer")}
+
+
+pdf_to_doc.pdf_text = True  # its text gets the PDF repairs in clean.py
+
+
+def decode_text(data: bytes, declared: str | None = None, lexicon: clean.Lexicon | None = None) -> str:
+    """Bytes of a text file as text. A byte-order mark decides first, then UTF-8 if the bytes are
+    valid UTF-8 (text in another encoding almost never is, by chance), then the declared charset,
+    then encoding.guess. When nothing is sure, undecodable bytes become U+FFFD, which the garbage
+    check flags, rather than letters that look right and aren't."""
+    for bom, name in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
+                      (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+        if data.startswith(bom):
+            try:
+                return data.decode(name)
+            except UnicodeDecodeError:
+                break
+    for name in ("utf-8", declared):
+        if name:
+            try:
+                return data.decode(name)
+            except (LookupError, UnicodeDecodeError):
+                pass
+    from .encoding import guess
+
+    text = guess(data, lexicon or clean.lexicon_from_env())
+    return text if text is not None else data.decode("utf-8", errors="replace")
+
+
+def _cleaned(fn, *args) -> dict:
+    """Run an extractor and repair its text in the same worker, so every comparison of lengths
+    after it, and the manifest's character count, sees the text as it will be stored."""
+    res = fn(*args)
+    if res.get("text"):
+        res["text"] = clean.clean_text(res["text"], pdf=getattr(fn, "pdf_text", False), producer=res.get("producer"),
+                                       lexicon=clean.lexicon_from_env())
+    if isinstance(res.get("title"), str):
+        res["title"] = clean.clean_title(res["title"])
+    return res
 
 
 class WorkerPool:
@@ -155,14 +195,14 @@ class WorkerPool:
         executor = self.executor
         self.submitted += 1
         try:
-            return await loop.run_in_executor(executor, fn, *args)
+            return await loop.run_in_executor(executor, _cleaned, fn, *args)
         except BrokenProcessPool:
             if executor is self.executor:
                 log.warning("an extraction worker died; restarting the pool")
             self._replace(executor, cancel=True)
         solo = self._new(1)
         try:
-            return await loop.run_in_executor(solo, fn, *args)
+            return await loop.run_in_executor(solo, _cleaned, fn, *args)
         except BrokenProcessPool:
             log.warning("a document crashed its extraction worker twice; skipping it")
             return {"text": "", "error": "extract_crashed"}

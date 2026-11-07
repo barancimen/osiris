@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from . import extract
+from . import clean, extract
 from .cookies import BrowserCookie, into_aiohttp, to_cookiejar
 from .store import REFRESH, Store
 
@@ -518,19 +518,16 @@ class GenericPass:
             return
         raw_path = None
         try:
-            try:
-                if f.kind == "html":
-                    async with self.extract_slots:
-                        # an archived copy is still the original page as far as metadata goes
-                        page_url = url if f.via == "wayback" else (f.final_url or url)
-                        res = await self.pool.run(extract.html_to_doc, f.body, page_url)
-                elif f.kind == "pdf":
-                    async with self.extract_slots:
-                        res = await self.pool.run(extract.pdf_to_doc, f.pdf_path)
-                else:
-                    res = {"text": f.body.decode(f.charset or "utf-8", errors="replace")}
-            except LookupError:  # unknown charset name
-                res = {"text": f.body.decode("utf-8", errors="replace")}
+            if f.kind == "html":
+                async with self.extract_slots:
+                    # an archived copy is still the original page as far as metadata goes
+                    page_url = url if f.via == "wayback" else (f.final_url or url)
+                    res = await self.pool.run(extract.html_to_doc, f.body, page_url)
+            elif f.kind == "pdf":
+                async with self.extract_slots:
+                    res = await self.pool.run(extract.pdf_to_doc, f.pdf_path)
+            else:  # plain text, small enough to decode and clean here
+                res = {"text": clean.clean_text(extract.decode_text(f.body, f.charset), pdf=False)}
             text = (res.get("text") or "").strip()
             # the upgrade pass only records (and keeps raw for) results that beat pass 1
             better = self.prev_chars is None or len(text) > max(self.prev_chars.get(url, -1), 0)
