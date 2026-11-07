@@ -30,7 +30,7 @@ from .github import load_token
 from .localfile import candidate_paths
 from .route import LOCAL_READABLE
 from .scry import load_key
-from .store import TMP_DIR, Store
+from .store import TMP_DIR, Store, md_path, read_doc_file
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).with_name("ui.html")
@@ -40,6 +40,7 @@ DOC_ID = re.compile(r"^[0-9a-f]{16}$")
 BILLED_KEY = "TWITTERAPI_IO_KEY"
 MAX_BODY = 400_000  # characters of a document sent to the page; the raw link has the rest
 PAGE_SIZE = 100
+SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
 INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
 PROGRESS_JOBS = ("Archive", "Fixes")  # jobs whose progress the manifest shows
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
@@ -311,7 +312,7 @@ async def state(request: web.Request) -> web.Response:
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
                 "progress": _progress(out, job.started) if job.active and job.name in PROGRESS_JOBS else None},
-        "index": app["index"].status(),
+        "index": app["index"].status() if app["index"] else None,
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
                  "Stack Exchange": bool(os.environ.get("STACKEXCHANGE_KEY"))},
         "out": str(out),
@@ -320,8 +321,12 @@ async def state(request: web.Request) -> web.Response:
 
 # -- folders -------------------------------------------------------------------------------------
 
+def _config_for_page(app: web.Application, config: dict) -> dict:
+    return {**config, "search_index": app["index"] is not None}  # not a setting: `osiris ui --search-index`
+
+
 async def get_config(request: web.Request) -> web.Response:
-    return web.json_response(load_config(request.app["out"]))
+    return web.json_response(_config_for_page(request.app, load_config(request.app["out"])))
 
 
 async def set_config(request: web.Request) -> web.Response:
@@ -334,7 +339,7 @@ async def set_config(request: web.Request) -> web.Response:
     config["options"].update({k: v for k, v in body.get("options", {}).items() if k in config["options"]})
     config["options"]["retry_hosts"] = _retry_hosts(config["options"])
     _save_config(out, config)
-    return web.json_response(config)
+    return web.json_response(_config_for_page(request.app, config))
 
 
 def _retry_hosts(options: dict) -> list[str]:
@@ -620,9 +625,9 @@ async def decide(request: web.Request) -> web.Response:
 
 # -- documents -----------------------------------------------------------------------------------
 
-def _titles(out: Path, db: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
-    """From the search index, which has every document, then the garbage check's scores."""
-    titles = search.titles(out, ids)
+def _titles(out: Path, db: sqlite3.Connection, ids: list[str], indexed: bool) -> dict[str, str]:
+    """From the search index if it's on, since it has every document, then the garbage check's scores."""
+    titles = search.titles(out, ids) if indexed else {}
     rest = [did for did in ids if did not in titles]
     if rest:
         titles.update(db.execute(f"SELECT doc_id, title FROM scores WHERE title IS NOT NULL AND doc_id IN"
@@ -635,6 +640,7 @@ async def documents(request: web.Request) -> web.Response:
     documents with no text, which the search index doesn't hold."""
     q = request.query
     out = request.app["out"]
+    indexed = request.app["index"] is not None
     where, params = ["lane != 'skip'"], []
     for column in ("lane", "status", "reason"):
         if q.get(column):
@@ -644,7 +650,7 @@ async def documents(request: web.Request) -> web.Response:
     db = audit.connect(out)
     try:
         if term:
-            titled = set(search.matching_titles(out, term))
+            titled = set(search.matching_titles(out, term)) if indexed else set()
             titled.update(did for (did,) in db.execute("SELECT doc_id FROM scores WHERE title LIKE ? LIMIT 2000",
                                                        (f"%{term}%",)))
             where.append(f"(url LIKE ? OR doc_id IN ({','.join('?' * len(titled))}))")
@@ -660,7 +666,7 @@ async def documents(request: web.Request) -> web.Response:
             total = manifest.execute(f"SELECT COUNT(DISTINCT doc_id) FROM urls WHERE {clause}", params).fetchone()[0]
         finally:
             manifest.close()
-        titles = _titles(out, db, [r[0] for r in rows])
+        titles = _titles(out, db, [r[0] for r in rows], indexed)
     finally:
         db.close()
     return web.json_response({"total": total, "items": [
@@ -691,14 +697,52 @@ async def reasons(request: web.Request) -> web.Response:
         for r, ids in sorted(docs.items(), key=lambda kv: -len(kv[1]))]})
 
 
+def _scan_text(out: Path, term: str, lane: str, status: str) -> dict:
+    """Without the search index: a plain case-insensitive scan of the documents, newest first,
+    stopping at the limit. The filters apply while scanning, so a filtered scan isn't cut short."""
+    where, params = ["status IN ('ok', 'thin')", "doc_id IS NOT NULL"], []
+    for column, value in (("lane", lane), ("status", status)):
+        if value:
+            where.append(f"{column} = ?")
+            params.append(value)
+    db = read_manifest(out)
+    try:
+        rows = db.execute(f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars) FROM urls WHERE {' AND '.join(where)}"
+                          " GROUP BY doc_id ORDER BY MIN(rowid) DESC", params).fetchall()
+    finally:
+        db.close()
+    pattern = re.compile(re.escape(term), re.I)
+    items, searched = [], 0
+    for did, url, lane_, status_, reason, chars in rows:
+        searched += 1
+        doc = read_doc_file(md_path(out, did))
+        if doc is None:
+            continue
+        meta, body = doc
+        if not (pattern.search(body) or pattern.search(meta.get("title") or "")):
+            continue
+        items.append({"id": did, "url": url, "lane": lane_, "status": status_, "reason": reason, "chars": chars,
+                      "title": meta.get("title"), "host": urlsplit(url).hostname or "local file",
+                      "snippet": search.snippet(body, pattern)})
+        if len(items) >= SCAN_LIMIT:
+            break
+    return {"items": items, "total": len(items), "limited": len(items) >= SCAN_LIMIT, "searched": searched,
+            "terms": [{"word": term, "substring": True}]}
+
+
 async def search_documents(request: web.Request) -> web.Response:
-    """Ranked full-text search of titles, URLs and text, from the search index."""
+    """Ranked full-text search from the search index, or a plain scan of the text without one."""
     q = request.query
     term = q.get("q", "").strip()
+    index, out = request.app["index"], request.app["out"]
+    if index is None:
+        if len(term) < 2:
+            raise web.HTTPBadRequest(text="Search for at least 2 characters.")
+        found = await asyncio.to_thread(_scan_text, out, term, q.get("lane", ""), q.get("status", ""))
+        return web.json_response(found)
     if not term:
         raise web.HTTPBadRequest(text="Type something to search for.")
-    index = request.app["index"]
-    found = await asyncio.to_thread(search.search, request.app["out"], term, q.get("lane", ""), q.get("status", ""),
+    found = await asyncio.to_thread(search.search, out, term, q.get("lane", ""), q.get("status", ""),
                                     search.PAGE, max(int(q.get("offset", 0)), 0))
     return web.json_response({**found, "index": index.status()})
 
@@ -863,8 +907,9 @@ async def _start_index(app: web.Application) -> None:
 
 async def _stop_job_on_exit(app: web.Application) -> None:
     index = app["index"]
-    index.stopping = True  # the refresh in progress stops at its next document
-    index.wanted.set()
+    if index:
+        index.stopping = True  # the refresh in progress stops at its next document
+        index.wanted.set()
     job = app["job"]
     if job.active:
         job.stop()
@@ -872,25 +917,27 @@ async def _stop_job_on_exit(app: web.Application) -> None:
             await asyncio.wait_for(asyncio.shield(job.task), 15)
         except asyncio.TimeoutError:
             job.stop()
-    try:
-        await asyncio.wait_for(app["index_task"], 30)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    if index:
+        try:
+            await asyncio.wait_for(app["index_task"], 30)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
     app["store"].close()
 
 
-def make_app(out: str | os.PathLike) -> web.Application:
+def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Application:
     out = Path(out).resolve()
     app = web.Application(middlewares=[guard], client_max_size=2**20)
     app["out"] = out
     app["store"] = Store(out)  # creates and upgrades the manifest, so the read-only connections can open it
     app["token"] = load_ui_token(out)
     app["job"] = Job(out)
-    app["index"] = Index(out)
-    app["job"].on_change = app["index"].wanted.set
+    app["index"] = Index(out) if search_index else None  # off unless asked for: it takes disk and CPU
     audit.connect(out).close()
-    search.connect(out).close()
-    app.on_startup.append(_start_index)
+    if search_index:
+        app["job"].on_change = app["index"].wanted.set
+        search.connect(out).close()
+        app.on_startup.append(_start_index)
     app.on_shutdown.append(_stop_job_on_exit)
     app.add_routes([
         web.get("/", index),
@@ -916,8 +963,8 @@ def make_app(out: str | os.PathLike) -> web.Application:
     return app
 
 
-def serve(out: str | os.PathLike, port: int, no_browser: bool) -> None:
-    app = make_app(out)
+def serve(out: str | os.PathLike, port: int, no_browser: bool, search_index: bool = False) -> None:
+    app = make_app(out, search_index)
     address = f"http://127.0.0.1:{port}/?token={app['token']}"
 
     async def announce(_: web.Application) -> None:

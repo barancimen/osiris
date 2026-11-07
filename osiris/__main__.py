@@ -343,7 +343,7 @@ def cmd_audit_apply(store: Store, db, args: argparse.Namespace) -> None:
 def cmd_ui(args: argparse.Namespace) -> None:
     from .ui import serve
 
-    serve(args.out, args.port, args.no_browser)
+    serve(args.out, args.port, args.no_browser, args.search_index)
 
 
 def refresh_search_index(out: str | Path) -> dict[str, int]:
@@ -515,6 +515,9 @@ def main() -> None:
     ui.add_argument("--out", default=DEFAULT_OUT)
     ui.add_argument("--port", type=int, default=8321, help="local port (default 8321)")
     ui.add_argument("--no-browser", action="store_true", help="just print the address")
+    ui.add_argument("--search-index", action="store_true",
+                    help="keep a full-text index (data/search.sqlite) up to date in the background, for ranked "
+                         "search of titles, URLs and text; without it, text search scans the documents")
     ui.set_defaults(func=cmd_ui)
 
     aud = sub.add_parser("audit", help="find probable garbage (scan), or carry out queued review fixes (apply)")

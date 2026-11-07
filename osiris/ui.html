@@ -346,7 +346,8 @@ function renderState(s) {
   const keys = $("#keys");
   const ix = s.index;
   if (keys) keys.textContent = "Saved in " + s.out + ". Keys found: " + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ". "
-    + (ix.error ? "The search index couldn't be updated: " + ix.error
+    + (!ix ? ""
+       : ix.error ? "The search index couldn't be updated: " + ix.error
        : ix.updating && ix.total ? `Updating the search index: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`
        : `${fmt(ix.documents)} documents in the search index.`);
   renderProgress(s.job, lanes);
@@ -500,10 +501,11 @@ function failureBox(d) {
 function markedBody(text, terms) {
   const body = h("div", {class: "body", tabindex: 0, "aria-label": "Saved text"});
   const word = "[\\p{L}\\p{N}_]";
-  const parts = (terms || []).map(t => t.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (t.prefix ? word + "*" : `(?!${word})`))
+  const escape = w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = (terms || []).map(t => t.substring ? escape(t.word) : `(?<!${word})` + escape(t.word) + (t.prefix ? word + "*" : `(?!${word})`))
     .sort((a, b) => b.length - a.length);
   if (!parts.length) { body.textContent = text; return {body, marks: []}; }
-  const re = new RegExp(`(?<!${word})(?:${parts.join("|")})`, "giu");
+  const re = new RegExp(parts.join("|"), "giu");
   const frag = document.createDocumentFragment(), marks = [];
   let pos = 0;
   for (const m of text.matchAll(re)) {
@@ -687,23 +689,31 @@ const Review = {
 const topSignal = sig => Object.entries(sig).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
 
 /* ---- documents tab ---- */
-// Typing searches titles, URLs and text through the search index, best match first. Documents with
-// no text aren't in it, so for failed and waiting ones the box filters the plain list by URL and title.
+// With the search index (osiris ui --search-index), typing searches titles, URLs and text, best match
+// first. Documents with no text aren't in it, so for failed and waiting ones the box filters the plain
+// list by URL and title. Without the index, the box filters by URL and title, and "Inside documents"
+// scans the text when you press Enter.
 const NO_TEXT = ["failed", "pending"];
 const Docs = {
-  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", terms: [], note: "", seq: 0, ranked: false,
+  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", terms: [], note: "", seq: 0, ranked: false, inText: false,
   build() {
     if (this.built) return; this.built = true;
     const refresh = () => { this.at = -1; this.load(); };
+    const indexed = config.search_index;
+    const placeholder = () => indexed ? "Search titles, URLs and text" : this.inText ? "Search inside documents, then press Enter" : "Search titles and URLs";
     let timer;
     $("#documents").append(
       h("div", {class: "list-pane"},
         h("div", {class: "list-tools"},
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-q", placeholder: "Search titles, URLs and text", "aria-label": "Search", oninput: e => {
-              this.q = e.target.value; clearTimeout(timer); timer = setTimeout(refresh, 250);
+            h("input", {type: "search", id: "doc-q", placeholder: placeholder(), "aria-label": "Search", oninput: e => {
+              this.q = e.target.value; clearTimeout(timer); if (indexed || !this.inText) timer = setTimeout(refresh, 250);
             }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }})),
           h("div", {class: "tool-row"},
+            !indexed && h("label", {class: "opt", style: "flex:none"}, h("input", {type: "checkbox", onchange: e => {
+              this.inText = e.target.checked; $("#doc-q").placeholder = placeholder();
+              if (!this.inText || this.q.trim().length > 1) refresh();
+            }}), "Inside documents"),
             h("select", {"aria-label": "Source", onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l}, LANE_LABEL[l]))),
             h("select", {"aria-label": "Status", id: "doc-status", onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v}, l))),
             h("select", {"aria-label": "Why it failed", id: "doc-reason", hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }})),
@@ -715,7 +725,9 @@ const Docs = {
     const self = Docs;
     self.build();
     const seq = ++self.seq, off = more ? self.items.length : 0;
-    const term = self.q.trim(), ranked = !!term && !NO_TEXT.includes(self.status);
+    const term = self.q.trim(), indexed = config.search_index;
+    const ranked = indexed && !!term && !NO_TEXT.includes(self.status);
+    const scan = !indexed && self.inText && term.length > 1 && !NO_TEXT.includes(self.status);
     $("#doc-help").hidden = !ranked;
     if (self.status === "failed") self.loadReasons();
     else $("#doc-reason").hidden = true;
@@ -726,6 +738,12 @@ const Docs = {
       self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
         + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}, best first`;
       self.terms = r.terms;
+    } else if (scan) {
+      if (!more) $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
+      r = await api(`/api/search?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}`);
+      self.note = r.limited ? `The newest ${fmt(r.items.length)} matches. Search for something more specific to narrow it.`
+        : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`;
+      self.terms = r.terms;
     } else {
       r = await api(`/api/documents?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&reason=${encodeURIComponent(self.reason)}&offset=${off}`);
       self.note = `${fmt(r.total)} documents` + (term ? ` with "${term}" in the URL or title` : "");
@@ -733,7 +751,7 @@ const Docs = {
     }
     if (seq !== self.seq) return;  // a newer search has started
     self.items = more ? [...self.items, ...r.items] : r.items;
-    self.total = r.total; self.ranked = ranked;
+    self.total = r.total; self.ranked = ranked || scan;
     self.renderList();
   }),
   async loadReasons() {

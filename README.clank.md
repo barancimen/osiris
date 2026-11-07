@@ -32,7 +32,7 @@ Optional system and Python extras:
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the rate and the time left. **Stop** saves progress, and starting again resumes.
 - **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
-- **Documents:** search everything you've archived, best match first (see [Searching](#searching)), and filter by source and status. Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw` copy. Web documents link to the live page.
+- **Documents:** search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw` copy. Web documents link to the live page.
 - **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
 
 **Keyboard in Review:** `j`/`k` move, `f` fine, `b` bad, `o` OCR it, `r` fetch again, `x` can't fix, `u` undo, `n` write a note.
@@ -86,7 +86,15 @@ From the command line: `osiris audit scan`, then `osiris audit apply`, which als
 
 ## Searching
 
-Every saved document is in a full-text index, `data/search.sqlite`. The web page keeps it up to date by itself: when it starts, every few minutes while a job runs, and when a job ends. A document is read again only when its file has changed. The first build reads everything, and a search finds what's indexed so far.
+Without an index, the web page's **Inside documents** search reads the documents one by one, newest first, and stops at 100 matches. For ranked search, keep a full-text index, `data/search.sqlite`. It's off by default, since it takes disk space and some CPU. To turn it on:
+
+```sh
+.venv/bin/osiris ui --search-index
+```
+
+The web page then keeps the index up to date by itself: when it starts, every few minutes while a job runs, and when a job ends. A document is read again only when its file has changed. The first build reads everything, and a search finds what's indexed so far. Without the flag the page doesn't create, update or read the index, so `data/search.sqlite` and `data/search.lock` can be deleted.
+
+`osiris search` builds or updates the index whenever you run it, with or without the flag:
 
 ```sh
 .venv/bin/osiris search kuantum bilgisayar
@@ -101,7 +109,9 @@ Every saved document is in a full-text index, `data/search.sqlite`. The web page
 - **Size:** on real text the index took about 60% as much space as `md/`. About half of that is a compressed copy of each document's text, which lets a changed document be taken out of the index again.
 - **Failed and waiting documents:** these have no text, so they're not in the index. In the web page, with **Failed** or **Waiting** chosen, the search box filters by URL and title.
 
-`osiris search` brings the index up to date before searching, and waits if the web page is updating it.
+These rules apply to the index. The plain **Inside documents** scan matches exactly what you type, ignoring case.
+
+If the web page is updating the index at the time, `osiris search` waits for it to finish.
 
 ## Your originals
 
@@ -117,7 +127,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 
 | Command | What it does |
 |---|---|
-| `osiris ui` | Opens the web interface |
+| `osiris ui` | Opens the web interface. `--search-index` adds [ranked search](#searching) |
 | `osiris audit {scan,apply}` | Finds probable garbage, or carries out queued fixes |
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
@@ -329,7 +339,7 @@ Everything goes in `data/`.
 | `corpus.jsonl` | Written by `osiris export` |
 | `audit.sqlite` | Garbage scores and your review decisions |
 | `audit-exclude.txt` | Paths of documents marked Bad or Can't fix |
-| `search.sqlite`, `search.lock` | The full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
+| `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
 | `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw`. Budget about 1–1.5 GB for 20,000 pages, plus about 2 MB per PDF |
 
