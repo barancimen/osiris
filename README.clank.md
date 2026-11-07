@@ -77,10 +77,10 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 | **Fine** | Stays off the list unless its text changes |
 | **Bad** | Left out of `export` and listed in `data/review-exclude.txt`. It stays under **Bad** until you decide otherwise |
 | **OCR it** | PDFs only. Reads the PDF with OCR, and replaces the text if the new text scores better, even if it's shorter |
-| **Fetch again** | Fetches or reads it from scratch, replacing what's there. If that fails, the document is no longer exported |
+| **Fetch again** | Fetches or reads it from scratch. The new text is kept only if it's less garbled, and isn't thin where the old text wasn't. Otherwise, or if fetching fails, the earlier document is put back exactly as it was |
 | **Can't fix** | Like Bad, but no longer counted as something to come back to |
 
-**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that changed nothing comes back as Bad, with a note saying so.
+**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before. Fetch again puts the earlier document back when the result is worse or fetching fails, so it's never lost. Run fixes does this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris review apply` and the run it prints.
 
 If your indexer reads `data/md` directly, `data/review-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
 
@@ -172,7 +172,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
 - **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
 
-**What can change:** files in `data/`. **Fetch again** and **OCR it** replace a document's saved text, though never the original. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
+**What can change:** files in `data/`. **Fetch again** and **OCR it** replace a document's saved text when the new text is better, though never the original. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
 
 ## Commands
 

@@ -64,9 +64,13 @@ def md_path(out: Path, did: str) -> Path:
 def read_doc_file(path: Path) -> tuple[dict, str] | None:
     """(front matter, body) of a stored document, or None if it isn't there."""
     try:
-        raw = path.read_text(encoding="utf-8")
+        return parse_doc(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
+
+
+def parse_doc(raw: str) -> tuple[dict, str]:
+    """(front matter, body) of a stored document's text."""
     meta: dict = {}
     if raw.startswith("---\n"):
         header, _, body = raw[4:].partition("\n---\n")

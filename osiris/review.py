@@ -7,6 +7,12 @@ own database, review.sqlite, so reviewing never competes with a run for the mani
 A decision holds for the exact text it was made about. When a document's text changes, its decision
 is dropped and it's scored afresh. A fix that was tried and changed nothing comes back as `bad`, so
 it can't be forgotten.
+
+Fetching again only ever improves a document. Its file and manifest rows are kept before it's
+queued, and the next check judges the result like OCR's: new text that's less garbled stays, unless
+it's thin where the old text wasn't (a cookie banner looks clean). Anything else, including a fetch
+that failed, puts the earlier document back as it was, with its earlier status. It comes back as
+Bad, so it stays out of exports until you mark it Fine.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from urllib.parse import urlsplit
 
 from . import clean
 from .route import doc_id
-from .store import Store, now_iso
+from .store import Store, now_iso, parse_doc
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +92,11 @@ CREATE TABLE IF NOT EXISTS decisions (
     hash       TEXT,           -- the text this decision was about
     decided_at TEXT,
     applied_at TEXT            -- ocr and refetch: when the fix was attempted
+);
+CREATE TABLE IF NOT EXISTS refetch_kept (
+    doc_id   TEXT PRIMARY KEY,
+    original BLOB,             -- the document's file before fetching again, zstd; NULL if it had none
+    rows     TEXT NOT NULL     -- JSON: its manifest rows then, to put back if the new result isn't better
 );
 """
 
@@ -228,7 +239,7 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
             log.info("review: %d of %d checked, %d scored", i, len(rows), scored)
     db.commit()
 
-    settled = _settle(db, current)
+    settled = _settle(db, store, current)
     # a document that's gone keeps its row only while a decision still refers to it
     db.execute("CREATE TEMP TABLE here (doc_id TEXT PRIMARY KEY)")
     db.executemany("INSERT INTO here VALUES (?)", ((d,) for d in current))
@@ -241,12 +252,25 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
     return result
 
 
-def _settle(db: sqlite3.Connection, current: set[str]) -> dict[str, int]:
+def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str, int]:
     hashes = dict(db.execute("SELECT doc_id, hash FROM scores"))
     changed = no_change = 0
     for did, decision, note, old_hash, applied in db.execute(
         "SELECT doc_id, decision, note, hash, applied_at FROM decisions"
     ).fetchall():
+        kept = db.execute("SELECT original, rows FROM refetch_kept WHERE doc_id = ?", (did,)).fetchone()
+        if decision == "refetch" and applied and kept:
+            outcome = _judge_refetch(db, store, did, kept, did in current)
+            if outcome is None:  # better text: it gets a new look, like any changed text
+                db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))
+                changed += 1
+            else:
+                db.execute("UPDATE decisions SET decision = 'bad', note = ?, applied_at = NULL WHERE doc_id = ?",
+                           ("; ".join(filter(None, (note, outcome))), did))
+                no_change += 1
+                current.add(did)
+            db.execute("DELETE FROM refetch_kept WHERE doc_id = ?", (did,))
+            continue
         if did in current and hashes.get(did) != old_hash:
             db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))  # new text gets a new look
             changed += 1
@@ -274,6 +298,62 @@ def rescore(db: sqlite3.Connection, did: str, title: str | None, body: str, path
     db.execute("UPDATE scores SET title = ?, chars = ?, mtime = ?, size = ?, hash = ?, score = ?, signals = ?,"
                " excerpt = ? WHERE doc_id = ?", (title, len(body), stat.st_mtime, stat.st_size, text_hash(body),
                                                  score(found, row[0]), json.dumps(found), _excerpt(body), did))
+
+
+ROW_FIELDS = ("url", "status", "reason", "http_status", "final_url", "content_type", "chars", "raw_path", "tried",
+              "updated_at")
+
+
+def _keep_for_refetch(store: Store, db: sqlite3.Connection, key: str) -> None:
+    """The document as it is, to put back if fetching it again doesn't give anything better."""
+    import zstandard
+
+    did = doc_id(key)
+    try:
+        original = zstandard.ZstdCompressor(level=6).compress(store.md_path(did).read_bytes())
+    except FileNotFoundError:
+        original = None
+    rows = [dict(zip(ROW_FIELDS, r)) for r in store.db.execute(
+        f"SELECT {', '.join(ROW_FIELDS)} FROM urls WHERE doc_key = ?", (key,))]
+    # the first copy is the one to keep: fetching again twice before a check mustn't keep the second try
+    db.execute("INSERT OR IGNORE INTO refetch_kept VALUES (?, ?, ?)", (did, original, json.dumps(rows)))
+
+
+def _judge_refetch(db: sqlite3.Connection, store: Store, did: str, kept: tuple, here: bool) -> str | None:
+    """Keep what fetching again gave if it's better, and return None. Otherwise put the earlier
+    document back and return a note saying why."""
+    import zstandard
+
+    original, rows = kept
+    rows = json.loads(rows)
+    if original is None:  # nothing to go back to: whatever came is all there is
+        return None if here else "Fetching again failed"
+    old_raw = zstandard.ZstdDecompressor().decompress(original)
+    path = store.md_path(did)
+    if here:
+        new_text = store.read_doc(did)[1]
+        old_text = parse_doc(old_raw.decode("utf-8"))[1]
+        if new_text == old_text:
+            return "Fetching again changed nothing"
+        lane = store.db.execute("SELECT lane FROM urls WHERE doc_id = ? LIMIT 1", (did,)).fetchone()[0]
+        newly_thin = store.db.execute("SELECT 1 FROM urls WHERE doc_id = ? AND status = 'thin'", (did,)).fetchone() \
+            and not any(r["status"] == "thin" for r in rows)
+        if not newly_thin and score_text(new_text, lane) < score_text(old_text, lane):
+            return None
+        why = "Fetching again didn't give better text, so the earlier text was put back"
+    else:
+        why = "Fetching again failed, so the earlier text was put back"
+    tmp = path.with_suffix(".md.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(old_raw)
+    os.replace(tmp, path)
+    for r in rows:
+        store.db.execute(f"UPDATE urls SET {', '.join(f'{k} = ?' for k in ROW_FIELDS[1:])} WHERE url = ?",
+                         (*(r[k] for k in ROW_FIELDS[1:]), r["url"]))
+    store.commit()
+    meta, body = store.read_doc(did)
+    rescore(db, did, meta.get("title"), body, path)
+    return why
 
 
 def counts(db: sqlite3.Connection) -> dict[str, int]:
@@ -344,6 +424,7 @@ def apply_refetch(store: Store, db: sqlite3.Connection) -> list[str]:
             db.execute("UPDATE decisions SET decision = 'bad', note = 'A saved page can only be imported again'"
                        " WHERE doc_id = ?", (doc_id(key),))
             continue
+        _keep_for_refetch(store, db, key)
         store.db.execute("UPDATE urls SET status = 'pending', tried = '' WHERE doc_key = ?", (key,))
         db.execute("UPDATE decisions SET applied_at = ? WHERE doc_id = ?", (now_iso(), doc_id(key)))
         lanes.add(lane)
