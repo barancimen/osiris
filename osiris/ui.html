@@ -140,6 +140,18 @@ dialog::backdrop { background: rgb(0 0 0 / .35); }
 .picker-list button:hover { background: var(--sunk); }
 .picker-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
 .picker-foot .hint { flex: 1; }
+.bar { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; margin: 2px 0 6px; }
+.bar i { display: block; height: 100%; background: var(--accent); transition: width .5s; }
+.progress-text { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+mark { background: var(--warn-soft); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--warn-soft); }
+mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px var(--warn); }
+.explain { padding: 9px 11px; background: var(--bad-soft); border-radius: 6px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.explain .actions { gap: 6px; }
+.matches { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.head-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.retry-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: 13px; }
+.retry-list .chip { cursor: default; padding-right: 4px; }
+.retry-list .chip button { background: none; border: 0; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 6px; display: none; z-index: 10; max-width: calc(100vw - 32px); }
 @media (max-width: 760px) {
   .tab.on.split { flex-direction: column; }
@@ -195,6 +207,7 @@ const guarded = fn => async (...args) => { try { return await fn(...args); } cat
 let currentTab = "archive";
 function showTab(name) {
   currentTab = name;
+  if (name !== "documents" || !location.hash.startsWith("#documents/")) setHash(name);
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === name);
   for (const s of document.querySelectorAll(".tab")) s.classList.toggle("on", s.id === name);
   if (name === "review") Review.load();
@@ -214,6 +227,7 @@ let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
 
 const saveConfig = guarded(async () => { config = await api("/api/config", config); });
+const reloadConfig = guarded(async () => { config = await api("/api/config"); $("#options")?.replaceWith(renderOptions()); });
 
 function renderArchive() {
   const col = $("#archive-column");
@@ -229,6 +243,7 @@ function renderArchive() {
         h("button", {class: "btn", id: "audit", onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
         h("button", {class: "btn", id: "export", onclick: guarded(() => startJob("export"))}, "Export corpus"),
       ),
+      h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
       h("div", {id: "log", tabindex: 0, "aria-label": "Job output"})),
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
@@ -264,7 +279,7 @@ function renderOptions() {
   const set = (name, value) => { o[name] = value; saveConfig(); };
   const check = (name, label) => h("label", {class: "opt"}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => set(name, e.target.checked)}), label);
   const text = (name, label, placeholder, type = "text") => h("label", {class: "opt"}, label, h("input", {type, value: o[name] ?? "", placeholder, onchange: e => set(name, e.target.value.trim())}));
-  return h("div", {class: "card"}, h("h2", {}, "2. How to archive it"),
+  return h("div", {class: "card", id: "options"}, h("h2", {}, "2. How to archive it"),
     h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip"},
       h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => {
         o.lanes = e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane); saveConfig();
@@ -288,7 +303,17 @@ function renderOptions() {
         check("billed_twitter", "Allow twitterapi.io (billed per tweet)"),
       ),
     ),
+    o.retry_hosts.length > 0 && h("div", {class: "retry-list"},
+      h("span", {class: "hint"}, o.retry_failed ? "Every failed URL is tried again, including on" : "Next run tries failed URLs again on"),
+      o.retry_hosts.map(host => h("span", {class: "chip"}, host,
+        h("button", {"aria-label": `Don't retry ${host}`, title: "Don't retry this site", onclick: () => setRetry(host, false)}, "×")))),
   );
+}
+function setRetry(host, on) {
+  const hosts = config.options.retry_hosts.filter(x => x !== host);
+  config.options.retry_hosts = on ? [...hosts, host] : hosts;
+  saveConfig();
+  $("#options")?.replaceWith(renderOptions());
 }
 
 async function startJob(kind) {
@@ -319,7 +344,12 @@ function renderState(s) {
   }
 
   const keys = $("#keys");
-  if (keys) keys.textContent = "Saved in " + s.out + ". Keys found: " + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ".";
+  const ix = s.index;
+  if (keys) keys.textContent = "Saved in " + s.out + ". Keys found: " + (Object.entries(s.keys).filter(([, v]) => v).map(([k]) => k).join(", ") || "none") + ". "
+    + (ix.error ? "The search index couldn't be updated: " + ix.error
+       : ix.updating && ix.total ? `Updating the search index: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`
+       : `${fmt(ix.documents)} documents in the search index.`);
+  renderProgress(s.job, lanes);
 
   const j = s.job;
   const newLog = j.count < logSeen || jobKey !== j.started;
@@ -344,8 +374,44 @@ function renderState(s) {
   c.hidden = !s.review.to_review;
   c.textContent = fmt(s.review.to_review);
   if (Review.fixing && !j.active) { Review.fixing = false; if (currentTab === "review") Review.load(); }
+  if (renderState.wasActive && !j.active) reloadConfig();  // a finished run clears the sites it retried
+  renderState.wasActive = j.active;
 }
-async function tick() { try { renderState(await api("/api/state?since=" + logSeen)); } catch (e) { /* the next tick retries */ } }
+/* progress of a run, from how many URLs it has finished and how many are left */
+const Progress = {samples: [], job: null};
+function renderProgress(j, lanes) {
+  const box = $("#run-progress");
+  if (!box) return;
+  const p = j.progress;
+  box.hidden = !p;
+  if (!p) { Progress.samples = []; return; }
+  if (Progress.job !== j.started) { Progress.job = j.started; Progress.samples = []; }
+  const now = Date.now();
+  Progress.samples.push([now, p.done]);
+  while (Progress.samples.length > 2 && now - Progress.samples[0][0] > 180000) Progress.samples.shift();
+  const all = p.done + p.waiting;
+  $("#run-bar").style.width = (all ? Math.round(100 * p.done / all) : 0) + "%";
+  const [t0, d0] = Progress.samples[0], seconds = (now - t0) / 1000, rate = seconds >= 20 ? (p.done - d0) / seconds : null;
+  const youtube = lanes.youtube?.pending || 0;
+  const parts = [`${fmt(p.done)} of ${fmt(all)} done`];
+  if (!p.waiting) parts.push("now trying fallbacks for what failed or came back thin, then OCR");
+  else if (youtube === p.waiting) parts.push("only YouTube is left, which goes one video at a time on purpose. Stopping is safe, and starting again resumes");
+  else if (rate > 0) parts.push(`${rate < 10 ? rate.toFixed(1) : Math.round(rate)} a second`, "about " + duration(p.waiting / rate) + " left");
+  else if (rate === 0 && seconds >= 120) parts.push("nothing finished in the last two minutes");
+  $("#run-text").textContent = parts.filter(Boolean).join(" · ");
+}
+function duration(sec) {
+  if (sec < 90) return "a minute";
+  if (sec < 3600) return Math.round(sec / 60) + " minutes";
+  const hours = Math.floor(sec / 3600), min = Math.round((sec % 3600) / 60);
+  return hours >= 48 ? Math.round(hours / 24) + " days" : `${hours} h ${min} min`;
+}
+
+async function tick() {
+  if (document.hidden) return;  // nobody's looking; the log catches up on the next tick
+  try { renderState(await api("/api/state?since=" + logSeen)); } catch (e) { /* the next tick retries */ }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 
 /* ---- folder picker ---- */
 const Picker = {
@@ -379,12 +445,86 @@ const Picker = {
 };
 
 /* ---- shared document view ---- */
+// why something failed, in words, and what may still get it
+const REASONS = [
+  [/^http_403$/, "The site refused the request (403), usually a bot wall or a login. The headless browser, your browser's cookies, or a page saved with SingleFile can get past it."],
+  [/^http_40[12]$/, "The page needs a login or a subscription. Your browser's cookies, or a page saved with SingleFile, can get it."],
+  [/^http_(404|410)$/, "The page isn't there any more."],
+  [/^http_429$/, "The site said too many requests. Trying again later usually works."],
+  [/^http_(999|418|420)$/, "The site turns away automated requests. A page saved with SingleFile works."],
+  [/^http_5\d\d$/, "The site had a server error. Trying again later may work."],
+  [/^http_/, "The site answered with an error."],
+  [/^host_down$/, "The site stopped answering, so the rest of its pages weren't tried. Trying again later may work."],
+  [/^(timeout|connect|payload|socket_timeout|no_network)$/, "The connection failed or timed out. Trying again later may work."],
+  [/^dns$/, "The site's name doesn't resolve, so the domain is probably gone."],
+  [/^ssl$/, "The site's secure connection failed, often because of an expired certificate."],
+  [/^redirects$/, "The page redirected too many times, often a login loop. Your browser's cookies may help."],
+  [/^no_text$/, "The page loaded but had no readable text, usually because it's a JavaScript app. The headless browser can help."],
+  [/^challenge$/, "A bot-challenge page didn't clear in the headless browser."],
+  [/^not_in_scry$/, "Scry's archive doesn't have this tweet, and twitterapi.io wasn't used for it."],
+  [/^not_found$/, "The source says it doesn't exist, or it was deleted."],
+  [/^too_large$/, "It's over the size limit: 50 MB for a PDF, 5 MB for a page."],
+  [/^non_text:/, "It isn't a page or a document but an image, video or other file, so it wasn't downloaded."],
+  [/^(pdf_error|not_a_pdf)/, "The PDF couldn't be read."],
+  [/^drm_protected$/, "The book is under DRM, which osiris doesn't work around."],
+  [/^file_missing$/, "The file isn't at its saved path on this machine."],
+  [/^file_unreadable$/, "The file couldn't be opened."],
+  [/^(extract_crashed|extract_timeout|huge_tree|ocr_timeout)$/, "Reading it crashed or took too long, which usually means a huge or broken file."],
+  [/^no_transcript$/, "The video has no captions."],
+  [/^(api_error|youtube_request_failed|list_error)$/, "The source's API returned an error. Trying again later may work."],
+  [/^bad_url$/, "The URL isn't valid."],
+  [/^(bug:|error:)/, "Something went wrong in osiris itself. The run's log has the details."],
+];
+const PASS_LABEL = {impersonate: "a browser's TLS fingerprint", render: "the headless browser", doi: "the DOI lookup", wayback: "the Wayback Machine", refresh: "a PDF refresh"};
+const explainReason = reason => REASONS.find(([re]) => re.test(reason || ""))?.[1] ?? "";
+const reasonLabel = reason => (reason || "unknown").replace(/^http_(\d+)$/, "HTTP $1").replace(/^non_text:/, "not text: ").replaceAll("_", " ");
+
+function failureBox(d) {
+  if (d.status !== "failed") return null;
+  const tried = d.tried.filter(t => PASS_LABEL[t]).map(t => PASS_LABEL[t]);
+  const retryable = d.host && !["localfile", "singlefile"].includes(d.lane);
+  const queued = retryable && config.options.retry_hosts.includes(d.host);
+  return h("div", {class: "explain"},
+    h("div", {}, explainReason(d.reason) || "There's no explanation for this reason yet."),
+    tried.length > 0 && h("div", {class: "hint"}, "Already tried with " + tried.join(", ") + "."),
+    retryable && h("div", {class: "actions"},
+      h("button", {class: "btn", "aria-pressed": queued, onclick: e => {
+        setRetry(d.host, !queued);
+        e.currentTarget.closest(".explain").replaceWith(failureBox(d));
+        toast(queued ? `${d.host} won't be retried` : `The next archive run tries failed URLs on ${d.host} again`);
+      }}, queued ? `Retrying ${d.host} next run` : `Retry ${d.host} next run`),
+      h("span", {class: "hint"}, "Every failed URL on that site gets fetched again, with all its fallbacks.")));
+}
+
+// the saved text with every match of the search marked, and a way to step through them
+function markedBody(text, terms) {
+  const body = h("div", {class: "body", tabindex: 0, "aria-label": "Saved text"});
+  const word = "[\\p{L}\\p{N}_]";
+  const parts = (terms || []).map(t => t.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (t.prefix ? word + "*" : `(?!${word})`))
+    .sort((a, b) => b.length - a.length);
+  if (!parts.length) { body.textContent = text; return {body, marks: []}; }
+  const re = new RegExp(`(?<!${word})(?:${parts.join("|")})`, "giu");
+  const frag = document.createDocumentFragment(), marks = [];
+  let pos = 0;
+  for (const m of text.matchAll(re)) {
+    if (marks.length >= 2000) break;
+    frag.append(text.slice(pos, m.index));
+    const mark = h("mark", {}, m[0]);
+    marks.push(mark); frag.append(mark);
+    pos = m.index + m[0].length;
+  }
+  frag.append(text.slice(pos));
+  body.append(frag);
+  return {body, marks};
+}
+
 function renderDetail(host, d, opts = {}) {
   const hasText = !!d.body;
   const url = d.web_url;
   let mode = opts.mode || (hasText ? "text" : "original");
   const viewEl = h("div", {style: "flex:1;min-height:0;display:flex;flex-direction:column"});
   const switcher = h("div", {class: "view-switch"});
+  const matchBar = h("div", {class: "matches", role: "status"});
   function draw() {
     fill(switcher,
       hasText && h("button", {class: "btn", "aria-pressed": mode === "text", onclick: () => { mode = "text"; draw(); }}, "Saved text"),
@@ -393,10 +533,27 @@ function renderDetail(host, d, opts = {}) {
       d.original.available && h("a", {class: "btn", href: `/original/${d.id}`, target: "_blank", rel: "noreferrer", style: "text-decoration:none"}, d.original.viewer === "download" ? "Download original" : "Open original"),
       url && h("a", {class: "btn", href: url, target: "_blank", rel: "noreferrer noopener", style: "text-decoration:none"}, "Open web page"),
     );
+    matchBar.replaceChildren();
     if (mode === "text" && hasText) {
+      const {body, marks} = markedBody(d.body, opts.terms);
       viewEl.replaceChildren(
         d.truncated ? h("div", {class: "notice"}, `Showing the first ${fmt(d.body.length)} of ${fmt(d.length)} characters. Open .md shows it all.`) : "",
-        h("div", {class: "body", tabindex: 0, "aria-label": "Saved text"}, d.body));
+        body);
+      if (marks.length) {
+        let at = 0;
+        const label = h("span", {});
+        const go = step => {
+          marks[at].classList.remove("here");
+          at = (at + step + marks.length) % marks.length;
+          marks[at].classList.add("here");
+          marks[at].scrollIntoView({block: "center"});
+          label.textContent = `${fmt(at + 1)} of ${fmt(marks.length)}${marks.length >= 2000 ? "+" : ""} matches`;
+        };
+        matchBar.append(label, h("button", {class: "btn", onclick: () => go(-1), "aria-label": "Previous match"}, "↑"),
+                        h("button", {class: "btn", onclick: () => go(1), "aria-label": "Next match"}, "↓", h("kbd", {}, "n")));
+        Matches.go = go;
+        requestAnimationFrame(() => go(0));
+      }
     } else if (d.original.available && d.original.viewer !== "download") {
       const frameProps = {class: "frame", src: `/original/${d.id}`, title: "Original document"};
       if (d.original.viewer !== "pdf") frameProps.sandbox = "";
@@ -405,10 +562,11 @@ function renderDetail(host, d, opts = {}) {
       viewEl.replaceChildren(h("div", {class: "notice" + (d.local_missing ? " warn" : "")},
         d.local_missing ? "The original file isn't at its saved path on this machine." :
         hasText ? "This file type can't be previewed here. Use the download button." :
-        d.status === "failed" ? `No text was saved: ${d.reason || "unknown reason"}.` :
+        d.status === "failed" ? "No text was saved." :
         d.status === "pending" ? "This one hasn't been archived yet." : "No text was saved for this one."));
     }
   }
+  Matches.go = null;
   draw();
   const location = url ? h("a", {href: url, target: "_blank", rel: "noreferrer noopener"}, url) : d.original.path ? h("span", {}, d.original.path) : h("span", {}, d.url);
   host.replaceChildren(
@@ -423,15 +581,17 @@ function renderDetail(host, d, opts = {}) {
         d.score !== null && d.score >= 0.35 ? h("span", {class: "pill bad"}, "Garbage score " + d.score.toFixed(2)) : "",
         Object.entries(d.signals).filter(([, v]) => v >= 0.25).map(([k]) => h("span", {class: "pill warn"}, k)),
       ),
+      failureBox(d),
       opts.actions,
-      switcher,
+      h("div", {class: "head-row"}, switcher, matchBar),
     ),
     viewEl);
 }
+const Matches = {go: null};  // stepping through the open document's matches, for the n key
 function statusPill(d) {
   const map = {ok: ["Saved", "good"], thin: ["Thin", "warn"], failed: ["Failed", "bad"], pending: ["Waiting", ""], skipped: ["Skipped", ""]};
   const [label, cls] = map[d.status] || [d.status, ""];
-  return h("span", {class: "pill " + cls}, label + (d.reason && d.status !== "ok" ? `: ${d.reason}` : ""));
+  return h("span", {class: "pill " + cls}, label + (d.reason && d.status !== "ok" ? ": " + reasonLabel(d.reason) : ""));
 }
 
 /* ---- review tab ---- */
@@ -527,67 +687,113 @@ const Review = {
 const topSignal = sig => Object.entries(sig).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
 
 /* ---- documents tab ---- */
+// Typing searches titles, URLs and text through the search index, best match first. Documents with
+// no text aren't in it, so for failed and waiting ones the box filters the plain list by URL and title.
+const NO_TEXT = ["failed", "pending"];
 const Docs = {
-  built: false, items: [], at: -1, total: 0, offset: 0, q: "", lane: "", status: "", inText: false, note: "",
+  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", terms: [], note: "", seq: 0, ranked: false,
   build() {
     if (this.built) return; this.built = true;
-    const refresh = () => { this.offset = 0; this.at = -1; this.load(); };
+    const refresh = () => { this.at = -1; this.load(); };
     let timer;
     $("#documents").append(
       h("div", {class: "list-pane"},
         h("div", {class: "list-tools"},
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-q", placeholder: "Search titles and URLs", "aria-label": "Search", oninput: e => {
-              this.q = e.target.value; clearTimeout(timer); if (!this.inText) timer = setTimeout(refresh, 250);
-            }, onkeydown: e => { if (e.key === "Enter") refresh(); }})),
+            h("input", {type: "search", id: "doc-q", placeholder: "Search titles, URLs and text", "aria-label": "Search", oninput: e => {
+              this.q = e.target.value; clearTimeout(timer); timer = setTimeout(refresh, 250);
+            }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }})),
           h("div", {class: "tool-row"},
-            h("label", {class: "opt", style: "flex:none"}, h("input", {type: "checkbox", onchange: e => { this.inText = e.target.checked; $("#doc-q").placeholder = this.inText ? "Search inside documents, then press Enter" : "Search titles and URLs"; if (!this.inText || this.q.length > 1) refresh(); }}), "Inside documents"),
-            h("select", {"aria-label": "Source", onchange: e => { this.lane = e.target.value; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l}, LANE_LABEL[l]))),
-            h("select", {"aria-label": "Status", onchange: e => { this.status = e.target.value; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v}, l))))),
+            h("select", {"aria-label": "Source", onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l}, LANE_LABEL[l]))),
+            h("select", {"aria-label": "Status", id: "doc-status", onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v}, l))),
+            h("select", {"aria-label": "Why it failed", id: "doc-reason", hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }})),
+          h("p", {class: "hint", id: "doc-help"}, 'All words must appear. "Quoted words" appear together, and -word leaves out documents with it.')),
         h("div", {class: "rows", id: "doc-rows"})),
       h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here."))));
   },
   load: guarded(async function (more) {
     const self = Docs;
     self.build();
+    const seq = ++self.seq, off = more ? self.items.length : 0;
+    const term = self.q.trim(), ranked = !!term && !NO_TEXT.includes(self.status);
+    $("#doc-help").hidden = !ranked;
+    if (self.status === "failed") self.loadReasons();
+    else $("#doc-reason").hidden = true;
     let r;
-    if (self.inText && self.q.trim().length > 1) {
-      $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
-      r = await api(`/api/search?q=${encodeURIComponent(self.q.trim())}`);
-      r.items = r.items.filter(i => (!self.lane || i.lane === self.lane) && (!self.status || i.status === self.status));
-      self.note = r.limited ? `First ${fmt(r.items.length)} matches. Search for something more specific to narrow it.` : `${fmt(r.items.length)} matches in ${fmt(r.searched)} documents.`;
-      self.items = r.items; self.total = r.items.length;
+    if (ranked) {
+      r = await api(`/api/search?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&offset=${off}`);
+      const ix = r.index;
+      self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
+        + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}, best first`;
+      self.terms = r.terms;
     } else {
-      const off = more ? self.items.length : 0;
-      r = await api(`/api/documents?q=${encodeURIComponent(self.q)}&lane=${self.lane}&status=${self.status}&offset=${off}`);
-      self.items = more ? [...self.items, ...r.items] : r.items;
-      self.total = r.total; self.note = `${fmt(r.total)} documents`;
+      r = await api(`/api/documents?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&reason=${encodeURIComponent(self.reason)}&offset=${off}`);
+      self.note = `${fmt(r.total)} documents` + (term ? ` with "${term}" in the URL or title` : "");
+      self.terms = [];
     }
+    if (seq !== self.seq) return;  // a newer search has started
+    self.items = more ? [...self.items, ...r.items] : r.items;
+    self.total = r.total; self.ranked = ranked;
     self.renderList();
   }),
+  async loadReasons() {
+    const r = await api(`/api/reasons?lane=${this.lane}`);
+    const sel = $("#doc-reason");
+    sel.hidden = false;
+    sel.replaceChildren(h("option", {value: ""}, "Any reason"), ...r.reasons.map(x => h("option", {value: x.reason, selected: x.reason === this.reason,
+      title: explainReason(x.reason)}, `${reasonLabel(x.reason)} (${fmt(x.count)})`)));
+  },
   renderList() {
     const rows = $("#doc-rows");
     rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note),
       ...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
         h("div", {class: "title"}, it.title || it.url),
-        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right"}, it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${it.reason}` : it.status)),
-        it.snippet && h("div", {class: "snippet"}, it.snippet))));
+        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right"}, it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
+        it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)))));
     if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
   },
   open: guarded(async function (i) {
     const self = Docs;
+    const it = self.items[i];
+    if (!it) return;
     self.at = i;
     for (const [n, el] of [...$("#doc-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
-    renderDetail($("#doc-detail"), await api("/api/document/" + self.items[i].id));
+    $("#doc-rows").querySelectorAll(".row")[i]?.scrollIntoView({block: "nearest"});
+    await self.show(it.id, self.ranked ? self.terms : []);
   }),
+  async show(id, terms = []) {
+    this.build();
+    const d = await api("/api/document/" + id);
+    renderDetail($("#doc-detail"), d, {terms});
+    setHash("documents/" + id);
+  },
 };
+
+/* ---- address: #review, #documents, #documents/<id> ---- */
+function setHash(value) { if (location.hash.slice(1) !== value) history.replaceState(null, "", "#" + value); }
+function followHash() {
+  const [tab, id] = location.hash.slice(1).split("/");
+  if (!["archive", "review", "documents"].includes(tab)) return;
+  showTab(tab);
+  if (tab === "documents" && /^[0-9a-f]{16}$/.test(id || "")) guarded(() => Docs.show(id))();
+}
+window.addEventListener("hashchange", followHash);
 
 /* ---- keys ---- */
 document.addEventListener("keydown", e => {
-  if (e.ctrlKey || e.metaKey || e.altKey || currentTab !== "review" || $("#picker").open) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || $("#picker").open) return;
   const typing = e.target.matches("input, select, textarea");
   if (typing) { if (e.key === "Escape") e.target.blur(); return; }
   const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];
+  if (currentTab === "documents") {
+    if (go && e.target.closest(".body")) return;  // arrows scroll the text
+    if (go) { e.preventDefault(); const n = Docs.at + go; if (n >= 0 && n < Docs.items.length) Docs.open(n); return; }
+    if (e.key === "/") { e.preventDefault(); $("#doc-q")?.focus(); $("#doc-q")?.select(); return; }
+    if (e.key === "n" && Matches.go) { e.preventDefault(); Matches.go(1); return; }
+    if (e.key === "N" && Matches.go) { e.preventDefault(); Matches.go(-1); }
+    return;
+  }
+  if (currentTab !== "review") return;
   if (go) { e.preventDefault(); const n = Review.at + go; if (n >= 0 && n < Review.items.length) Review.open(n); return; }
   const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
   const blocked = (decision === "ocr" && !Review.doc?.pdf) || (decision === "refetch" && Review.doc?.lane === "singlefile");
@@ -601,6 +807,7 @@ document.addEventListener("keydown", e => {
   try {
     config = await api("/api/config");
     renderArchive();
+    followHash();
     await tick();
     setInterval(tick, 1500);
   } catch (e) { $("#archive-column").replaceChildren(h("div", {class: "notice warn"}, "Couldn't reach osiris. Is it still running?")); }

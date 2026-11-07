@@ -9,7 +9,6 @@ Originals are only served for files the manifest already knows about, never for 
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import json
 import os
 import re
@@ -20,12 +19,13 @@ import sys
 import time
 import webbrowser
 from collections import Counter, deque
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import audit
+from . import audit, search
 from .github import load_token
 from .localfile import candidate_paths
 from .route import LOCAL_READABLE
@@ -35,20 +35,22 @@ from .store import TMP_DIR, Store
 REPO_DIR = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).with_name("ui.html")
 LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
-STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 DOC_ID = re.compile(r"^[0-9a-f]{16}$")
 BILLED_KEY = "TWITTERAPI_IO_KEY"
 MAX_BODY = 400_000  # characters of a document sent to the page; the raw link has the rest
 PAGE_SIZE = 100
-SEARCH_LIMIT = 100
+INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
+PROGRESS_JOBS = ("Archive", "Fixes")  # jobs whose progress the manifest shows
+HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
 DEFAULT_CONFIG = {
     "backups": [], "local": [], "saved": [],
     "options": {"lanes": list(LANES), "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
                 "audit_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw": False,
-                "workers": "", "youtube_delay": "", "billed_twitter": False},
+                "workers": "", "youtube_delay": "", "billed_twitter": False,
+                "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
 }
 
 
@@ -65,6 +67,7 @@ class Job:
         self.state = "idle"  # idle | running | stopping | done | stopped | failed
         self.started = self.finished = None
         self.env_extra: dict[str, str | None] = {}
+        self.on_change = lambda: None  # a job started or ended
 
     @property
     def active(self) -> bool:
@@ -81,6 +84,7 @@ class Job:
         self.started, self.finished = time.time(), None
         self.env_extra = env or {}
         self.task = asyncio.create_task(self._main(flow))
+        self.on_change()
 
     async def _main(self, flow) -> None:
         try:
@@ -95,6 +99,7 @@ class Job:
         finally:
             self.finished = time.time()
             self.proc = None
+            self.on_change()
 
     async def run(self, label: str, argv: list[str], check: bool = True) -> list[str]:
         """Run one step and return its output. A stop request ends the series after this step."""
@@ -149,6 +154,43 @@ class Job:
 
 class _StepFailed(Exception):
     pass
+
+
+class Index:
+    """Keeps search.sqlite up to date in the background: at startup, when a job ends, and every few
+    minutes while one runs, so documents become searchable soon after they're archived."""
+
+    def __init__(self, out: Path):
+        self.out = out
+        self.updating = False
+        self.done = self.total = 0
+        self.documents = 0
+        self.error: str | None = None
+        self.wanted = asyncio.Event()
+        self.stopping = False
+
+    def _progress(self, done: int, total: int) -> None:
+        self.done, self.total = done, total
+
+    async def keep(self, job: Job) -> None:
+        while not self.stopping:
+            self.wanted.clear()
+            self.updating, self.done = True, 0
+            try:
+                result = await asyncio.to_thread(search.refresh, self.out, self._progress, lambda: self.stopping)
+                self.documents, self.error = result["documents"], None
+            except Exception as e:  # shown on the page, and tried again next time
+                self.error = f"{type(e).__name__}: {e}"
+            finally:
+                self.updating = False
+            try:
+                await asyncio.wait_for(self.wanted.wait(), INDEX_EVERY if job.active else None)
+            except asyncio.TimeoutError:
+                pass
+
+    def status(self) -> dict:
+        return {"updating": self.updating, "done": self.done, "total": self.total, "documents": self.documents,
+                "error": self.error}
 
 
 def read_manifest(out: Path) -> sqlite3.Connection:
@@ -239,6 +281,19 @@ def _lane_table(out: Path) -> dict:
     return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "documents": docs, "chars": chars}
 
 
+def _progress(out: Path, since: float) -> dict:
+    """URLs finished since the job started, and how many are still waiting."""
+    started = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db = read_manifest(out)
+    try:
+        done, waiting = db.execute(
+            "SELECT COALESCE(SUM(status NOT IN ('pending', 'skipped') AND updated_at >= ?), 0),"
+            " COALESCE(SUM(status = 'pending'), 0) FROM urls", (started,)).fetchone()
+    finally:
+        db.close()
+    return {"done": done, "waiting": waiting}
+
+
 async def state(request: web.Request) -> web.Response:
     app = request.app
     out, job = app["out"], app["job"]
@@ -254,7 +309,9 @@ async def state(request: web.Request) -> web.Response:
         **_lane_table(out),
         "review": review,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
-                "lines": lines, "started": job.started, "finished": job.finished},
+                "lines": lines, "started": job.started, "finished": job.finished,
+                "progress": _progress(out, job.started) if job.active and job.name in PROGRESS_JOBS else None},
+        "index": app["index"].status(),
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
                  "Stack Exchange": bool(os.environ.get("STACKEXCHANGE_KEY"))},
         "out": str(out),
@@ -275,10 +332,20 @@ async def set_config(request: web.Request) -> web.Response:
         if isinstance(body.get(key), list):
             config[key] = [str(p) for p in body[key]]
     config["options"].update({k: v for k, v in body.get("options", {}).items() if k in config["options"]})
+    config["options"]["retry_hosts"] = _retry_hosts(config["options"])
+    _save_config(out, config)
+    return web.json_response(config)
+
+
+def _retry_hosts(options: dict) -> list[str]:
+    hosts = options.get("retry_hosts")
+    return sorted({str(h).lower() for h in hosts if HOSTNAME.match(str(h).lower())}) if isinstance(hosts, list) else []
+
+
+def _save_config(out: Path, config: dict) -> None:
     tmp = config_path(out).with_suffix(".tmp")
     tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
     os.replace(tmp, config_path(out))
-    return web.json_response(config)
 
 
 async def browse(request: web.Request) -> web.Response:
@@ -359,6 +426,9 @@ def _run_args(options: dict, url_file: Path) -> list[str]:
     args += ["--ocr-lang", lang]
     if options.get("refresh") in ("web", "local", "both"):
         args += ["--refresh-pdfs", options["refresh"]]
+    if not options.get("retry_failed"):  # which already covers every site
+        for host in _retry_hosts(options):
+            args += ["--retry-host", host]
     for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw", "--keep-raw")):
         if options.get(option):
             args.append(flag)
@@ -416,6 +486,10 @@ async def start_archive(request: web.Request) -> web.Response:
         if config["saved"]:
             await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
         await j.run("Archiving", j.osiris(*run_args))
+        if retried := _retry_hosts(options):  # done: later runs leave those sites alone again
+            latest = load_config(out)
+            latest["options"]["retry_hosts"] = [h for h in _retry_hosts(latest["options"]) if h not in retried]
+            _save_config(out, latest)
         if options.get("audit_after", True):
             await j.run("Checking for garbage", j.osiris("audit", "scan"))
 
@@ -546,24 +620,34 @@ async def decide(request: web.Request) -> web.Response:
 
 # -- documents -----------------------------------------------------------------------------------
 
+def _titles(out: Path, db: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
+    """From the search index, which has every document, then the garbage check's scores."""
+    titles = search.titles(out, ids)
+    rest = [did for did in ids if did not in titles]
+    if rest:
+        titles.update(db.execute(f"SELECT doc_id, title FROM scores WHERE title IS NOT NULL AND doc_id IN"
+                                 f" ({','.join('?' * len(rest))})", rest))
+    return titles
+
+
 async def documents(request: web.Request) -> web.Response:
+    """The plain list, newest first, filtered by URL or title text: for every status, including
+    documents with no text, which the search index doesn't hold."""
     q = request.query
     out = request.app["out"]
     where, params = ["lane != 'skip'"], []
-    if q.get("lane"):
-        where.append("lane = ?")
-        params.append(q["lane"])
-    if q.get("status"):
-        where.append("status = ?")
-        params.append(q["status"])
+    for column in ("lane", "status", "reason"):
+        if q.get(column):
+            where.append(f"{column} = ?")
+            params.append(q[column])
     term = q.get("q", "").strip()
     db = audit.connect(out)
     try:
-        titled = {did: title for did, title in db.execute(
-            "SELECT doc_id, title FROM scores WHERE title LIKE ? LIMIT 500", (f"%{term}%",))} if term else {}
         if term:
-            marks = ",".join("?" * len(titled))
-            where.append(f"(url LIKE ? OR doc_id IN ({marks}))")
+            titled = set(search.matching_titles(out, term))
+            titled.update(did for (did,) in db.execute("SELECT doc_id FROM scores WHERE title LIKE ? LIMIT 2000",
+                                                       (f"%{term}%",)))
+            where.append(f"(url LIKE ? OR doc_id IN ({','.join('?' * len(titled))}))")
             params += [f"%{term}%", *titled]
         offset = max(int(q.get("offset", 0)), 0)
         clause = " AND ".join(where)
@@ -576,8 +660,7 @@ async def documents(request: web.Request) -> web.Response:
             total = manifest.execute(f"SELECT COUNT(DISTINCT doc_id) FROM urls WHERE {clause}", params).fetchone()[0]
         finally:
             manifest.close()
-        ids = [r[0] for r in rows]
-        titles = dict(db.execute(f"SELECT doc_id, title FROM scores WHERE doc_id IN ({','.join('?' * len(ids))})", ids))
+        titles = _titles(out, db, [r[0] for r in rows])
     finally:
         db.close()
     return web.json_response({"total": total, "items": [
@@ -586,46 +669,38 @@ async def documents(request: web.Request) -> web.Response:
         for did, url, lane, status, reason, chars in rows]})
 
 
-def _search_text(store_dir: Path, term: str) -> tuple[list[dict], int]:
-    """A plain case-insensitive scan of the markdown, stopping at the limit."""
-    needle = term.lower()
-    hits, searched = [], 0
-    for path in store_dir.glob("*/*.md"):
-        searched += 1
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        at = text.lower().find(needle)
-        if at < 0:
-            continue
-        start = max(at - 120, 0)
-        hits.append({"id": path.stem, "snippet": text[start:at + len(term) + 180]})
-        if len(hits) >= SEARCH_LIMIT:
-            break
-    return hits, searched
-
-
-async def search(request: web.Request) -> web.Response:
-    term = request.query.get("q", "").strip()
-    if len(term) < 2:
-        raise web.HTTPBadRequest(text="Search for at least 2 characters.")
-    out = request.app["out"]
-    hits, searched = await asyncio.to_thread(_search_text, out / "md", term)
-    db = read_manifest(out)
+async def reasons(request: web.Request) -> web.Response:
+    """Why documents failed, most common first, with the sites each reason hits most."""
+    lane = request.query.get("lane", "")
+    db = read_manifest(request.app["out"])
     try:
-        details = {did: rest for did, *rest in db.execute(
-            f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars) FROM urls"
-            f" WHERE doc_id IN ({','.join('?' * len(hits))}) GROUP BY doc_id", [h["id"] for h in hits])}
+        rows = db.execute(
+            "SELECT reason, url, doc_id FROM urls WHERE status = 'failed' AND lane != 'skip'"
+            + (" AND lane = ?" if lane else ""), (lane,) if lane else ()).fetchall()
     finally:
         db.close()
-    items = []
-    for hit in hits:
-        url, lane, status, reason, chars = details.get(hit["id"], ("", "", "", "", 0))
-        items.append({**hit, "url": url, "lane": lane, "status": status, "reason": reason, "chars": chars,
-                      "host": urlsplit(url).hostname or "local file"})
-    return web.json_response({"items": items, "total": len(items), "limited": len(items) >= SEARCH_LIMIT,
-                              "searched": searched})
+    docs: dict[str, set] = {}
+    hosts: dict[str, Counter] = {}
+    for reason, url, did in rows:
+        reason = reason or "unknown"
+        if did not in docs.setdefault(reason, set()):
+            docs[reason].add(did)
+            hosts.setdefault(reason, Counter())[urlsplit(url).hostname or "local file"] += 1
+    return web.json_response({"reasons": [
+        {"reason": r, "count": len(ids), "hosts": [{"host": h, "count": n} for h, n in hosts[r].most_common(5)]}
+        for r, ids in sorted(docs.items(), key=lambda kv: -len(kv[1]))]})
+
+
+async def search_documents(request: web.Request) -> web.Response:
+    """Ranked full-text search of titles, URLs and text, from the search index."""
+    q = request.query
+    term = q.get("q", "").strip()
+    if not term:
+        raise web.HTTPBadRequest(text="Type something to search for.")
+    index = request.app["index"]
+    found = await asyncio.to_thread(search.search, request.app["out"], term, q.get("lane", ""), q.get("status", ""),
+                                    search.PAGE, max(int(q.get("offset", 0)), 0))
+    return web.json_response({**found, "index": index.status()})
 
 
 def _doc_rows(out: Path, did: str) -> list[tuple]:
@@ -693,6 +768,7 @@ async def document(request: web.Request) -> web.Response:
     return web.json_response({
         "id": did, "meta": meta, "body": body[:MAX_BODY], "truncated": len(body) > MAX_BODY, "length": len(body),
         "urls": [r[0] for r in rows], "url": url, "final_url": final_url, "lane": lane, "status": status,
+        "host": urlsplit(url).hostname,
         "reason": reason, "http_status": http_status, "chars": chars,
         "tried": [t for t in (tried or "").split(",") if t],
         "web_url": None if local else url,
@@ -781,7 +857,14 @@ async def raw_text(request: web.Request) -> web.StreamResponse:
 
 # -- app -----------------------------------------------------------------------------------------
 
+async def _start_index(app: web.Application) -> None:
+    app["index_task"] = asyncio.create_task(app["index"].keep(app["job"]))
+
+
 async def _stop_job_on_exit(app: web.Application) -> None:
+    index = app["index"]
+    index.stopping = True  # the refresh in progress stops at its next document
+    index.wanted.set()
     job = app["job"]
     if job.active:
         job.stop()
@@ -789,6 +872,10 @@ async def _stop_job_on_exit(app: web.Application) -> None:
             await asyncio.wait_for(asyncio.shield(job.task), 15)
         except asyncio.TimeoutError:
             job.stop()
+    try:
+        await asyncio.wait_for(app["index_task"], 30)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
     app["store"].close()
 
 
@@ -799,7 +886,11 @@ def make_app(out: str | os.PathLike) -> web.Application:
     app["store"] = Store(out)  # creates and upgrades the manifest, so the read-only connections can open it
     app["token"] = load_ui_token(out)
     app["job"] = Job(out)
+    app["index"] = Index(out)
+    app["job"].on_change = app["index"].wanted.set
     audit.connect(out).close()
+    search.connect(out).close()
+    app.on_startup.append(_start_index)
     app.on_shutdown.append(_stop_job_on_exit)
     app.add_routes([
         web.get("/", index),
@@ -816,7 +907,8 @@ def make_app(out: str | os.PathLike) -> web.Application:
         web.get("/api/review", review),
         web.post("/api/decide", decide),
         web.get("/api/documents", documents),
-        web.get("/api/search", search),
+        web.get("/api/search", search_documents),
+        web.get("/api/reasons", reasons),
         web.get("/api/document/{id}", document),
         web.get("/original/{id}", original),
         web.get("/saved/{id}", raw_text),

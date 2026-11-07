@@ -56,6 +56,27 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def md_path(out: Path, did: str) -> Path:
+    return out / "md" / did[:2] / f"{did}.md"
+
+
+def read_doc_file(path: Path) -> tuple[dict, str] | None:
+    """(front matter, body) of a stored document, or None if it isn't there."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    meta: dict = {}
+    if raw.startswith("---\n"):
+        header, _, body = raw[4:].partition("\n---\n")
+        for line in header.splitlines():
+            key, _, value = line.partition(": ")
+            meta[key] = json.loads(value)
+    else:
+        body = raw
+    return meta, body.strip()
+
+
 class Store:
     def __init__(self, out_dir: str | os.PathLike):
         self.out = Path(out_dir)
@@ -251,7 +272,7 @@ class Store:
     # -- documents ----------------------------------------------------------
 
     def md_path(self, did: str) -> Path:
-        return self.md_dir / did[:2] / f"{did}.md"
+        return md_path(self.out, did)
 
     def write_doc(self, doc_key: str, meta: dict, body: str) -> int:
         """Write md/<id[:2]>/<id>.md with YAML front matter; returns body length."""
@@ -296,20 +317,7 @@ class Store:
         return str(path.relative_to(self.out))
 
     def read_doc(self, did: str) -> tuple[dict, str] | None:
-        path = self.md_path(did)
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        meta: dict = {}
-        if raw.startswith("---\n"):
-            header, _, body = raw[4:].partition("\n---\n")
-            for line in header.splitlines():
-                key, _, value = line.partition(": ")
-                meta[key] = json.loads(value)
-        else:
-            body = raw
-        return meta, body.strip()
+        return read_doc_file(self.md_path(did))
 
     def done_docs(self) -> Iterator[tuple[str, str, list[str]]]:
         """(doc_id, lane, urls) for every document with status ok/thin."""

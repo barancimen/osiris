@@ -1,4 +1,4 @@
-"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | search QUERY | stats | export"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import os
 import re
 import signal
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -345,6 +346,40 @@ def cmd_ui(args: argparse.Namespace) -> None:
     serve(args.out, args.port, args.no_browser)
 
 
+def refresh_search_index(out: str | Path) -> dict[str, int]:
+    from . import search
+
+    last = [time.monotonic()]
+
+    def progress(done: int, total: int) -> None:
+        if time.monotonic() - last[0] > 5 and done < total:
+            last[0] = time.monotonic()
+            log.info("search index: %d of %d documents checked", done, total)
+
+    result = search.refresh(out, progress)
+    if result["indexed"] or result["removed"]:
+        log.info("search index: %d documents added or updated, %d removed; %d in all",
+                 result["indexed"], result["removed"], result["documents"])
+    return result
+
+
+def cmd_search(args: argparse.Namespace) -> None:
+    from . import search
+
+    refresh_search_index(args.out)
+    found = search.search(args.out, " ".join(args.query), lane=args.lane or "", limit=args.limit)
+    for item in found["items"]:
+        text = "".join(piece for piece, _ in item.pop("snippet") or ())
+        if args.json:
+            print(json.dumps({**item, "snippet": text}, ensure_ascii=False))
+        else:
+            print(f"\n{item['title'] or item['url']}\n  {item['url']}  [{item['lane']}, {item['chars'] or 0:,} chars]"
+                  f"\n  {text}")
+    if not args.json:
+        shown = len(found["items"])
+        print(f"\n{found['total']:,} matching documents" + (f", best {shown} shown" if shown < found["total"] else ""))
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     store = Store(args.out)
     print_stats(store, failed=args.failed, thin=args.thin)
@@ -489,6 +524,16 @@ def main() -> None:
     aud.add_argument("--workers", type=int, default=1, help="PDFs at a time for apply (default 1)")
     aud.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
     aud.set_defaults(func=cmd_audit)
+
+    find = sub.add_parser("search", help="full-text search of the archived documents, best matches first")
+    find.add_argument("query", nargs="+",
+                      help='words that must all appear; "quoted words" together; -word must not appear, '
+                           "so quote a query that has one: osiris search 'transformer -attention'")
+    find.add_argument("--out", default=DEFAULT_OUT)
+    find.add_argument("--lane", choices=(*LANES, "singlefile"), help="only documents from this lane")
+    find.add_argument("--limit", type=int, default=20, help="matches to show (default 20)")
+    find.add_argument("--json", action="store_true", help="one JSON object per match, for other tools")
+    find.set_defaults(func=cmd_search)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)
