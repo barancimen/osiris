@@ -25,7 +25,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import audit, search
+from . import audit, cleanup, search
 from .github import load_token
 from .localfile import candidate_paths
 from .route import LOCAL_READABLE
@@ -549,16 +549,59 @@ async def start_export(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+CLEAN_MODES = {"preview": ("Cleanup preview", "Previewing the cleanup", ["--dry-run"]),
+               "clean": ("Text cleanup", "Cleaning up text", []),
+               "undo": ("Undoing the cleanup", "Putting the originals back", ["--undo"])}
+REPORT_PAGE = 200
+
+
 async def start_clean(request: web.Request) -> web.Response:
     job = request.app["job"]
     if job.active:
         raise web.HTTPConflict(text="A job is already running.")
+    mode = (await request.json()).get("mode", "clean")
+    if mode not in CLEAN_MODES:
+        raise web.HTTPBadRequest(text="Unknown cleanup.")
+    name, step, flags = CLEAN_MODES[mode]
 
     async def flow(j: Job) -> None:
-        await j.run("Cleaning up text", j.osiris("clean"))
+        await j.run(step, j.osiris("clean", *flags))
 
-    job.start("Text cleanup", flow)
+    job.start(name, flow)
     return web.json_response({"ok": True})
+
+
+def _report(app: web.Application) -> tuple[dict, list[tuple[str, ...]]] | None:
+    """The last cleanup report, read again only when it has changed."""
+    path = app["out"] / cleanup.REPORT_FILE
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    cached = app.get("report")
+    if not cached or cached[0] != mtime:
+        app["report"] = cached = (mtime, cleanup.read_report(app["out"]))
+    return cached[1]
+
+
+async def cleanup_state(request: web.Request) -> web.Response:
+    report = await asyncio.to_thread(_report, request.app)
+    return web.json_response({"report": report[0] if report else None,
+                              "kept": await asyncio.to_thread(cleanup.kept_originals, request.app["out"])})
+
+
+async def cleanup_report(request: web.Request) -> web.Response:
+    """A page of the last report's rows, optionally of one rule, with how many each rule has."""
+    report = await asyncio.to_thread(_report, request.app)
+    if report is None:
+        raise web.HTTPNotFound(text="There's no cleanup report yet. Preview the cleanup to make one.")
+    summary, rows = report
+    rule, offset = request.query.get("rule", ""), max(int(request.query.get("offset", 0)), 0)
+    chosen = [r for r in rows if len(r) == 6 and (not rule or r[2] == rule)]
+    return web.json_response({
+        "summary": summary, "total": len(chosen),
+        "rules": Counter(r[2] for r in rows if len(r) == 6).most_common(),
+        "items": [dict(zip(cleanup.REPORT_COLUMNS, r)) for r in chosen[offset:offset + REPORT_PAGE]]})
 
 
 async def stop_job(request: web.Request) -> web.Response:
@@ -963,6 +1006,8 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.post("/api/job/fixes", start_fixes),
         web.post("/api/job/export", start_export),
         web.post("/api/job/clean", start_clean),
+        web.get("/api/cleanup", cleanup_state),
+        web.get("/api/cleanup/report", cleanup_report),
         web.post("/api/job/stop", stop_job),
         web.get("/api/review", review),
         web.post("/api/decide", decide),

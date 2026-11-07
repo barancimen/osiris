@@ -86,7 +86,7 @@ From the command line: `osiris audit scan`, then `osiris audit apply`, which als
 
 ## Text cleanup
 
-Converting a document to text leaves damage that splits or hides words, so searching for the right word misses the passage. osiris repairs it as each document is archived, and `osiris clean`, or **Clean up text** in the web interface, repairs documents archived before. It only repairs what has one right answer or clear evidence, and leaves anything unsure as it was printed.
+Converting a document to text leaves damage that splits or hides words, so searching for the right word misses the passage. osiris repairs it as each document is archived, and `osiris clean` repairs documents archived before. It only repairs what has one right answer or clear evidence, and leaves anything unsure as it was printed.
 
 | Repair | Where | Example |
 |---|---|---|
@@ -111,13 +111,22 @@ Digits on either side (`1990-⏎1995`) and page boundaries are left alone. Plain
 
 ### Cleaning documents already archived
 
+In the web interface, the **Clean up text** card on the Archive tab has four buttons:
+
+- **Preview** changes nothing, and lists what would change.
+- **Clean up text** makes the changes.
+- **Undo cleanup** puts the originals back.
+- **View report** shows the last report, which you can filter by rule. Choose a row to open its document.
+
+From the command line:
+
 ```sh
 .venv/bin/osiris clean --dry-run   # changes nothing, and lists what would change in data/clean-report.tsv
 .venv/bin/osiris clean
 .venv/bin/osiris clean --undo      # puts the originals back
 ```
 
-- **The report** lists every line-end decision with its rule and context, and a few examples of each other repair per document. Read it after a dry run to check for anything that shouldn't change.
+- **The report** lists every line-end decision with its rule and context, and a few examples of each other repair per document. Read it after a preview to check for anything that shouldn't change. Its first line, starting with `#`, says whether it's from a preview or a cleanup, and when.
 - **Only changed files are rewritten.** Their front matter stays as it was, `fetched_at` included, apart from a repaired title. Character counts in the manifest follow the new text.
 - **Your review decisions are kept.** A decision holds for the exact text it was made about, so `clean` carries it over to the repaired text and scores the document again. Without that, a document marked Bad would come back into exports.
 - **Undo:** each original is kept, compressed, in `data/clean-backup.sqlite` before its file is replaced. `--undo` puts back every one that hasn't changed since, and leaves alone any that were fetched again.

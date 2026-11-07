@@ -152,6 +152,16 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 .retry-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: 13px; }
 .retry-list .chip { cursor: default; padding-right: 4px; }
 .retry-list .chip button { background: none; border: 0; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
+#report { width: min(960px, calc(100vw - 32px)); }
+.report-list { height: min(60vh, 560px); overflow-y: auto; }
+.report-row { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 8px 14px; cursor: pointer; color: var(--text); }
+.report-row:hover { background: var(--sunk); }
+.report-row .change { font: 12.5px var(--mono); overflow-wrap: anywhere; }
+.report-row .change del { text-decoration: none; background: var(--bad-soft); color: var(--bad); border-radius: 2px; }
+.report-row .change ins { text-decoration: none; background: var(--good-soft); color: var(--good); border-radius: 2px; }
+.report-row .context { color: var(--muted); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
+.report-row .where { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.sym { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 2px; margin: 0 1px; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 6px; display: none; z-index: 10; max-width: calc(100vw - 32px); }
 @media (max-width: 760px) {
   .tab.on.split { flex-direction: column; }
@@ -176,6 +186,7 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
   <section class="tab split" id="documents"></section>
 </main>
 <dialog id="picker"></dialog>
+<dialog id="report" aria-label="Cleanup report"></dialog>
 <div id="toast" role="status"></div>
 <script>
 "use strict";
@@ -242,12 +253,11 @@ function renderArchive() {
         h("button", {class: "btn", id: "stop", onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
         h("button", {class: "btn", id: "audit", onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
         h("button", {class: "btn", id: "export", onclick: guarded(() => startJob("export"))}, "Export corpus"),
-        h("button", {class: "btn", id: "clean", title: "Repair characters and line-end hyphens that conversion broke, in documents already archived. New documents get this as they're archived.",
-          onclick: guarded(() => confirm("Repair broken characters and words split at line ends in your archived documents? Only changed files are rewritten, every change is listed in clean-report.tsv, and `osiris clean --undo` puts the originals back.") && startJob("clean"))}, "Clean up text"),
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
       h("div", {id: "log", tabindex: 0, "aria-label": "Job output"})),
+    Cleanup.card(),
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
@@ -318,8 +328,8 @@ function setRetry(host, on) {
   $("#options")?.replaceWith(renderOptions());
 }
 
-async function startJob(kind) {
-  await api("/api/job/" + kind, {});
+async function startJob(kind, body = {}) {
+  await api("/api/job/" + kind, body);
   logSeen = 0; $("#log").textContent = "";
   await tick();
 }
@@ -367,7 +377,8 @@ function renderState(s) {
     $("#progress-title").textContent = j.state === "idle" ? "Nothing running" : (j.active ? j.step || j.name : j.name);
     const pill = JOB_PILL[j.state];
     $("#progress-pill").replaceChildren(...(pill ? [h("span", {class: "pill " + pill[1]}, pill[0])] : []));
-    for (const id of ["start", "audit", "export", "clean"]) $("#" + id).disabled = j.active;
+    for (const id of ["start", "audit", "export"]) $("#" + id).disabled = j.active;
+    Cleanup.busy(j.active);
     $("#stop").disabled = !j.active;
     $("#stop").textContent = j.state === "stopping" ? "Stop now" : "Stop";
   }
@@ -377,7 +388,7 @@ function renderState(s) {
   c.hidden = !s.review.to_review;
   c.textContent = fmt(s.review.to_review);
   if (Review.fixing && !j.active) { Review.fixing = false; if (currentTab === "review") Review.load(); }
-  if (renderState.wasActive && !j.active) reloadConfig();  // a finished run clears the sites it retried
+  if (renderState.wasActive && !j.active) { reloadConfig(); Cleanup.refresh(); }  // a finished run clears the sites it retried
   renderState.wasActive = j.active;
 }
 /* progress of a run, from how many URLs it has finished and how many are left */
@@ -444,6 +455,89 @@ const Picker = {
           scanFolder(key, d.path);
         }}, "Use this folder")),
     );
+  },
+};
+
+/* ---- text cleanup ---- */
+// characters the cleanup repairs are invisible or show as boxes, so they're shown by name
+const SYMBOL_NAMES = {"\ufffe": "hyphen", "\x02": "hyphen", "\u00ad": "soft hyphen", "\u200b": "zero-width space",
+                      "\u2060": "word joiner", "\ufeff": "zero-width no-break space"};
+function visible(text) {
+  return (text || "").split(/([\ufffe\x02\u00ad\u200b\u2060\ufeff])/).filter(Boolean)
+    .map(part => SYMBOL_NAMES[part] ? h("span", {class: "sym", title: `U+${part.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`}, SYMBOL_NAMES[part]) : part);
+}
+const Cleanup = {
+  state: null,
+  card() {
+    return h("div", {class: "card", id: "cleanup"}, h("h2", {}, "Clean up text"),
+      h("p", {class: "hint", style: "margin-bottom:10px"}, "Repairs broken characters and words split at line ends in documents archived before this existed. New documents are repaired as they're archived. Preview changes nothing: it lists every change it would make, so you can check them first."),
+      h("p", {id: "clean-status", style: "margin-bottom:10px"}, "Checking…"),
+      h("div", {class: "actions"},
+        h("button", {class: "btn", id: "clean-preview", onclick: guarded(() => startJob("clean", {mode: "preview"}))}, "Preview"),
+        h("button", {class: "btn", id: "clean-run", onclick: guarded(() => confirm("Repair the text of your archived documents? Only documents that change are rewritten, and Undo cleanup puts the originals back.") && startJob("clean", {mode: "clean"}))}, "Clean up text"),
+        h("button", {class: "btn", id: "clean-undo", onclick: guarded(() => confirm(`Put back the originals of ${fmt(this.state?.kept)} cleaned documents? Any fetched again since are left as they are.`) && startJob("clean", {mode: "undo"}))}, "Undo cleanup"),
+        h("button", {class: "btn", id: "clean-report", onclick: () => Report.open()}, "View report")));
+  },
+  refresh: guarded(async function () {
+    const self = Cleanup;
+    self.state = await api("/api/cleanup");
+    const r = self.state.report, el = $("#clean-status");
+    if (!el) return;
+    const when = r && new Date(r.at).toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"});
+    el.textContent = !r ? "No preview or cleanup yet."
+      : !r.at ? "There's a report from an earlier version of osiris. Preview again for an up-to-date one."
+      : `${r.mode === "preview" ? "Last preview" : "Last cleanup"}, ${when}${r.finished ? "" : " (stopped early)"}: ${fmt(r.changed)} of ${fmt(r.checked)} documents ${r.mode === "preview" ? "would change" : "changed"}.`
+        + (self.state.kept ? ` Originals kept for ${fmt(self.state.kept)}.`
+           : r.mode === "clean" && r.changed ? " Those changes have since been undone." : "");
+    self.busy(lastState?.job.active ?? false);
+  }),
+  busy(active) {
+    if (!$("#clean-preview")) return;
+    for (const id of ["clean-preview", "clean-run"]) $("#" + id).disabled = active;
+    $("#clean-undo").disabled = active || !this.state?.kept;
+    $("#clean-report").disabled = !this.state?.report;
+  },
+};
+
+// the last report, a page at a time, with a row's document a click away
+const Report = {
+  rule: "", items: [], total: 0,
+  async open() { this.rule = ""; $("#report").showModal(); await this.load(); },
+  load: guarded(async function (more) {
+    const self = Report, dlg = $("#report");
+    const r = await api(`/api/cleanup/report?rule=${encodeURIComponent(self.rule)}&offset=${more ? self.items.length : 0}`);
+    self.items = more ? [...self.items, ...r.items] : r.items;
+    self.total = r.total;
+    const s = r.summary || {};
+    dlg.replaceChildren(
+      h("div", {class: "picker-head"},
+        h("h3", {}, s.mode === "preview" ? "What the cleanup would change" : "What the cleanup changed"),
+        h("p", {class: "hint"}, `${fmt(s.changed)} of ${fmt(s.checked)} documents. Each line-end decision is listed, with a few examples per document of the other repairs. Choose a row to open its document.`),
+        h("select", {"aria-label": "Repair", onchange: e => { self.rule = e.target.value; self.load(); }},
+          h("option", {value: ""}, `Every repair (${fmt(r.rules.reduce((a, [, n]) => a + n, 0))} rows)`),
+          r.rules.map(([rule, n]) => h("option", {value: rule, selected: rule === self.rule}, `${rule} (${fmt(n)})`)))),
+      h("div", {class: "report-list"},
+        self.items.map(it => h("button", {class: "report-row", onclick: () => self.show(it.doc_id)},
+          h("div", {class: "meta"}, h("span", {class: "pill " + (it.rule.startsWith("keep") ? "warn" : "accent")}, it.rule)),
+          h("div", {class: "change"}, h("del", {}, ...(it.before ? visible(it.before) : ["(nothing)"])), " → ", h("ins", {}, ...(it.after ? visible(it.after) : ["(removed)"]))),
+          it.context && h("div", {class: "context"}, ...self.marked(it.context, it.before)),
+          h("div", {class: "where"}, it.url))),
+        !self.items.length && h("p", {class: "hint", style: "padding:10px 14px"}, "Nothing to repair."),
+        self.total > self.items.length && h("div", {class: "more"}, h("button", {class: "btn", onclick: () => self.load(true)}, "Show more"))),
+      h("div", {class: "picker-foot"},
+        h("span", {class: "hint"}, `${fmt(self.items.length)} of ${fmt(self.total)} rows`),
+        h("button", {class: "btn", onclick: () => dlg.close()}, "Close")));
+  }),
+  marked(context, before) {  // the text around a change, with what it changed marked
+    // an invisible character is reported by name: U+200B, or U+00AD+U+200B for several
+    if (/^U\+[0-9A-F]{4}(\+U\+[0-9A-F]{4})*$/.test(before)) before = before.split("+").filter(x => x !== "U").map(x => String.fromCharCode(parseInt(x, 16))).join("");
+    const at = before ? context.indexOf(before) : -1;
+    return at < 0 ? visible(context) : [...visible(context.slice(0, at)), h("mark", {}, ...visible(before)), ...visible(context.slice(at + before.length))];
+  },
+  show(id) {
+    $("#report").close();
+    showTab("documents");
+    guarded(() => Docs.show(id))();
   },
 };
 
@@ -801,7 +895,7 @@ window.addEventListener("hashchange", followHash);
 
 /* ---- keys ---- */
 document.addEventListener("keydown", e => {
-  if (e.ctrlKey || e.metaKey || e.altKey || $("#picker").open) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || $("#picker").open || $("#report").open) return;
   const typing = e.target.matches("input, select, textarea");
   if (typing) { if (e.key === "Escape") e.target.blur(); return; }
   const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];
@@ -827,6 +921,7 @@ document.addEventListener("keydown", e => {
   try {
     config = await api("/api/config");
     renderArchive();
+    Cleanup.refresh();
     followHash();
     await tick();
     setInterval(tick, 1500);

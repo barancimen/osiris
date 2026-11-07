@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import time
 from collections import Counter
@@ -256,10 +257,10 @@ def clean_archive(store: Store, dry_run: bool = False) -> Totals:
     compress = zstandard.ZstdCompressor(level=6)
     totals = Totals()
     docs = list(_documents(store))
-    report_path = store.out / REPORT_FILE
+    rows_path = store.out / (REPORT_FILE + ".tmp")
     progress, commit = _Every(COMMIT_EVERY), _Every(COMMIT_EVERY)
-    with open(report_path, "w", encoding="utf-8") as report:
-        report.write("\t".join(REPORT_COLUMNS) + "\n")
+    finished = False
+    with open(rows_path, "w", encoding="utf-8") as report:
 
         def row(did: str, url: str, rule: str, before: str, after: str, context: str) -> None:
             fields = (did, url, rule, before, after, context)
@@ -317,10 +318,50 @@ def clean_archive(store: Store, dry_run: bool = False) -> Totals:
                     books.commit()
                 if progress():
                     log.info("clean: %d of %d documents checked, %d changed", i, len(docs), totals.changed)
+            finished = True
         finally:
             books.close()
             backups.close()
+            report.close()
+            _write_report(store.out, rows_path, dry_run, finished, totals)
     return totals
+
+
+def _write_report(out: Path, rows_path: Path, dry_run: bool, finished: bool, totals: Totals) -> None:
+    """The report: a line saying what run it's from, the column names, then a row per change."""
+    summary = {"mode": "preview" if dry_run else "clean", "at": now_iso(), "finished": finished,
+               "checked": totals.checked, "changed": totals.changed, "rules": dict(totals.rules)}
+    path = out / REPORT_FILE
+    tmp = path.with_name(path.name + ".new")
+    with open(tmp, "w", encoding="utf-8") as report, open(rows_path, encoding="utf-8") as rows:
+        report.write("# " + json.dumps(summary, ensure_ascii=False) + "\n" + "\t".join(REPORT_COLUMNS) + "\n")
+        shutil.copyfileobj(rows, report)
+    os.replace(tmp, path)
+    rows_path.unlink()
+
+
+def read_report(out: Path) -> tuple[dict, list[tuple[str, ...]]] | None:
+    """(what run it's from, its rows) of the last report, or None if there isn't one."""
+    try:
+        with open(out / REPORT_FILE, encoding="utf-8") as f:
+            first = f.readline()
+            summary = json.loads(first[2:]) if first.startswith("# ") else {}
+            if summary:
+                f.readline()  # the column names
+            return summary, [tuple(line.rstrip("\n").split("\t")) for line in f]
+    except (OSError, ValueError):
+        return None
+
+
+def kept_originals(out: Path) -> int:
+    """How many originals `undo` could put back."""
+    if not (out / BACKUP_FILE).exists():
+        return 0
+    db = _backups(out)
+    try:
+        return db.execute("SELECT COUNT(*) FROM originals").fetchone()[0]
+    finally:
+        db.close()
 
 
 def undo(store: Store) -> tuple[int, int]:
