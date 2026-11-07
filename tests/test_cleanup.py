@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from osiris import audit, cleanup
+from osiris import cleanup, review
 from osiris.route import doc_id, route
 from osiris.store import Store
 
@@ -46,11 +46,11 @@ def archive(tmp_path: Path):
         "text": old_doc(store, original.as_uri(), {"source": "file:text", "title": "notes.txt"},
                         WINDOWS.encode("cp1252").decode("utf-8", errors="replace").strip()),
     }
-    audit.scan(store, out)
-    db = audit.connect(out)
-    audit.decide(db, [docs["pdf"]], "bad")
-    audit.decide(db, [docs["web"]], "fine")
-    audit.write_exclude(db, store)
+    review.scan(store, out)
+    db = review.connect(out)
+    review.decide(db, [docs["pdf"]], "bad")
+    review.decide(db, [docs["web"]], "fine")
+    review.write_exclude(db, store)
     db.close()
     yield store, out, docs
     store.close()
@@ -66,7 +66,7 @@ def head(store: Store, did: str) -> list[str]:
 
 
 def decisions(out: Path) -> dict:
-    db = audit.connect(out)
+    db = review.connect(out)
     try:
         return dict(db.execute("SELECT doc_id, decision FROM decisions"))
     finally:
@@ -77,7 +77,7 @@ def test_clean(archive):
     store, out, docs = archive
     plain_mtime = store.md_path(docs["plain"]).stat().st_mtime_ns
     heads = {k: head(store, d) for k, d in docs.items()}
-    exclude = (out / "audit-exclude.txt").read_text()
+    exclude = (out / "review-exclude.txt").read_text()
 
     totals = cleanup.clean_archive(store)
 
@@ -93,11 +93,11 @@ def test_clean(archive):
 
     # review decisions hold for the repaired text, through the next garbage check and into export
     assert decisions(out) == {docs["pdf"]: "bad", docs["web"]: "fine"}
-    result = audit.scan(store, out)
+    result = review.scan(store, out)
     assert result["text_changed"] == 0 and result["scored"] == 0
     assert decisions(out) == {docs["pdf"]: "bad", docs["web"]: "fine"}
-    assert (out / "audit-exclude.txt").read_text() == exclude
-    assert audit.excluded(out)[docs["pdf"]] == audit.text_hash(body(store, docs["pdf"]))
+    assert (out / "review-exclude.txt").read_text() == exclude
+    assert review.excluded(out)[docs["pdf"]] == review.text_hash(body(store, docs["pdf"]))
 
     report = (out / cleanup.REPORT_FILE).read_text(encoding="utf-8")
     assert "join: same document" in report and "text re-read with its encoding detected" in report
@@ -122,7 +122,7 @@ def test_undo(archive):
     assert (restored, skipped) == (3, 0)
     assert {d: store.md_path(d).read_bytes() for d in docs.values()} == files
     assert decisions(out) == {docs["pdf"]: "bad", docs["web"]: "fine"}
-    result = audit.scan(store, out)
+    result = review.scan(store, out)
     assert result["text_changed"] == 0
     assert decisions(out) == {docs["pdf"]: "bad", docs["web"]: "fine"}
 
@@ -144,14 +144,14 @@ def test_interrupted_bookkeeping_is_finished(archive):
     # as if the run stopped right after replacing the file
     store.db.execute("UPDATE urls SET chars = ? WHERE doc_id = ?", (len(before), did))
     store.commit()
-    db = audit.connect(out)
-    db.execute("UPDATE decisions SET hash = ? WHERE doc_id = ?", (audit.text_hash(before), did))
+    db = review.connect(out)
+    db.execute("UPDATE decisions SET hash = ? WHERE doc_id = ?", (review.text_hash(before), did))
     db.commit()
     db.close()
     totals = cleanup.clean_archive(store)
     assert totals.changed == 0 and totals.finished == 1
     assert dict(store.db.execute("SELECT doc_id, chars FROM urls"))[did] == len(body(store, did))
-    assert audit.scan(store, out)["text_changed"] == 0
+    assert review.scan(store, out)["text_changed"] == 0
     assert decisions(out)[did] == "bad"
 
 

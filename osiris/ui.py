@@ -25,7 +25,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import audit, cleanup, search
+from . import cleanup, review, search
 from .github import load_token
 from .localfile import candidate_paths
 from .route import LOCAL_READABLE
@@ -49,7 +49,7 @@ HTML_TYPES = {".html", ".htm", ".xhtml"}
 DEFAULT_CONFIG = {
     "backups": [], "local": [], "saved": [],
     "options": {"lanes": list(LANES), "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
-                "audit_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw": False,
+                "review_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw": False,
                 "workers": "", "youtube_delay": "", "billed_twitter": False,
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
 }
@@ -211,7 +211,10 @@ def load_config(out: Path) -> dict:
     for key in ("backups", "local", "saved"):
         if isinstance(saved.get(key), list):
             config[key] = [str(p) for p in saved[key]]
-    config["options"].update({k: v for k, v in saved.get("options", {}).items() if k in config["options"]})
+    options = saved.get("options", {})
+    if "audit_after" in options:  # its name before review was called review everywhere
+        options.setdefault("review_after", options.pop("audit_after"))
+    config["options"].update({k: v for k, v in options.items() if k in config["options"]})
     return config
 
 
@@ -301,14 +304,14 @@ async def state(request: web.Request) -> web.Response:
     since = int(request.query.get("since", 0))
     new = max(job.count - since, 0)
     lines = list(job.lines)[-new:] if new else []
-    db = audit.connect(out)
+    db = review.connect(out)
     try:
-        review = audit.counts(db)
+        counts = review.counts(db)
     finally:
         db.close()
     return web.json_response({
         **_lane_table(out),
-        "review": review,
+        "review": counts,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
                 "progress": _progress(out, job.started) if job.active and job.name in PROGRESS_JOBS else None},
@@ -495,21 +498,21 @@ async def start_archive(request: web.Request) -> web.Response:
             latest = load_config(out)
             latest["options"]["retry_hosts"] = [h for h in _retry_hosts(latest["options"]) if h not in retried]
             _save_config(out, latest)
-        if options.get("audit_after", True):
-            await j.run("Checking for garbage", j.osiris("audit", "scan"))
+        if options.get("review_after", True):
+            await j.run("Checking for garbage", j.osiris("review", "scan"))
 
     # twitterapi.io bills per tweet, so a run only sees that key when you've said so
     job.start("Archive", flow, env={} if options.get("billed_twitter") else {BILLED_KEY: None})
     return web.json_response({"ok": True})
 
 
-async def start_audit(request: web.Request) -> web.Response:
+async def start_review(request: web.Request) -> web.Response:
     job = request.app["job"]
     if job.active:
         raise web.HTTPConflict(text="A job is already running.")
 
     async def flow(j: Job) -> None:
-        await j.run("Checking for garbage", j.osiris("audit", "scan"))
+        await j.run("Checking for garbage", j.osiris("review", "scan"))
 
     job.start("Garbage check", flow)
     return web.json_response({"ok": True})
@@ -525,13 +528,13 @@ async def start_fixes(request: web.Request) -> web.Response:
     empty.write_text("", encoding="utf-8")
 
     async def flow(j: Job) -> None:
-        output = await j.run("Applying fixes", j.osiris("audit", "apply", "--lang", lang))
+        output = await j.run("Applying fixes", j.osiris("review", "apply", "--lang", lang))
         lanes = next((ln.removeprefix("lanes to run:").split() for ln in reversed(output)
                       if ln.startswith("lanes to run:")), [])
         if lanes:
             only = [arg for lane in lanes for arg in ("--only", lane)]
             await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr"))
-        await j.run("Checking the results", j.osiris("audit", "scan"))
+        await j.run("Checking the results", j.osiris("review", "scan"))
 
     job.start("Fixes", flow, env={BILLED_KEY: None})
     return web.json_response({"ok": True})
@@ -611,14 +614,14 @@ async def stop_job(request: web.Request) -> web.Response:
 
 # -- review --------------------------------------------------------------------------------------
 
-REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in audit.DECISIONS}}
+REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in review.DECISIONS}}
 
 
 def _review_where(view: str, host: str | None) -> tuple[str, list]:
     if view not in REVIEW_VIEWS:
         raise web.HTTPBadRequest(text="Unknown view.")
     where = REVIEW_VIEWS[view]
-    params: list = [audit.FLAGGED if view == "to_review" else view]
+    params: list = [review.FLAGGED if view == "to_review" else view]
     if host:
         where += " AND s.host = ?"
         params.append(host)
@@ -629,15 +632,15 @@ def _row_for_page(row: tuple) -> dict:
     did, url, lane, source, host, title, chars, score, signals, excerpt, decision, note = row
     return {"id": did, "url": url, "lane": lane, "source": source, "host": host, "title": title, "chars": chars,
             "score": score, "signals": json.loads(signals), "excerpt": excerpt, "decision": decision, "note": note,
-            "pdf": audit.is_pdf_source(source)}
+            "pdf": review.is_pdf_source(source)}
 
 
-async def review(request: web.Request) -> web.Response:
+async def review_list(request: web.Request) -> web.Response:
     q = request.query
     view = q.get("view", "to_review")
     where, params = _review_where(view, q.get("host") or None)
     offset = max(int(q.get("offset", 0)), 0)
-    db = audit.connect(request.app["out"])
+    db = review.connect(request.app["out"])
     try:
         rows = db.execute(
             "SELECT s.doc_id, s.url, s.lane, s.source, s.host, s.title, s.chars, s.score, s.signals, s.excerpt,"
@@ -654,7 +657,7 @@ async def review(request: web.Request) -> web.Response:
         ).fetchall()
         return web.json_response({"items": [_row_for_page(r) for r in rows], "total": total,
                                   "hosts": [{"host": h, "count": n, "score": s} for h, n, s in hosts],
-                                  "counts": audit.counts(db)})
+                                  "counts": review.counts(db)})
     finally:
         db.close()
 
@@ -662,18 +665,18 @@ async def review(request: web.Request) -> web.Response:
 async def decide(request: web.Request) -> web.Response:
     body = await request.json()
     decision = body.get("decision")
-    if decision is not None and decision not in audit.DECISIONS:
+    if decision is not None and decision not in review.DECISIONS:
         raise web.HTTPBadRequest(text="Unknown decision.")
-    db = audit.connect(request.app["out"])
+    db = review.connect(request.app["out"])
     try:
         if body.get("host"):  # one decision for a whole group: only what's still undecided in it
             ids = [did for (did,) in db.execute(
                 "SELECT s.doc_id FROM scores s LEFT JOIN decisions d USING (doc_id)"
-                " WHERE d.doc_id IS NULL AND s.score >= ? AND s.host = ?", (audit.FLAGGED, body["host"]))]
+                " WHERE d.doc_id IS NULL AND s.score >= ? AND s.host = ?", (review.FLAGGED, body["host"]))]
         else:
             ids = [d for d in body.get("ids", []) if DOC_ID.match(str(d))]
-        n = audit.decide(db, ids, decision, str(body.get("note") or "") or None)
-        return web.json_response({"changed": n, "counts": audit.counts(db)})
+        n = review.decide(db, ids, decision, str(body.get("note") or "") or None)
+        return web.json_response({"changed": n, "counts": review.counts(db)})
     finally:
         db.close()
 
@@ -702,7 +705,7 @@ async def documents(request: web.Request) -> web.Response:
             where.append(f"{column} = ?")
             params.append(q[column])
     term = q.get("q", "").strip()
-    db = audit.connect(out)
+    db = review.connect(out)
     try:
         if term:
             titled = set(search.matching_titles(out, term)) if indexed else set()
@@ -855,7 +858,7 @@ async def document(request: web.Request) -> web.Response:
     meta, body = doc if doc else ({}, "")
     path, kind = _original(out, rows)
     saved = _saved_page(out, rows)
-    db = audit.connect(out)
+    db = review.connect(out)
     try:
         scored = db.execute(
             "SELECT s.score, s.signals, s.source, d.decision, d.note FROM scores s LEFT JOIN decisions d USING (doc_id)"
@@ -878,7 +881,7 @@ async def document(request: web.Request) -> web.Response:
                      "viewer": _viewer(path or saved) if (path or saved) else None},
         "local_missing": local and not (path or saved),
         "score": scored[0] if scored else None, "signals": json.loads(scored[1]) if scored else {},
-        "pdf": audit.is_pdf_source(scored[2]) if scored else False,
+        "pdf": review.is_pdf_source(scored[2]) if scored else False,
         "decision": scored[3] if scored else None, "note": scored[4] if scored else None,
     })
 
@@ -988,7 +991,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     app["token"] = load_ui_token(out)
     app["job"] = Job(out)
     app["index"] = Index(out) if search_index else None  # off unless asked for: it takes disk and CPU
-    audit.connect(out).close()
+    review.connect(out).close()
     if search_index:
         app["job"].on_change = app["index"].wanted.set
         search.connect(out).close()
@@ -1002,14 +1005,14 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.get("/api/browse", browse),
         web.get("/api/scan", scan_folder),
         web.post("/api/job/archive", start_archive),
-        web.post("/api/job/audit", start_audit),
+        web.post("/api/job/review", start_review),
         web.post("/api/job/fixes", start_fixes),
         web.post("/api/job/export", start_export),
         web.post("/api/job/clean", start_clean),
         web.get("/api/cleanup", cleanup_state),
         web.get("/api/cleanup/report", cleanup_report),
         web.post("/api/job/stop", stop_job),
-        web.get("/api/review", review),
+        web.get("/api/review", review_list),
         web.post("/api/decide", decide),
         web.get("/api/documents", documents),
         web.get("/api/search", search_documents),

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Osiris</title>
+<title>osiris</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -24,8 +24,7 @@ html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
 h1, h2, h3, p { margin: 0; }
 button, input, select, textarea { font: inherit; color: inherit; }
-header { display: flex; align-items: center; gap: 20px; padding: 0 16px; height: 48px; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); }
-header h1 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+header { display: flex; align-items: center; gap: 20px; padding: 0 16px 0 4px; height: 48px; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); }
 nav { display: flex; gap: 2px; height: 100%; }
 nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 0 12px; cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 nav button:hover { color: var(--text); }
@@ -173,7 +172,6 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 </head>
 <body>
 <header>
-  <h1>Osiris</h1>
   <nav role="tablist">
     <button role="tab" data-tab="archive" aria-selected="true">Archive</button>
     <button role="tab" data-tab="review" aria-selected="false">Review <span class="count" id="review-count" hidden></span></button>
@@ -195,6 +193,7 @@ const $ = (s, root = document) => root.querySelector(s);
 function h(tag, props = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith("aria-") && typeof v === "boolean") { el.setAttribute(k, String(v)); continue; }  // aria-pressed="true", not ""
     if (v === null || v === undefined || v === false) continue;
     if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "class") el.className = v;
@@ -237,7 +236,7 @@ const HELP = {
   // archive tab
   start: "Go through everything you've added, and fetch or read whatever isn't saved yet. Anything already saved is skipped, so it's fine to press this again.",
   stop: "Pause the current job. Everything done so far is kept, and starting again carries on from there. Press again to stop right away.",
-  audit: "Look through your saved documents for text that came out garbled, like broken characters or \"please enable JavaScript\" pages. This only reads them, it doesn't change anything.",
+  "review-scan": "Look through your saved documents for text that came out garbled, like broken characters or \"please enable JavaScript\" pages. This only reads them, it doesn't change anything.",
   export: "Put all your saved documents into one file, corpus.jsonl, for other tools to load. Documents you marked Bad are left out.",
   "add-folder": "Pick a folder on this computer to include.",
   "remove-folder": "Stop including this folder. Nothing inside it is touched.",
@@ -245,7 +244,7 @@ const HELP = {
   ocr_lang: "The languages your scanned PDFs are in, joined with +, like eng+tur. Each language needs its Tesseract language pack installed.",
   refresh: "Read PDFs you've already saved once more, in case they come out better now. A document is only replaced if the new copy has more text.",
   retry_failed: "Give every link that failed before another try. Without this, failed links are left alone.",
-  audit_after: "When archiving is done, check for garbled text right away.",
+  review_after: "When archiving is done, check for garbled text right away.",
   advanced: "Settings most people never need to touch.",
   cookies: "A file with your browser's cookies. With it, osiris can open pages as you see them when you're logged in. Keep this file private.",
   user_agent: "How your browser introduces itself to websites. Copy it from the same browser the cookies came from, or some sites won't accept them.",
@@ -407,7 +406,7 @@ function renderArchive() {
       h("div", {class: "actions", style: "margin-bottom:10px"},
         h("button", {class: "btn primary", id: "start", title: help("start"), onclick: guarded(() => startJob("archive"))}, "Start archiving"),
         h("button", {class: "btn", id: "stop", title: help("stop"), onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
-        h("button", {class: "btn", id: "audit", title: help("audit"), onclick: guarded(() => startJob("audit"))}, "Check for garbage"),
+        h("button", {class: "btn", id: "review-scan", title: help("review-scan"), onclick: guarded(() => startJob("review"))}, "Check for garbage"),
         h("button", {class: "btn", id: "export", title: help("export"), onclick: guarded(() => startJob("export"))}, "Export corpus"),
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
@@ -458,7 +457,7 @@ function renderOptions() {
       h("label", {class: "opt", title: help("refresh")}, "Refresh PDFs", h("select", {onchange: e => set("refresh", e.target.value)},
         [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))),
       check("retry_failed", "Try failed URLs again"),
-      check("audit_after", "Check for garbage afterwards"),
+      check("review_after", "Check for garbage afterwards"),
     ),
     h("details", {}, h("summary", {title: help("advanced")}, "Advanced"),
       h("div", {class: "opts"},
@@ -535,7 +534,7 @@ function renderState(s) {
     $("#progress-title").textContent = j.state === "idle" ? "Nothing running" : (j.active ? j.step || j.name : j.name);
     const pill = JOB_PILL[j.state];
     $("#progress-pill").replaceChildren(...(pill ? [h("span", {class: "pill " + pill[1]}, pill[0])] : []));
-    for (const id of ["start", "audit", "export"]) $("#" + id).disabled = j.active;
+    for (const id of ["start", "review-scan", "export"]) $("#" + id).disabled = j.active;
     Cleanup.busy(j.active);
     $("#stop").disabled = !j.active;
     $("#stop").textContent = j.state === "stopping" ? "Stop now" : "Stop";
@@ -857,7 +856,10 @@ function statusPill(d) {
 const VIEWS = [["to_review", "To review"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
 const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix"};
 const Review = {
+  // `at` is the list position of the open document. A document you've decided on usually leaves the list
+  // but stays open (`detached`), and then `at` is where it was, so j opens the one that took its place
   view: "to_review", host: "", items: [], total: 0, hosts: [], counts: {}, at: 0, doc: null, built: false, fixing: false,
+  detached: false, wanted: null,
   build() {
     if (this.built) return; this.built = true;
     $("#review").append(
@@ -865,25 +867,35 @@ const Review = {
         h("div", {class: "list-tools"},
           h("div", {class: "segments", id: "review-views", role: "group", "aria-label": "Filter by decision"}),
           h("div", {class: "tool-row"},
-            h("select", {id: "review-host", "aria-label": "Filter by site", title: help("review-host"), onchange: e => { this.host = e.target.value; this.at = 0; this.load(); }}),
+            h("select", {id: "review-host", "aria-label": "Filter by site", title: help("review-host"), onchange: e => { this.host = e.target.value; this.at = 0; this.load({fresh: true}); }}),
             h("button", {class: "btn", id: "host-bad", title: help("host-bad"), onclick: guarded(() => this.markHost("bad"))}, "All bad"),
             h("button", {class: "btn", id: "host-fine", title: help("host-fine"), onclick: guarded(() => this.markHost("fine"))}, "All fine"))),
         h("div", {id: "fix-banner"}),
         h("div", {class: "rows", id: "review-rows"})),
       h("div", {class: "detail", id: "review-detail"}));
   },
-  load: guarded(async function () {
+  // the list again; the open document stays open unless `fresh` (another list or site was chosen)
+  load: guarded(async function ({fresh = false} = {}) {
     Review.build();
     const self = Review;
     const r = await api(`/api/review?view=${self.view}&host=${encodeURIComponent(self.host)}`);
     Object.assign(self, {items: r.items, total: r.total, hosts: r.hosts, counts: r.counts});
+    if (self.doc && !fresh) {
+      const i = self.items.findIndex(it => it.id === self.doc.id);
+      self.detached = i < 0;
+      self.at = i < 0 ? Math.min(self.at, self.items.length) : i;
+      self.renderList();
+      await self.show(self.doc.id);  // its new decision, or its new text after a fix
+      return;
+    }
+    self.detached = false;
     self.at = Math.min(self.at, Math.max(self.items.length - 1, 0));
     self.renderList();
     if (self.items.length) await self.open(self.at);
     else self.renderEmpty();
   }),
   renderList() {
-    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, title: VIEW_HELP[v], onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load(); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
+    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, title: VIEW_HELP[v], onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load({fresh: true}); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
     const sel = $("#review-host");
     sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(this.view === "to_review" && !this.host ? this.total : this.hosts.reduce((a, x) => a + x.count, 0))})`),
       ...this.hosts.map(x => h("option", {value: x.host, selected: this.host === x.host}, `${x.host} (${fmt(x.count)})`)));
@@ -894,7 +906,7 @@ const Review = {
       `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
       h("button", {class: "btn", title: help("run-fixes"), onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
     const rows = $("#review-rows");
-    rows.replaceChildren(...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
+    rows.replaceChildren(...this.items.map((it, i) => h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
       h("div", {class: "title"}, it.title || it.url),
       h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})), h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))),
       it.note && h("div", {class: "snippet"}, it.note),
@@ -904,20 +916,37 @@ const Review = {
   renderEmpty() {
     const scored = this.counts.scored_total;
     $("#review-detail").replaceChildren(h("div", {class: "empty"},
-      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("audit"), onclick: guarded(async () => { await api("/api/job/audit", {}); showTab("archive"); tick(); })}, "Check for garbage")]
+      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("review-scan"), onclick: guarded(async () => { await api("/api/job/review", {}); showTab("archive"); tick(); })}, "Check for garbage")]
       : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
       : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
     this.doc = null;
   },
   open: guarded(async function (i) {
     const self = Review;
-    self.at = i;
     const it = self.items[i];
     if (!it) return;
+    self.at = i;
+    self.detached = false;
     for (const [n, el] of [...$("#review-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
     $("#review-rows").querySelectorAll(".row")[i]?.scrollIntoView({block: "nearest"});
-    const d = await api("/api/document/" + it.id);
-    if (self.items[self.at]?.id !== it.id) return;
+    await self.show(it.id);
+  }),
+  // j and k: from a document that has left the list, j opens the one now in its place
+  step(by) {
+    const n = this.detached && by > 0 ? this.at : this.at + by;
+    if (n >= 0 && n < this.items.length) this.open(n);
+  },
+  show: guarded(async function (id) {
+    const self = Review;
+    self.wanted = id;
+    let d;
+    try {
+      d = await api("/api/document/" + id);
+    } catch (e) {  // gone from the archive: carry on with the list
+      if (self.doc?.id === id) { self.doc = null; self.detached = false; }
+      throw e;
+    }
+    if (self.wanted !== id) return;  // another one was chosen meanwhile
     self.doc = d;
     const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
     const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only for PDFs: OCR reads pictures of a PDF's pages." : "A saved page has nowhere to be fetched from again. Import it again instead.") : help("decide-" + decision), onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
@@ -932,15 +961,15 @@ const Review = {
     const note = $("#review-note")?.value || null;
     const r = await api("/api/decide", {ids: [this.doc.id], decision, note});
     this.counts = r.counts;
-    toast(decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared");
     await this.load();
+    toast((decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared") + (this.detached && this.items.length ? ". Press j for the next one." : "."));
   },
   async markHost(decision) {
     const n = this.total;
     if (!confirm(`Mark all ${fmt(n)} documents from ${this.host} as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
     await api("/api/decide", {host: this.host, decision});
     this.host = ""; this.at = 0;
-    await this.load();
+    await this.load({fresh: true});
   },
 };
 const topSignal = sig => Object.entries(sig).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
@@ -1070,7 +1099,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (currentTab !== "review") return;
-  if (go) { e.preventDefault(); const n = Review.at + go; if (n >= 0 && n < Review.items.length) Review.open(n); return; }
+  if (go) { e.preventDefault(); Review.step(go); return; }
   const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
   const blocked = (decision === "ocr" && !Review.doc?.pdf) || (decision === "refetch" && Review.doc?.lane === "singlefile");
   if (decision && !blocked) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }

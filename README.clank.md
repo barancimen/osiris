@@ -75,16 +75,16 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 | Decision | What happens |
 |---|---|
 | **Fine** | Stays off the list unless its text changes |
-| **Bad** | Left out of `export` and listed in `data/audit-exclude.txt`. It stays under **Bad** until you decide otherwise |
+| **Bad** | Left out of `export` and listed in `data/review-exclude.txt`. It stays under **Bad** until you decide otherwise |
 | **OCR it** | PDFs only. Reads the PDF with OCR, and replaces the text if the new text scores better, even if it's shorter |
 | **Fetch again** | Fetches or reads it from scratch, replacing what's there. If that fails, the document is no longer exported |
 | **Can't fix** | Like Bad, but no longer counted as something to come back to |
 
 **Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that changed nothing comes back as Bad, with a note saying so.
 
-If your indexer reads `data/md` directly, `data/audit-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
+If your indexer reads `data/md` directly, `data/review-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
 
-From the command line: `osiris audit scan`, then `osiris audit apply`, which also prints the lanes to run for documents queued to fetch again.
+From the command line: `osiris review scan`, then `osiris review apply`, which also prints the lanes to run for documents queued to fetch again.
 
 ## Text cleanup
 
@@ -179,7 +179,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | Command | What it does |
 |---|---|
 | `osiris ui` | Opens the web interface. `--search-index` adds [ranked search](#searching) |
-| `osiris audit {scan,apply}` | Finds probable garbage, or carries out queued fixes |
+| `osiris review {scan,apply}` | Finds probable garbage to review, or carries out the fixes you queued |
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
@@ -390,8 +390,8 @@ Everything goes in `data/`.
 | `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source) and the markdown body |
 | `corpus.jsonl` | Written by `osiris export` |
-| `audit.sqlite` | Garbage scores and your review decisions |
-| `audit-exclude.txt` | Paths of documents marked Bad or Can't fix |
+| `review.sqlite` | Garbage scores and your review decisions. An archive's older `audit.sqlite` is renamed to this when it's first opened |
+| `review-exclude.txt` | Paths of documents marked Bad or Can't fix |
 | `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |

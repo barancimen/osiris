@@ -22,7 +22,7 @@ from pathlib import Path
 
 import aiohttp
 
-from . import audit, extract
+from . import extract, review
 from .generic import PDF_CAP
 from .localfile import candidate_paths
 from .route import doc_id
@@ -202,7 +202,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
         finished += 1
         if forced is not None:
             old = store.read_doc(doc_id(doc_key))
-            improved = bool(text) and (old is None or audit.score_text(text, lane) < audit.score_text(old[1], lane))
+            improved = bool(text) and (old is None or review.score_text(text, lane) < review.score_text(old[1], lane))
         else:
             improved = len(text) > chars
         if not improved:

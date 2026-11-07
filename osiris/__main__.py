@@ -1,4 +1,4 @@
-"""CLI: osiris ui | run URLFILE | import PATH | ocr | audit | clean | search QUERY | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | ocr | review | clean | search QUERY | stats | export"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import audit, clean, cookies, extract, safety
+from . import clean, cookies, extract, review, safety
 from .arxiv import run_arxiv
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
@@ -302,26 +302,26 @@ def cmd_ocr(args: argparse.Namespace) -> None:
         store.close()
 
 
-def cmd_audit(args: argparse.Namespace) -> None:
+def cmd_review(args: argparse.Namespace) -> None:
     store = Store(args.out)
-    db = audit.connect(args.out)
+    db = review.connect(args.out)
     try:
         if args.action == "scan":
-            for name, n in audit.scan(store, args.out).items():
+            for name, n in review.scan(store, args.out).items():
                 print(f"{n:>8}  {name.replace('_', ' ')}")
         else:
-            cmd_audit_apply(store, db, args)
+            cmd_review_apply(store, db, args)
     finally:
         db.close()
         store.close()
 
 
-def cmd_audit_apply(store: Store, db, args: argparse.Namespace) -> None:
+def cmd_review_apply(store: Store, db, args: argparse.Namespace) -> None:
     """Carry out queued fixes. Fetching again happens in the next run, for the lanes this prints."""
     import uvloop
 
-    forced, _ = audit.pending_fixes(db)
-    lanes = audit.apply_refetch(store, db)
+    forced, _ = review.pending_fixes(db)
+    lanes = review.apply_refetch(store, db)
     if forced and (problem := ocr_unavailable(args.lang)):
         log.warning("not running OCR: %s", problem)
     elif forced:
@@ -335,7 +335,7 @@ def cmd_audit_apply(store: Store, db, args: argparse.Namespace) -> None:
             log.warning("interrupted: progress is saved, re-run the same command to resume")
             store.commit()
             sys.exit(130)
-        audit.mark_ocr_applied(db, forced)
+        review.mark_ocr_applied(db, forced)
     store.commit()
     print("lanes to run: " + " ".join(lanes))
 
@@ -431,14 +431,14 @@ def cmd_export(args: argparse.Namespace) -> None:
     refuse_to_overwrite(out)
     tmp = out.with_suffix(out.suffix + ".tmp")
     n = left_out = 0
-    excluded = audit.excluded(store.out)
+    excluded = review.excluded(store.out)
     with open(tmp, "w", encoding="utf-8") as f:
         for did, lane, urls in store.done_docs():
             doc = store.read_doc(did)
             if doc is None:
                 continue
             meta, body = doc
-            if did in excluded and excluded[did] == audit.text_hash(body):
+            if did in excluded and excluded[did] == review.text_hash(body):
                 left_out += 1
                 continue
             record = {
@@ -545,13 +545,13 @@ def main() -> None:
                          "search of titles, URLs and text; without it, text search scans the documents")
     ui.set_defaults(func=cmd_ui)
 
-    aud = sub.add_parser("audit", help="find probable garbage (scan), or carry out queued review fixes (apply)")
+    aud = sub.add_parser("review", help="find probable garbage to review (scan), or carry out the fixes you queued in review (apply)")
     aud.add_argument("action", choices=("scan", "apply"))
     aud.add_argument("--out", default=DEFAULT_OUT)
     aud.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages for apply (default {OCR_LANG})")
     aud.add_argument("--workers", type=int, default=1, help="PDFs at a time for apply (default 1)")
     aud.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
-    aud.set_defaults(func=cmd_audit)
+    aud.set_defaults(func=cmd_review)
 
     find = sub.add_parser("search", help="full-text search of the archived documents, best matches first")
     find.add_argument("query", nargs="+",

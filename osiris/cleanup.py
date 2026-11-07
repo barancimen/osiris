@@ -29,7 +29,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audit, clean, extract
+from . import clean, extract, review
 from .localfile import MAX_TEXT_BYTES, candidate_paths
 from .store import Store, now_iso
 
@@ -199,14 +199,14 @@ class _Bookkeeping:
 
     def __init__(self, store: Store):
         self.store = store
-        self.audit = audit.connect(store.out) if (store.out / "audit.sqlite").exists() else None
+        self.review = review.connect(store.out) if review.exists(store.out) else None
 
     def follow(self, did: str, before: str, after: str, title: str | None) -> None:
         self.store.db.execute("UPDATE urls SET chars = ? WHERE doc_id = ? AND status IN ('ok', 'thin')",
                               (len(after), did))
-        if self.audit is not None:
-            audit.carry_decision(self.audit, did, audit.text_hash(before), audit.text_hash(after))
-            audit.rescore(self.audit, did, title, after, self.store.md_path(did))
+        if self.review is not None:
+            review.carry_decision(self.review, did, review.text_hash(before), review.text_hash(after))
+            review.rescore(self.review, did, title, after, self.store.md_path(did))
 
     def needed(self, did: str, before: str, after: str) -> bool:
         """Whether an interrupted run left this document's bookkeeping undone."""
@@ -214,23 +214,23 @@ class _Bookkeeping:
                                       (did,)).fetchone()[0]
         if chars is not None and chars != len(after):
             return True
-        if self.audit is None:
+        if self.review is None:
             return False
-        stale = audit.text_hash(before)
-        return bool(self.audit.execute("SELECT 1 FROM decisions WHERE doc_id = ? AND hash = ? UNION ALL"
+        stale = review.text_hash(before)
+        return bool(self.review.execute("SELECT 1 FROM decisions WHERE doc_id = ? AND hash = ? UNION ALL"
                                        " SELECT 1 FROM scores WHERE doc_id = ? AND hash = ?",
                                        (did, stale, did, stale)).fetchone())
 
     def commit(self) -> None:
         self.store.commit()
-        if self.audit is not None:
-            self.audit.commit()
+        if self.review is not None:
+            self.review.commit()
 
     def close(self) -> None:
         self.commit()
-        if self.audit is not None:
-            audit.write_exclude(self.audit, self.store)
-            self.audit.close()
+        if self.review is not None:
+            review.write_exclude(self.review, self.store)
+            self.review.close()
 
 
 def _backups(out: Path) -> sqlite3.Connection:

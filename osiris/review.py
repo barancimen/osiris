@@ -1,8 +1,8 @@
-"""Find documents that are probably garbage, and remember what you decided about each one.
+"""Review: find documents that are probably garbage, and remember what you decided about each one.
 
 Every document gets a badness score from cheap text signals. The score only ranks a list for a
 person to read: nothing here deletes or rewrites a document. Results and decisions live in their
-own database, audit.sqlite, so reviewing never competes with a run for the manifest.
+own database, review.sqlite, so reviewing never competes with a run for the manifest.
 
 A decision holds for the exact text it was made about. When a document's text changes, its decision
 is dropped and it's scored afresh. A fix that was tried and changed nothing comes back as `bad`, so
@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -29,9 +30,11 @@ log = logging.getLogger(__name__)
 FLAGGED = 0.35  # at or above this, a document is on the review list
 SAMPLE = 60_000  # characters read from each of three places in a long document
 OUTSIDE_LIST = ("fine", "unfixable")
-EXCLUDED = ("bad", "unfixable")  # left out of `osiris export` and audit-exclude.txt
+EXCLUDED = ("bad", "unfixable")  # left out of `osiris export` and review-exclude.txt
 DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
-EXCLUDE_FILE = "audit-exclude.txt"
+EXCLUDE_FILE = "review-exclude.txt"
+DB_FILE = "review.sqlite"
+OLD_NAMES = ("audit.sqlite", "audit-exclude.txt")  # before review was called review everywhere
 CANNOT_REFETCH = "singlefile"
 
 # The most frequent words of the languages expected here. Ordinary prose is around 40% these; text
@@ -87,8 +90,23 @@ CREATE TABLE IF NOT EXISTS decisions (
 """
 
 
+def _rename_old(out: Path) -> None:
+    """Archives from before the rename keep their decisions: audit.sqlite becomes review.sqlite."""
+    old = out / OLD_NAMES[0]
+    if old.exists() and not (out / DB_FILE).exists():
+        for suffix in ("-wal", "-shm", ""):  # the database last, so it's never there without its journal
+            if (out / f"{OLD_NAMES[0]}{suffix}").exists():
+                os.replace(out / f"{OLD_NAMES[0]}{suffix}", out / f"{DB_FILE}{suffix}")
+
+
+def exists(out: str | Path) -> bool:
+    out = Path(out)
+    return (out / DB_FILE).exists() or (out / OLD_NAMES[0]).exists()
+
+
 def connect(out: str | Path) -> sqlite3.Connection:
-    db = sqlite3.connect(Path(out) / "audit.sqlite", timeout=10)
+    _rename_old(Path(out))
+    db = sqlite3.connect(Path(out) / DB_FILE, timeout=10)
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
     return db
@@ -176,7 +194,7 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
         "SELECT doc_id, MIN(doc_key), MIN(url), lane, status, MAX(chars) FROM urls"
         " WHERE status IN ('ok', 'thin') GROUP BY doc_id"
     ).fetchall()
-    log.info("audit: checking %d documents", len(rows))
+    log.info("review: checking %d documents", len(rows))
     current, scored, missing = set(), 0, 0
     last = time.monotonic()
     for i, (did, key, url, lane, status, chars) in enumerate(rows, 1):
@@ -207,7 +225,7 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
         if time.monotonic() - last > 5:
             db.commit()
             last = time.monotonic()
-            log.info("audit: %d of %d checked, %d scored", i, len(rows), scored)
+            log.info("review: %d of %d checked, %d scored", i, len(rows), scored)
     db.commit()
 
     settled = _settle(db, current)
@@ -287,7 +305,7 @@ def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, not
 
 def excluded(out: str | Path) -> dict[str, str]:
     """doc_id -> the text hash a bad or unfixable decision was made about."""
-    if not (Path(out) / "audit.sqlite").exists():
+    if not exists(out):
         return {}
     db = connect(out)
     rows = dict(db.execute(f"SELECT doc_id, hash FROM decisions WHERE decision IN {EXCLUDED}"))
@@ -300,6 +318,7 @@ def write_exclude(db: sqlite3.Connection, store: Store) -> Path:
     path = store.out / EXCLUDE_FILE
     ids = [did for (did,) in db.execute(f"SELECT doc_id FROM decisions WHERE decision IN {EXCLUDED} ORDER BY doc_id")]
     path.write_text("".join(f"{store.md_path(did)}\n" for did in ids), encoding="utf-8")
+    (store.out / OLD_NAMES[1]).unlink(missing_ok=True)  # replaced by the file above
     return path
 
 
