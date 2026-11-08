@@ -194,6 +194,26 @@ def test_saved_pages_are_left_alone(store):
     assert store.archived_in("lesswrong", route) == {}
 
 
+
+def test_kept_original_follows_a_moved_document(store):
+    old = preview(store, LW_URL, "preview")
+    variant = LW_URL + "?commentId=abc"
+    old2 = preview(store, variant, "preview too")
+    big = store.save_raw(LW_URL, "html.zst", data=b"<html>" * 500)
+    small = store.save_raw(variant, "html.zst", data=b"<html>")
+    store.record(LW_URL, "ok", raw_path=big)
+    store.record(variant, "ok", raw_path=small)
+    store.commit()
+
+    run(store, answer("the full post " * 20))
+
+    new = doc_id("lw:CEGnJBHmkcwPTysb7")
+    meta = store.read_doc(new)[0]
+    assert meta["raw"] == f"raw/{new[:2]}/{new}.html.zst" and (store.out / meta["raw"]).stat().st_size > 20
+    assert not (store.out / big).exists() and not (store.out / small).exists()
+    assert rows(store, LW_URL)[2] == new and store.db.execute("SELECT DISTINCT raw_path FROM urls").fetchall() == [(meta["raw"],)]
+
+
 def test_old_ui_config_gains_the_new_lanes(tmp_path):
     from osiris import ui
 

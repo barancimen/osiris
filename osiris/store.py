@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -31,7 +30,7 @@ CREATE TABLE IF NOT EXISTS urls (
     attempts     INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT,
     dedup_key    TEXT,  -- osiris.dedup.dedup_key of the URL as it appeared in the input
-    raw_path     TEXT,  -- relative to the output dir, only with --keep-raw
+    raw_path     TEXT,  -- relative to the output dir, only with --keep-raw-pdfs
     tried        TEXT NOT NULL DEFAULT ''  -- fallback passes already run on it, e.g. ",impersonate,wayback"
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
@@ -47,7 +46,7 @@ MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
               "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''"}
 
-FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at")
+FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at", "raw")
 DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
@@ -315,6 +314,8 @@ class Store:
         repairs in clean.py: extraction workers have done them already, and the API lanes haven't."""
         did = doc_id(doc_key)
         meta = {"id": did, "fetched_at": now_iso(), **meta}
+        raw = meta.get("raw") or self._kept_raw(doc_key)
+        meta["raw"] = raw if raw and (self.out / raw).is_file() else None
         body = clean.clean_text(body.strip(), pdf=clean.is_pdf_source(meta.get("source")),
                                 lexicon=clean.lexicon_at(self.out / clean.LEXICON_FILE))
         if isinstance(meta.get("title"), str):
@@ -335,19 +336,19 @@ class Store:
         os.replace(tmp, path)
         return len(body)
 
-    def save_raw(self, doc_key: str, ext: str, data: bytes | None = None, move_from: str | None = None,
-                 copy_from: str | None = None) -> str:
-        """Keep a fetched body under raw/<id[:2]>/<id>.<ext>; returns the path relative to the output dir.
-        Bytes are zstd-compressed (ext should end in .zst); move_from (a finished PDF download) is kept
-        as-is, and copy_from (one of your local files) is copied, leaving the original where it is."""
+    def _kept_raw(self, doc_key: str) -> str | None:
+        row = self.db.execute("SELECT raw_path FROM urls WHERE doc_key = ? AND raw_path IS NOT NULL LIMIT 1",
+                              (doc_key,)).fetchone()
+        return row[0] if row else None
+
+    def save_raw(self, doc_key: str, ext: str, data: bytes | None = None, move_from: str | None = None) -> str:
+        """Keep a fetched body under raw/<id[:2]>/<id>.<ext>, next to nothing else of that id; returns
+        the path relative to the output dir. Bytes are zstd-compressed (ext should end in .zst), and
+        move_from (a finished PDF download) is kept as-is."""
         did = doc_id(doc_key)
         path = self.out / "raw" / did[:2] / f"{did}.{ext}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if copy_from is not None:
-            tmp = path.with_name(path.name + ".tmp")
-            shutil.copyfile(copy_from, tmp)
-            os.replace(tmp, path)
-        elif move_from is not None:
+        if move_from is not None:
             os.replace(move_from, path)
         else:
             import zstandard
@@ -355,7 +356,31 @@ class Store:
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_bytes(zstandard.ZstdCompressor(level=3).compress(data))
             os.replace(tmp, path)
+        for other in path.parent.glob(f"{did}.*"):  # an earlier copy in another format
+            if other != path:
+                other.unlink(missing_ok=True)
         return str(path.relative_to(self.out))
+
+    def move_raw(self, doc_key: str, urls: list[str]) -> str | None:
+        """Rename the kept original of these URLs after the document taking them over, so the two
+        still share an id. Of several copies (URL variants of one page), the largest stays."""
+        marks = ",".join("?" * len(urls))
+        rows = self.db.execute(f"SELECT DISTINCT raw_path FROM urls WHERE url IN ({marks}) AND raw_path IS NOT NULL", urls)
+        files = [self.out / rel for (rel,) in rows.fetchall() if (self.out / rel).is_file()]
+        if not files:
+            return None
+        files.sort(key=lambda f: f.stat().st_size, reverse=True)
+        did = doc_id(doc_key)
+        target = self.out / "raw" / did[:2] / f"{did}.{files[0].name.partition('.')[2]}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(files[0], target)
+        for extra in files[1:]:
+            if extra != target:
+                extra.unlink(missing_ok=True)
+        raw_path = str(target.relative_to(self.out))
+        self.db.execute(f"UPDATE urls SET raw_path = ? WHERE url IN ({marks})", (raw_path, *urls))
+        self.commit()
+        return raw_path
 
     def read_doc(self, did: str) -> tuple[dict, str] | None:
         return read_doc_file(self.md_path(did))

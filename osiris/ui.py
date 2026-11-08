@@ -49,7 +49,7 @@ HTML_TYPES = {".html", ".htm", ".xhtml"}
 DEFAULT_CONFIG = {
     "backups": [], "local": [], "saved": [],
     "options": {"lanes": list(LANES), "forum_lanes_offered": True, "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
-                "review_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw": False,
+                "review_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw_pdfs": False, "arxiv_fulltext": True,
                 "workers": "", "youtube_delay": "", "billed_twitter": False,
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
 }
@@ -212,6 +212,8 @@ def load_config(out: Path) -> dict:
         if isinstance(saved.get(key), list):
             config[key] = [str(p) for p in saved[key]]
     options = saved.get("options", {})
+    if "keep_raw" in options:  # its name before web pages stopped being kept
+        options.setdefault("keep_raw_pdfs", options.pop("keep_raw"))
     if "audit_after" in options:  # its name before review was called review everywhere
         options.setdefault("review_after", options.pop("audit_after"))
     if isinstance(options.get("lanes"), list) and "forum_lanes_offered" not in options:  # saved before they existed
@@ -439,9 +441,12 @@ def _run_args(options: dict, url_file: Path) -> list[str]:
     if not options.get("retry_failed"):  # which already covers every site
         for host in _retry_hosts(options):
             args += ["--retry-host", host]
-    for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw", "--keep-raw")):
+    for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"),
+                         ("keep_raw_pdfs", "--keep-raw-pdfs")):
         if options.get(option):
             args.append(flag)
+    if not options.get("arxiv_fulltext", True):
+        args.append("--no-arxiv-fulltext")
     if options.get("cookies"):
         args += ["--cookies", str(Path(options["cookies"]).expanduser())]
     if options.get("user_agent"):

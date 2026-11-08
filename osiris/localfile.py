@@ -2,7 +2,7 @@
 
 The originals are only ever opened for reading. Unlike a downloaded PDF, which lives in the
 output directory's tmp/ and is deleted after extraction, a local file is yours: this module
-never moves, renames, rewrites or deletes one, and --keep-raw stores a copy.
+never moves, renames, rewrites or deletes one, and never copies one under raw/.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ READERS = {
 }
 
 
-async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, keep_raw: bool = False,
+async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int,
                         refresh: list[tuple[str, str, int]] = ()) -> None:
     pending = store.pending("localfile")
     # (doc_key, url, chars to beat): a refreshed document keeps its text unless the new read has more
@@ -96,17 +96,11 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int, ke
             return
         if keep is not None and len(text) <= keep:
             return
-        raw_path = None
-        if keep_raw:
-            try:  # on a thread: a large copy shouldn't hold up the other lanes
-                raw_path = await asyncio.to_thread(store.save_raw, doc_key, ext or "bin", copy_from=str(path))
-            except OSError as e:
-                log.warning("localfile: couldn't keep a raw copy of %s: %s", path, e)
         chars = store.write_doc(doc_key, {
             "url": url, "final_url": res.get("url"), "source": f"file:{kind}", "title": res.get("title") or path.name,
             "author": res.get("author"), "date": res.get("date"), "site": res.get("site")}, text)
         ok = chars >= extract.MIN_CHARS
-        store.record(doc_key, "ok" if ok else "thin", None if ok else "short", chars=chars, raw_path=raw_path)
+        store.record(doc_key, "ok" if ok else "thin", None if ok else "short", chars=chars)
 
     await asyncio.gather(*(one(*item) for item in todo))
     store.commit()

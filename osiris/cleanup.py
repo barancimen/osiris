@@ -175,7 +175,7 @@ def _producer(store: Store, did: str) -> str | None:
 
 def _reread(store: Store, did: str, source: str | None, body: str, lexicon: clean.Lexicon) -> str | None:
     """A text file's text read again with its encoding detected, if that has fewer replacement
-    characters than what's stored: from your original for a local file, or a --keep-raw copy."""
+    characters than what's stored: from your original for a local file, or a raw copy from an earlier run."""
     import zstandard
 
     if source not in ("file:text", "text"):

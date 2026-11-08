@@ -239,6 +239,8 @@ async def _run(store: Store, lane: str, fetch: Fetch, concurrency: int, refetch:
                 outcome["kept"] += 1
             return
         meta, body = found
+        if urls:
+            meta = {**meta, "raw": store.move_raw(key, urls)}
         chars = store.write_doc(key, meta, body)
         if urls:
             replaced.update(store.adopt(key, lane, urls))

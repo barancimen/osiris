@@ -32,7 +32,7 @@ Optional system and Python extras:
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the rate and the time left. **Stop** saves progress, and starting again resumes.
 - **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
-- **Documents:** search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw` copy. Web documents link to the live page.
+- **Documents:** search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
 - **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
 
 **Explanations:** hover over any button, option or status to see what it does or means. A word with a dotted underline, such as **thin** or a garbage signal, has an explanation too.
@@ -197,7 +197,8 @@ Common `osiris run` options:
 | `--retry-host 'scholar.google.*'` | Re-queue failed URLs on matching hosts only. Repeatable |
 | `--refresh-pdfs {web,local,both}` | Read every PDF again, failed or not. See [Refreshing PDFs](#refreshing-pdfs) |
 | `--no-ocr`, `--ocr-lang eng+tur` | Turn off automatic OCR, or set its languages |
-| `--keep-raw` | Also keep fetched pages and PDFs under `data/raw/` |
+| `--keep-raw-pdfs` | Also keep originals under `data/raw/`, each named after its document: PDFs from the web, and arXiv papers' HTML, or their PDF if they have no HTML. Ordinary web pages and your local files aren't kept |
+| `--no-arxiv-fulltext` | arXiv papers keep only their abstracts this run |
 | `--cookies FILE`, `--user-agent UA` | Use your browser session. See [Browser session](#browser-session) |
 | `--render` | Add the headless browser pass |
 | `--no-impersonate`, `--no-doi`, `--no-wayback` | Skip a fallback pass |
@@ -242,7 +243,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | Lane | URLs | How |
 |---|---|---|
 | `twitter` | `x.com/…/status/<id>` | Scry's archive, which also holds some deleted tweets, then twitterapi.io if keyed |
-| `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call. Title, authors and abstract only |
+| `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call, for title, authors and abstract. Then the full text, whichever form of link you saved: arXiv's HTML, or the PDF if there is none. One paper every 15 seconds, as arXiv's robots.txt asks, so a large first run takes hours; it's safe to stop and resumes |
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
 | `hackernews` | `news.ycombinator.com/item?id=<id>` | Algolia's item API: the story, or one comment, with every reply |
@@ -289,7 +290,7 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 
 ### Local files
 
-**Your files are only ever read.** Nothing moves, changes or deletes them, and `--keep-raw` stores a copy.
+**Your files are only ever read.** Nothing moves, changes, deletes or copies them.
 
 | Type | Extensions | How |
 |---|---|---|
@@ -379,7 +380,7 @@ This downloads or reads every PDF again, whatever its status.
 - **Resuming:** after an interruption, the same command carries on where it stopped. Once a refresh finishes, the next one starts over.
 - **Lanes:** the chosen lanes must be in the run, so `--refresh-pdfs web --only localfile` stops with an error. Other pending URLs still run unless you limit them with `--only`.
 - **What counts as a PDF:** a URL recorded as `application/pdf`, or whose path ends in `.pdf`. A failed link with neither can't be recognized.
-- **Not included:** arXiv links, which store abstracts only, and imported SingleFile pages.
+- **Not included:** arXiv links, which the `arxiv` lane handles, and imported SingleFile pages.
 
 ## Saved pages
 
@@ -400,7 +401,7 @@ Everything goes in `data/`.
 | Path | Contents |
 |---|---|
 | `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path |
-| `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source) and the markdown body |
+| `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source, and `raw` when an original was kept) and the markdown body |
 | `corpus.jsonl` | Written by `osiris export` |
 | `review.sqlite` | Garbage scores and your review decisions. An archive's older `audit.sqlite` is renamed to this when it's first opened |
 | `review-exclude.txt` | Paths of documents marked Bad or Can't fix |
@@ -408,7 +409,7 @@ Everything goes in `data/`.
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
 | `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |
-| `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw`. Budget about 1–1.5 GB for 20,000 pages, plus about 2 MB per PDF |
+| `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw-pdfs`; the same id as the document in `md/`. `.html.zst` is arXiv's HTML. Budget about 2 MB per PDF |
 
 | Status | Meaning |
 |---|---|

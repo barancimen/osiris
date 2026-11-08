@@ -99,18 +99,18 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
     stop_on_signals()
     jobs = {
         "twitter": lambda: run_twitter(store),
-        "arxiv": lambda: run_arxiv(store),
+        "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext),
         "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
         "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments),
         "lesswrong": lambda: run_lesswrong(store, refetch=args.refetch_comments),
         "github": lambda: run_github(store),
         "youtube": lambda: run_youtube(store, args.youtube_delay),
-        "localfile": lambda: run_localfile(store, pool, args.workers, keep_raw=args.keep_raw,
+        "localfile": lambda: run_localfile(store, pool, args.workers,
                                            refresh=refresh.get("localfile", ())),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
-                                       keep_raw=args.keep_raw, wayback=not args.no_wayback,
+                                       keep_raw=args.keep_raw_pdfs, wayback=not args.no_wayback,
                                        doi=not args.no_doi, rules=host_rules(args.host_limit),
                                        cookies=browser_cookies, browser_ua=args.user_agent, render=args.render,
                                        render_concurrency=args.render_concurrency,
@@ -520,9 +520,12 @@ def main() -> None:
     run.add_argument("--host-limit", action="append", default=[], metavar="PATTERN=N[:SECONDS]",
                      help="hosts matching the glob share one queue: N requests in flight, SECONDS between "
                           "starts (repeatable; default scholar.google.*=1:8)")
-    run.add_argument("--keep-raw", action="store_true",
-                     help="also keep fetched pages under <out>/raw/: HTML as .html.zst (roughly 1-1.5 GB for "
-                          "~20k pages), PDFs as-is (~2 MB each)")
+    run.add_argument("--keep-raw-pdfs", action="store_true",
+                     help="also keep originals under <out>/raw/, named after their documents: PDFs from the web "
+                          "(~2 MB each), and arXiv papers' HTML, or their PDF if they have no HTML. Web pages and "
+                          "your local files aren't kept")
+    run.add_argument("--no-arxiv-fulltext", action="store_true",
+                     help="arXiv papers keep only their abstracts this run (the full text takes 15 seconds a paper)")
     run.add_argument("--cookies", metavar="FILE",
                      help="your browser's cookies (Netscape cookies.txt or JSON export), each sent only to its "
                           "own site: for Scholar, Medium, logged-in and bot-walled pages")

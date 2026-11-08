@@ -504,13 +504,14 @@ class GenericPass:
     def _fail(self, url: str, reason: str, f: Fetched, raw_path: str | None = None) -> None:
         if self.prev_chars is not None:
             return  # upgrade pass: keep the pass-1 record
-        self.store.record(url, "failed", reason, http_status=f.status or None,
-                          final_url=f.final_url, content_type=f.content_type, raw_path=raw_path)
+        self.store.record(url, "failed", reason, http_status=f.status or None, final_url=f.final_url,
+                          content_type=f.content_type, **({"raw_path": raw_path} if raw_path else {}))
+
+    def _keeps_raw(self, f: Fetched) -> bool:
+        return self.keep_raw and f.kind == "pdf"  # for a web page, the markdown is enough
 
     def _save_raw(self, url: str, f: Fetched) -> str:
-        if f.kind == "pdf":
-            return self.store.save_raw(url, "pdf", move_from=f.pdf_path)
-        return self.store.save_raw(url, "html.zst" if f.kind == "html" else "txt.zst", data=f.body)
+        return self.store.save_raw(url, "pdf", move_from=f.pdf_path)
 
     async def _extract(self, url: str, f: Fetched) -> None:
         if self.pdf_only and f.kind != "pdf":
@@ -531,7 +532,7 @@ class GenericPass:
             text = (res.get("text") or "").strip()
             # the upgrade pass only records (and keeps raw for) results that beat pass 1
             better = self.prev_chars is None or len(text) > max(self.prev_chars.get(url, -1), 0)
-            if self.keep_raw and better:
+            if better and self._keeps_raw(f):
                 raw_path = self._save_raw(url, f)
         finally:
             if raw_path and f.kind == "pdf":  # the download now lives in raw/; just free the slot
@@ -553,12 +554,13 @@ class GenericPass:
             "author": res.get("author"),
             "date": res.get("date"),
             "site": res.get("site"),
+            "raw": raw_path,
         }
         chars = self.store.write_doc(url, meta, text)
         ok = chars >= extract.MIN_CHARS
         self.store.record(url, "ok" if ok else "thin", None if ok else "short", chars=chars,
                           http_status=f.status, final_url=f.final_url, content_type=f.content_type,
-                          raw_path=raw_path)
+                          **({"raw_path": raw_path} if raw_path else {}))
 
 
 async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, concurrency: int, per_host: int,

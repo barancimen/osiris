@@ -1,7 +1,8 @@
-"""arXiv lane: titles/authors/abstracts via the export API.
+"""arXiv lane: titles/authors/abstracts via the export API, then each paper's full text.
 
 arxiv.org's robots.txt sets Crawl-delay: 15, while the API ToU allows one request every
-3 seconds on a single connection with many IDs per request.
+3 seconds on a single connection with many IDs per request. The full text comes from arxiv.org
+at the slower pace: its HTML version, whose maths survives as LaTeX, or else its PDF.
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 
+from . import extract
+from .generic import Fetched, Reader
+from .route import doc_id
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -24,6 +28,14 @@ MAX_TRIES = 3
 NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 ENTRY_ID_RE = re.compile(r"arxiv\.org/abs/(.+?)(?:v\d+)?$")
 UA = "osiris/0.1 (one-off abstract lookup for saved browser tabs)"
+
+FULLTEXT = "fulltext"  # in `tried`: this paper's full text has been looked for
+FULLTEXT_DELAY = 15.0
+FULLTEXT_SEP = "\n\n## Full text\n\n"
+MIN_FULLTEXT_CHARS = 1000  # less than this is a failed conversion, not a paper
+MAX_UNREACHABLE = 5  # papers in a row: arXiv is down or refusing us, so stop until the next run
+BUSY = {"extract_timeout", "extract_crashed"}  # this machine's trouble, which says nothing about the paper
+TRANSIENT = {"connect", "http_429", "http_500", "http_502", "http_503", "http_504"}
 
 
 def _clean(text: str | None) -> str:
@@ -108,7 +120,133 @@ class ArxivClient:
         return papers
 
 
-async def run_arxiv(store: Store) -> None:
+def tidy_html_text(text: str) -> str:
+    """What's left of arXiv's HTML layout: its own title line and list markers on their own lines."""
+    text = re.sub(r"\A#[^\n]*\n+", "", text.strip())
+    text = re.sub(r"^- •[ \t]*\n+", "- ", text, flags=re.M)
+    return re.sub(r"^- (\\\[\d+\\\])[ \t]*\n+", r"- \1 ", text, flags=re.M)
+
+
+def with_full_text(body: str, text: str) -> str | None:
+    """The document with this full text after its abstract, or None if what it has is as long."""
+    head, _, old = body.partition(FULLTEXT_SEP)
+    return f"{head}{FULLTEXT_SEP}{text}" if len(text) > len(old) else None
+
+
+class FullText:
+    def __init__(self, store: Store, pool: extract.WorkerPool, keep_raw: bool):
+        self.store = store
+        self.pool = pool
+        self.keep_raw = keep_raw
+        self.reader = Reader(store.tmp_dir, asyncio.Semaphore(1))
+        self.next_call = 0.0
+
+    async def get(self, session: aiohttp.ClientSession, url: str) -> Fetched:
+        loop = asyncio.get_running_loop()
+        for attempt in range(1, MAX_TRIES + 1):
+            await asyncio.sleep(max(0.0, self.next_call - loop.time()))
+            try:
+                async with session.get(url) as resp:
+                    f = await self.reader.read(resp.status, str(resp.url), resp.headers, resp.content.iter_chunked(65536))
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                log.warning("arxiv: %s: %s", url, e or type(e).__name__)
+                f = Fetched(error="connect")
+            finally:
+                self.next_call = loop.time() + FULLTEXT_DELAY
+            if f.error not in TRANSIENT:
+                break
+            self.next_call += f.retry_after or FULLTEXT_DELAY * attempt
+        return f
+
+    async def _from_html(self, key: str, f: Fetched) -> str:
+        if f.kind != "html" or b"ltx_" not in f.body:
+            log.info("arxiv: no HTML version of %s (%s)", key, f.error or f.content_type)
+            return ""
+        res = await self.pool.run(extract.html_to_doc, f.body, f.final_url)
+        if res.get("error") in BUSY:
+            res = await self.pool.run(extract.html_to_doc, f.body, f.final_url)
+        text = tidy_html_text(res.get("text") or "")
+        if len(text) < MIN_FULLTEXT_CHARS:
+            log.warning("arxiv: couldn't read the HTML of %s (%s, %d characters)", key, res.get("error"), len(text))
+            return ""
+        return text
+
+    async def _from_pdf(self, f: Fetched) -> str:
+        res = await self.pool.run(extract.pdf_to_doc, f.pdf_path)
+        return (res.get("text") or "").strip()
+
+    def _write(self, key: str, text: str, source: str, f: Fetched) -> None:
+        found = self.store.read_doc(doc_id(key))
+        if found is None:
+            log.warning("arxiv: no document on disk for %s", key)
+            return
+        meta, body = found
+        body = with_full_text(body, text)
+        if body is None:
+            return
+        raw_path = None
+        if self.keep_raw:
+            raw_path = (self.store.save_raw(key, "pdf", move_from=f.pdf_path) if f.kind == "pdf"
+                        else self.store.save_raw(key, "html.zst", data=f.body))
+            if f.kind == "pdf":
+                f.pdf_path = None
+                self.reader.pdf_slots.release()
+        meta = {k: v for k, v in meta.items() if k not in ("id", "fetched_at")}
+        chars = self.store.write_doc(key, {**meta, "source": source, "raw": raw_path}, body)
+        self.store.record(key, "ok", chars=chars, http_status=f.status, final_url=f.final_url,
+                          content_type=f.content_type, **({"raw_path": raw_path} if raw_path else {}))
+
+    async def one(self, session: aiohttp.ClientSession, key: str) -> bool:
+        """Add this paper's full text. False if arXiv couldn't be reached, so it's tried again next run."""
+        arxiv_id = key.split(":", 1)[1]
+        f = await self.get(session, f"https://arxiv.org/html/{arxiv_id}")
+        if f.error in TRANSIENT:
+            return False
+        text = await self._from_html(key, f)
+        if text:
+            self._write(key, text, "html:arxiv", f)
+        else:
+            f = await self.get(session, f"https://arxiv.org/pdf/{arxiv_id}")
+            if f.error in TRANSIENT:
+                return False
+            try:
+                if f.kind == "pdf" and (text := await self._from_pdf(f)):
+                    self._write(key, text, "pdf:arxiv", f)
+            finally:
+                self.reader.release_pdf(f)
+        self.store.mark_tried(key, FULLTEXT)
+        self.store.commit()
+        return True
+
+
+async def add_full_text(store: Store, pool: extract.WorkerPool, keep_raw: bool) -> None:
+    todo = [key for key, _ in store.done_without("arxiv", FULLTEXT)]
+    if not todo:
+        return
+    log.info("arxiv: full text for %d papers, one every %.0f seconds (about %.1f hours); safe to stop, the next run "
+             "carries on", len(todo), FULLTEXT_DELAY, len(todo) * FULLTEXT_DELAY / 3600)
+    full_text = FullText(store, pool, keep_raw)
+    unreachable = 0
+    connector = aiohttp.TCPConnector(limit=1)
+    timeout = aiohttp.ClientTimeout(total=300, sock_read=60)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers={"User-Agent": UA}) as session:
+        for key in todo:
+            if await full_text.one(session, key):
+                unreachable = 0
+                continue
+            unreachable += 1
+            if unreachable >= MAX_UNREACHABLE:
+                log.warning("arxiv: couldn't reach arXiv for %d papers in a row, stopping until the next run", unreachable)
+                return
+
+
+async def run_arxiv(store: Store, pool: extract.WorkerPool, keep_raw: bool = False, full_text: bool = True) -> None:
+    await _abstracts(store)
+    if full_text:
+        await add_full_text(store, pool, keep_raw)
+
+
+async def _abstracts(store: Store) -> None:
     pending = store.pending("arxiv")
     if not pending:
         return
@@ -132,6 +270,10 @@ async def run_arxiv(store: Store) -> None:
                     store.record(f"arxiv:{arxiv_id}", "failed", "not_found")
                     continue
                 meta, body = paper_markdown(arxiv_id, paper)
+                old = store.read_doc(doc_id(f"arxiv:{arxiv_id}"))
+                if old and FULLTEXT_SEP in old[1]:  # fetching it again doesn't cost it its full text
+                    body += FULLTEXT_SEP + old[1].partition(FULLTEXT_SEP)[2]
+                    meta["source"] = old[0].get("source")
                 chars = store.write_doc(f"arxiv:{arxiv_id}", meta, body)
                 store.record(f"arxiv:{arxiv_id}", "ok", chars=chars, final_url=meta["url"], http_status=200)
             store.commit()
