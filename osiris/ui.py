@@ -28,13 +28,13 @@ from aiohttp import web
 from . import cleanup, review, search
 from .github import load_token
 from .localfile import candidate_paths
-from .route import LOCAL_READABLE
+from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
 from .store import TMP_DIR, Store, md_path, read_doc_file
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).with_name("ui.html")
-LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
+LANES = ("twitter", "arxiv", "stackexchange", "reddit", "hackernews", "lesswrong", "github", "localfile", "generic", "youtube")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 DOC_ID = re.compile(r"^[0-9a-f]{16}$")
 BILLED_KEY = "TWITTERAPI_IO_KEY"
@@ -48,7 +48,7 @@ TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
 DEFAULT_CONFIG = {
     "backups": [], "local": [], "saved": [],
-    "options": {"lanes": list(LANES), "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
+    "options": {"lanes": list(LANES), "forum_lanes_offered": True, "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
                 "review_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw": False,
                 "workers": "", "youtube_delay": "", "billed_twitter": False,
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
@@ -214,6 +214,8 @@ def load_config(out: Path) -> dict:
     options = saved.get("options", {})
     if "audit_after" in options:  # its name before review was called review everywhere
         options.setdefault("review_after", options.pop("audit_after"))
+    if isinstance(options.get("lanes"), list) and "forum_lanes_offered" not in options:  # saved before they existed
+        options["lanes"] = [*options["lanes"], *FORUM_LANES]
     config["options"].update({k: v for k, v in options.items() if k in config["options"]})
     return config
 

@@ -33,7 +33,7 @@ MAX_BYTES = 512 * 2**20
 HEAD_BYTES = 16 * 1024  # SingleFile's comment follows the <html> tag; don't match page text about it
 # lanes whose API documents hold the complete post: a saved page only adds site chrome. Not
 # Twitter: its API documents hold one tweet, where a saved page has the thread, X Article and replies.
-COMPLETE_LANES = {"stackexchange", "reddit"}
+COMPLETE_LANES = {"stackexchange", "reddit", "hackernews", "lesswrong"}
 
 HEADER_RE = re.compile(rb"(?:Page saved with|Archive processed by) SingleFile\s+url:\s*(\S+)"
                        rb"(?:\s+saved date:\s*([^\r\n]+))?")

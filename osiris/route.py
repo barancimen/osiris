@@ -28,6 +28,12 @@ SE_HOSTS = {"stackoverflow.com", "superuser.com", "serverfault.com", "askubuntu.
             "stackapps.com"}
 SE_QUESTION_RE = re.compile(r"^/(?:questions|q)/(\d+)(?:/|$)")
 
+FORUM_LANES = ("hackernews", "lesswrong")
+HN_ITEM_QUERY_RE = re.compile(r"(?:^|&)id=(\d+)(?:&|$)")
+# one database behind all three sites, so a post has the same id on each
+LW_HOSTS = {"lesswrong.com", "alignmentforum.org", "greaterwrong.com"}
+LW_POST_RE = re.compile(r"^/(?:s/[^/]+/)?(?:posts|p)/([A-Za-z0-9]{15,24})(?:/|$)")
+
 GITHUB_HOSTS = {"github.com", "gist.github.com", "raw.githubusercontent.com", "gist.githubusercontent.com"}
 # *.github.io sites and raw file hosts are ordinary pages and go through the generic lane
 GITHUB_REPO_RE = re.compile(r"^/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/|$)")
@@ -56,7 +62,7 @@ MEDIA_EXTS = {
 @dataclass(frozen=True)
 class Route:
     url: str  # normalized URL, primary key in the manifest
-    lane: str  # generic | twitter | arxiv | stackexchange | reddit | github | youtube | localfile | skip
+    lane: str  # generic | twitter | arxiv | stackexchange | reddit | hackernews | lesswrong | github | youtube | localfile | skip
     doc_key: str | None = None  # URLs sharing a doc_key share one document
     reason: str | None = None  # why it was skipped
     # extract_urls.py's notion of "same page" (tracking params, host aliases, ...): a URL
@@ -192,6 +198,14 @@ def _route(found: str) -> Route:
         m = SE_QUESTION_RE.match(path)
         if m:  # anything else (tag listings, user pages) goes through the generic lane
             return Route(url, "stackexchange", doc_key=f"se:{bare}:{m.group(1)}")
+    if bare == "news.ycombinator.com" and path.rstrip("/") == "/item":
+        m = HN_ITEM_QUERY_RE.search(parts.query)
+        if m:  # anything else (front page, user pages) goes through the generic lane
+            return Route(url, "hackernews", doc_key=f"hn:{int(m.group(1))}")
+    if bare in LW_HOSTS:
+        m = LW_POST_RE.match(path)
+        if m:  # anything else (user pages, tags) goes through the generic lane
+            return Route(url, "lesswrong", doc_key=f"lw:{m.group(1)}")
 
     ext = path.rsplit("/", 1)[-1].rpartition(".")[2].lower() if "." in path.rsplit("/", 1)[-1] else ""
     if ext in MEDIA_EXTS:

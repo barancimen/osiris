@@ -245,6 +245,8 @@ Each URL goes to the cheapest source that actually returns its text.
 | `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call. Title, authors and abstract only |
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
+| `hackernews` | `news.ycombinator.com/item?id=<id>` | Algolia's item API: the story, or one comment, with every reply |
+| `lesswrong` | Posts on `lesswrong.com`, `alignmentforum.org`, `greaterwrong.com` | GraphQL API: the full post as markdown with every comment |
 | `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files with notebooks reduced to markdown and code |
 | `youtube` | Videos, playlists, channels | Transcripts, or a list's title, description and video titles |
 | `localfile` | `file://` links | Read in place, never changed |
@@ -264,6 +266,16 @@ Threads archived before comments were collected gain them with this command, whi
 ```
 
 Without `STACKEXCHANGE_KEY` the API allows 300 calls a day. If that runs out, the same command carries on the next day. A question deleted since it was archived keeps its document.
+
+### Hacker News and LessWrong
+
+New links go to these lanes automatically. This command fetches every thread already archived, including pages the generic lane saved before these lanes existed, and you can repeat it to pick up new comments:
+
+```sh
+.venv/bin/osiris run --only hackernews --only lesswrong --refetch-comments
+```
+
+A document changes only when the API returns at least as much text as it has, so a thread deleted since keeps what was archived. A page moved from the generic lane gets a new document id: its old file is removed once the new one is written, and any Review decision on it is dropped so the new text gets a new look. Pages you saved with SingleFile are left alone.
 
 ### YouTube
 
@@ -374,7 +386,7 @@ This downloads or reads every PDF again, whatever its status.
 `osiris import DIR [DIR|FILE ...]` stores pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension like every other document. Subdirectories are searched for `.html` and `.htm` files, and the originals are left alone. These documents appear as the `singlefile` lane, with `source: singlefile`.
 
 - **URL and date:** these come from the comment SingleFile writes at the top of the file, and the date becomes `fetched_at`. A file with no comment uses its `<link rel=canonical>`, and failing that is stored under a `file:` key.
-- **Dedup:** URLs go through the same dedup as `osiris run`, and imported URLs are never queued for fetching. A saved copy replaces a failed or pending entry, and replaces an archived document only when it has more text. Complete Stack Exchange and Reddit documents are always kept.
+- **Dedup:** URLs go through the same dedup as `osiris run`, and imported URLs are never queued for fetching. A saved copy replaces a failed or pending entry, and replaces an archived document only when it has more text. Complete Stack Exchange, Reddit, Hacker News and LessWrong documents are always kept.
 - **Skipped sites:** URLs `osiris run` skips on purpose, such as GitHub, chat apps and X profiles, are stored, since you saved them deliberately.
 - **Re-running:** files are tracked by content hash, so only new or changed files are read. Files that failed are tried again.
 - **Cleaning:** inlined CSS, scripts and images are cut before parsing, as are elements SingleFile marked hidden. Saved shadow DOM is kept.

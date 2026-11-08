@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from . import clean, cookies, extract, review, safety
 from .arxiv import run_arxiv
+from .forums import run_hackernews, run_lesswrong
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
 from .localfile import run_localfile
@@ -36,7 +37,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_URLFILE = REPO_DIR / "all_urls.md"  # written by extract_urls.py
 DEFAULT_OUT = REPO_DIR / "data"
 
-LANES = ("twitter", "arxiv", "stackexchange", "reddit", "github", "localfile", "generic", "youtube")
+LANES = ("twitter", "arxiv", "stackexchange", "reddit", "hackernews", "lesswrong", "github", "localfile", "generic", "youtube")
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 REPORT_EVERY = 15.0
 TEMP_DOWNLOAD = re.compile(r"[0-9a-f]{32}\.pdf")
@@ -101,6 +102,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
         "arxiv": lambda: run_arxiv(store),
         "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
+        "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments),
+        "lesswrong": lambda: run_lesswrong(store, refetch=args.refetch_comments),
         "github": lambda: run_github(store),
         "youtube": lambda: run_youtube(store, args.youtube_delay),
         "localfile": lambda: run_localfile(store, pool, args.workers, keep_raw=args.keep_raw,
@@ -188,11 +191,14 @@ def cmd_run(args: argparse.Namespace) -> None:
             stale.unlink()
 
     routes = []
-    with open(args.urlfile, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            r = route(line)
-            if r is not None:
-                routes.append(r)
+    if Path(args.urlfile) == DEFAULT_URLFILE and not DEFAULT_URLFILE.exists():
+        log.info("no %s, so no new URLs: working on what's already in the manifest", DEFAULT_URLFILE)
+    else:
+        with open(args.urlfile, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                r = route(line)
+                if r is not None:
+                    routes.append(r)
     added, known = store.add(routes)
     by_lane = Counter(r.lane for r in routes)
     log.info("%d URLs read from %s (%s)", len(routes), args.urlfile,
@@ -483,6 +489,10 @@ def main() -> None:
     run.add_argument("--refetch-stackexchange", action="store_true",
                      help="update archived Stack Exchange threads to include comments; resumable, and a question "
                           "deleted since keeps its document")
+    run.add_argument("--refetch-comments", action="store_true",
+                     help="fetch every archived Hacker News and LessWrong thread again with all its comments, including "
+                          "pages saved before those lanes existed. A document changes only if the new text is at least "
+                          "as long. Repeat it any time to pick up new comments")
     run.add_argument("--no-ocr", action="store_true",
                      help="don't read PDFs with no text layer with tesseract once the generic and local-file lanes "
                           "are done; they wait for a later run or `osiris ocr`")

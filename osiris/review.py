@@ -405,6 +405,20 @@ def write_exclude(db: sqlite3.Connection, store: Store) -> Path:
 is_pdf_source = clean.is_pdf_source
 
 
+def forget(store: Store, doc_ids: set[str]) -> None:
+    """These documents were replaced under a new id. The new text gets a new look, like any changed text."""
+    if not doc_ids or not exists(store.out):
+        return
+    db = connect(store.out)
+    try:
+        for table in ("decisions", "scores", "refetch_kept"):
+            db.executemany(f"DELETE FROM {table} WHERE doc_id = ?", ((d,) for d in doc_ids))
+        db.commit()
+        write_exclude(db, store)
+    finally:
+        db.close()
+
+
 def pending_fixes(db: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]]]:
     """Doc keys queued for forced OCR, and (doc_key, lane) queued for fetching again."""
     rows = db.execute(

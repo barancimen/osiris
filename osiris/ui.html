@@ -308,6 +308,8 @@ const LANE_HELP = {
   youtube: "Video captions, plus the titles in playlists and channels. It goes slowly on purpose, so YouTube doesn't block you.",
   github: "A repository's description and README, and gists.",
   reddit: "Reddit posts with their comments.",
+  hackernews: "Hacker News discussions, with every comment.",
+  lesswrong: "LessWrong and Alignment Forum posts in full, with every comment.",
   stackexchange: "Questions with all their answers and comments, from Stack Overflow and its sister sites.",
   arxiv: "The title, authors and summary of arXiv papers.",
   twitter: "Posts on X (Twitter), from archives that keep copies of them.",
@@ -358,6 +360,7 @@ const SOURCE_WHAT = {
   singlefile: "A page you saved with the SingleFile extension", html_file: "A saved web page",
   doi: "The paper's title, authors and summary, found through its DOI", arxiv: "The paper's title, authors and summary from arXiv",
   github: "The repository's description and README", reddit: "The post and its comments", tweet: "The post",
+  hackernews: "The discussion and its comments", lesswrong: "The post and its comments",
   stackexchange: "The question with its answers and comments", youtube: "From YouTube",
 };
 const FILE_KIND = {pdf: "A PDF on this computer", text: "A text file on this computer", html: "A web page saved on this computer",
@@ -384,8 +387,8 @@ function sourceHelp(source) {
 }
 
 /* ---- archive tab ---- */
-const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", skip: "Skipped on purpose"};
-const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "stackexchange", "arxiv", "twitter"];
+const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", hackernews: "Hacker News", lesswrong: "LessWrong", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", skip: "Skipped on purpose"};
+const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "hackernews", "lesswrong", "stackexchange", "arxiv", "twitter"];
 const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, ebooks, Word files and text. Your files are only read, never changed."},

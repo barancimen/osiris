@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import clean
-from .route import Route, doc_id, safe_dedup_key
+from .route import FORUM_LANES, Route, doc_id, safe_dedup_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS urls (
@@ -144,6 +144,8 @@ class Store:
             r = route_fn(url)
             if r is None or (status in ("failed", "thin") and r.lane == lane):
                 continue
+            if status == "thin" and r.lane in FORUM_LANES:  # it has a file: --refetch-comments moves it safely
+                continue
             if (r.lane, r.doc_key, r.reason) != (lane, doc_key, reason):
                 new_status = "skipped" if r.lane == "skip" else "pending"
                 changed.append((r.lane, r.doc_key, r.doc_id, new_status, r.reason, url))
@@ -169,6 +171,35 @@ class Store:
             " GROUP BY doc_key ORDER BY MIN(rowid)",
             (lane, f",{pass_name}"),
         ).fetchall()
+
+    def archived_in(self, lane: str, route_fn: Callable[[str], Route | None]) -> dict[str, tuple[int, list[str]]]:
+        """Finished documents that belong in this lane, whether it fetched them or the generic lane
+        did before it existed: {doc_key in this lane: (longest text so far, URLs)}. Pages you saved
+        yourself are left alone."""
+        found: dict[str, tuple[int, list[str]]] = {}
+        for url, chars in self.db.execute(
+            "SELECT url, COALESCE(chars, 0) FROM urls WHERE status IN ('ok', 'thin') AND lane IN ('generic', ?)", (lane,)
+        ).fetchall():
+            r = route_fn(url)
+            if r is not None and r.lane == lane:
+                longest, urls = found.get(r.doc_key, (0, []))
+                found[r.doc_key] = (max(longest, chars), [*urls, url])
+        return found
+
+    def adopt(self, doc_key: str, lane: str, urls: list[str]) -> set[str]:
+        """Point URLs at a document just written in this lane, and remove the files it replaces.
+        Returns the ids of those documents."""
+        new_id = doc_id(doc_key)
+        marks = ",".join("?" * len(urls))
+        old = {did for (did,) in self.db.execute(f"SELECT DISTINCT doc_id FROM urls WHERE url IN ({marks})", urls)} - {new_id}
+        self.db.execute(f"UPDATE urls SET lane = ?, doc_key = ?, doc_id = ?, tried = '' WHERE url IN ({marks})",
+                        (lane, doc_key, new_id, *urls))
+        self.commit()  # first: a crash now leaves a spare file, not a manifest row with no file
+        replaced = {did for did in old if did and not self.db.execute(
+            "SELECT 1 FROM urls WHERE doc_id = ? LIMIT 1", (did,)).fetchone()}
+        for did in replaced:
+            self.md_path(did).unlink(missing_ok=True)
+        return replaced
 
     def requeue(self, lanes: Iterable[str], statuses: Iterable[str] = ("failed",), hosts: Iterable[str] = ()) -> int:
         """Back to pending with no fallback passes tried; `hosts` (fnmatch globs) narrows it to those sites."""
