@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import logging
+import re
 import resource
 import signal
 from concurrent.futures import ProcessPoolExecutor
@@ -98,6 +99,10 @@ def html_to_doc(data: bytes, url: str) -> dict:
     }
 
 
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+UNREADABLE_SHARE = 0.05  # of a PDF's characters: real text has next to none, and the one known case had 22%
+
+
 def pdf_to_doc(path: str) -> dict:
     """Plain text of every page, separated by blank lines."""
     import pypdfium2 as pdfium
@@ -125,6 +130,10 @@ def pdf_to_doc(path: str) -> dict:
             pdf.close()
         _release_memory()
     text = "\n\n".join(p for p in pages if p)
+    if len(text) - len(CONTROL.sub("", text)) > UNREADABLE_SHARE * len(text):
+        # letters drawn as numbered pictures, with nothing saying which letter each is (old TeX papers run
+        # through Ghostscript): what comes out is codes, not text, so it's a scan as far as reading goes
+        return {"text": "", "producer": meta.get("Producer")}
     title = meta.get("Title") or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
     return {"text": text, "title": title, "author": meta.get("Author"), "producer": meta.get("Producer")}
 
