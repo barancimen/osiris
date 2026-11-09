@@ -22,7 +22,7 @@ def options(**changes) -> dict:
 def with_page(out: Path, check):
     async def main():
         app = ui.make_app(out)
-        async with TestClient(TestServer(app), headers={"Cookie": f"osiris_ui={app['token']}"}) as client:
+        async with TestClient(TestServer(app)) as client:
             return await check(client, app)
     return asyncio.run(main())
 

@@ -1,7 +1,7 @@
 """`osiris ui`: the whole process from one local web page.
 
-It listens on this machine only, and every request needs a token kept in the output directory,
-because the page can read your files and start jobs. Work runs as ordinary `osiris` subprocesses,
+It listens on this machine only and refuses requests from other websites, because the page can
+read your files and start jobs. Work runs as ordinary `osiris` subprocesses,
 one job at a time, so the page never holds up a run and a run never depends on the page's state.
 Originals are only served for files the manifest already knows about, never for an arbitrary path.
 """
@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import signal
 import sqlite3
 import sys
@@ -355,37 +354,13 @@ def load_config(out: Path) -> dict:
     return config
 
 
-def load_ui_token(out: Path) -> str:
-    """Kept across restarts so a bookmarked address keeps working."""
-    path = out / "ui-token"
-    try:
-        token = path.read_text().strip()
-        if token:
-            return token
-    except OSError:
-        pass
-    token = secrets.token_urlsafe(24)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(token)
-    return token
-
-
 # -- request guards ------------------------------------------------------------------------------
 
 @web.middleware
 async def guard(request: web.Request, handler):
-    app = request.app
     host = request.host.rsplit(":", 1)[0] if not request.host.endswith("]") else request.host
     if host not in LOCAL_HOSTS:  # another site's name pointed at this address
         raise web.HTTPForbidden(text="This page only answers on localhost.")
-    given = request.query.get("token")
-    if given and secrets.compare_digest(given, app["token"]):
-        response = web.HTTPFound("/")
-        response.set_cookie("osiris_ui", app["token"], httponly=True, samesite="Strict", max_age=31536000)
-        raise response
-    if not secrets.compare_digest(request.cookies.get("osiris_ui", ""), app["token"]):
-        raise web.HTTPForbidden(text="Open the address that `osiris ui` printed in your terminal.")
     if request.method == "POST":
         origin = request.headers.get("Origin")
         if origin and urlsplit(origin).netloc != request.host:
@@ -1238,7 +1213,6 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     app = web.Application(middlewares=[guard], client_max_size=2**20)
     app["out"] = out
     app["store"] = Store(out)  # creates and upgrades the manifest, so the read-only connections can open it
-    app["token"] = load_ui_token(out)
     app["job"] = Job(out)
     app["index"] = Index(out) if search_index else None  # off unless asked for: it takes disk and CPU
     app["failures"] = Failures(out)
@@ -1307,7 +1281,7 @@ def terminal_log(address: str):
 
 def serve(out: str | os.PathLike, port: int, search_index: bool = False) -> None:
     app = make_app(out, search_index)
-    address = f"http://127.0.0.1:{port}/?token={app['token']}"
+    address = f"http://127.0.0.1:{port}/"
     app["job"].on_line = terminal_log(address)
 
     def terminal_closed() -> None:

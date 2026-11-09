@@ -53,7 +53,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 
 **Things to know:**
 
-- **Access:** every request needs the token in the printed address, stored in `data/ui-token`. Don't share that address, since the page can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
+- **Access:** the page only answers on this machine and refuses requests from other websites. It has no password, so anything else running on this computer can use it, and it can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
 - **One job at a time:** don't run `osiris run` in a terminal while the page is running a job.
 - **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
 - **Tweets:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you tick **Allow twitterapi.io** under Advanced, which is billed per tweet. **Look up tweets in Scry** turns Scry off or on for tweets. With both off, tweets wait.
@@ -429,7 +429,7 @@ Everything goes in `data/`.
 | `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
-| `ui.json`, `ui-token`, `ui_urls.txt` | The web interface's settings, access token and latest URL list |
+| `ui.json`, `ui_urls.txt` | The web interface's settings and latest URL list |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw-pdfs`; the same id as the document in `md/`. `.html.zst` is arXiv's HTML. Budget about 2 MB per PDF |
 
 | Status | Meaning |
