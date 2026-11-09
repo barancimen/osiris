@@ -35,6 +35,7 @@ FULLTEXT = "fulltext"  # in `tried`: this paper's full text has been looked for
 FULLTEXT_DELAY = 15.0
 FULLTEXT_SEP = "\n\n## Full text\n\n"
 MIN_FULLTEXT_CHARS = 1000  # less than this is a failed conversion, not a paper
+ABSTRACT_ONLY_CHARS = 5000  # a document shorter than this has only its title, authors and abstract
 MAX_UNREACHABLE = 5  # papers in a row: arXiv is down or refusing us, so stop until the next run
 BUSY = {"extract_timeout", "extract_crashed"}  # this machine's trouble, which says nothing about the paper
 BUSY_ONCE = "html_busy"  # in `tried`: a run was too busy to read this paper's HTML, so the next one tries before its PDF

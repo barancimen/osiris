@@ -377,6 +377,7 @@ const HELP = {
   "decide-bad": "This one is garbage. It's left out of exports.",
   "decide-ocr": "Read this PDF again from pictures of its pages. The new text is only kept if it looks better.",
   "decide-refetch": "Download or read this again from scratch. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
+  "arxiv-full-text-row": "Counted by paper. Waiting: full text not looked for yet. Saved: it has its full text. Thin: arXiv had no full text for it, so it keeps its abstract.",
   "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
   "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
   "keep-earlier": "Go back to the earlier text, exactly as it was. The new version is deleted.",
@@ -718,7 +719,8 @@ function renderState(s) {
       h("tbody", {}, names.flatMap(n => {
         const row = (name, counts, tip, style) => h("tr", {}, h("td", {style}, term(name, tip)),
           ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = counts[st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }));
-        const rows = [row(LANE_LABEL[n] || n, lanes[n], LANE_HELP[n])];
+        const rows = [row(n === "arxiv" ? "arXiv abstracts" : LANE_LABEL[n] || n, lanes[n], LANE_HELP[n])];
+        if (n === "arxiv" && Object.keys(s.arxiv_full_text).length) rows.push(row("arXiv full text", s.arxiv_full_text, help("arxiv-full-text-row")));
         if (n === "generic" && Object.keys(s.scholar).length) rows.push(row("Google Scholar", s.scholar, help("scholar-row"), "padding-left:22px"));
         return rows;
       }))

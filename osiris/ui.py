@@ -31,6 +31,7 @@ from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
 from .store import TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
+from .arxiv import ABSTRACT_ONLY_CHARS, FULLTEXT
 from .youtube import DEFAULT_DELAY
 
 log = logging.getLogger(__name__)
@@ -394,9 +395,14 @@ def _lane_table(out: Path) -> dict:
         ).fetchone()
         scholar = dict(db.execute("SELECT status, COUNT(*) FROM urls WHERE url LIKE 'https://scholar.google.%'"
                                   " OR url LIKE 'http://scholar.google.%' GROUP BY status"))
+        full_text = dict(db.execute(  # by paper, as the log counts them: pending = not looked for yet, thin = none to be had
+            "SELECT CASE WHEN NOT looked THEN 'pending' WHEN chars >= ? THEN 'ok' ELSE 'thin' END AS state, COUNT(*) FROM"
+            " (SELECT MAX(instr(tried, ?) > 0) AS looked, MAX(chars) AS chars FROM urls"
+            "  WHERE lane = 'arxiv' AND status = 'ok' GROUP BY doc_key) GROUP BY state",
+            (ABSTRACT_ONLY_CHARS, f",{FULLTEXT}")))
     finally:
         db.close()
-    return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "scholar": scholar, "documents": docs, "chars": chars}
+    return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "scholar": scholar, "arxiv_full_text": full_text, "documents": docs, "chars": chars}
 
 
 def _progress(out: Path, since: float) -> dict:
