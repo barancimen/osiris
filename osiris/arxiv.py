@@ -122,9 +122,10 @@ class ArxivClient:
         raise RuntimeError("arXiv API unavailable")
 
     async def lookup(self, ids: list[str]) -> dict[str, dict]:
-        """Like query(), but a malformed ID only costs itself: errored batches are bisected."""
+        """Like query(), but a malformed ID only costs itself: errored batches are bisected, and so are empty
+        ones, because a whole batch of real papers coming back empty is the API misbehaving."""
         papers, error = await self.query(ids)
-        if error and len(ids) > 1:
+        if (error or not papers) and len(ids) > 1:
             mid = len(ids) // 2
             papers = {**await self.lookup(ids[:mid]), **await self.lookup(ids[mid:])}
         return papers
@@ -389,6 +390,9 @@ async def run_arxiv(store: Store, pool: extract.WorkerPool, keep_raw: bool = Fal
                     refetch_pdfs: bool = False, scry_dollars: float | None = None) -> None:
     await _abstracts(store)
     if full_text:
+        if missing := store.pending("arxiv"):
+            log.warning("arxiv: %d abstracts couldn't be fetched, so full text waits for the next run", len(missing))
+            return
         if refetch_pdfs:
             log.info("arxiv: %d papers that used their PDF get another look at their HTML", requeue_pdf_papers(store))
         await add_full_text(store, pool, keep_raw, scry_dollars)
