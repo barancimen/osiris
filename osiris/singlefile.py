@@ -29,7 +29,6 @@ from .store import DONE, Store
 log = logging.getLogger(__name__)
 
 SUFFIXES = {".html", ".htm"}
-MAX_BYTES = 512 * 2**20
 HEAD_BYTES = 16 * 1024  # SingleFile's comment follows the <html> tag; don't match page text about it
 # lanes whose API documents hold the complete post: a saved page only adds site chrome. Not
 # Twitter: its API documents hold one tweet, where a saved page has the thread, X Article and replies.
@@ -160,8 +159,6 @@ def _x_page_doc(data: bytes, url: str) -> dict | None:
 def saved_page_to_doc(path: str) -> dict:
     """Runs in an extraction worker. Text and metadata of one saved page, plus its origin."""
     try:
-        if Path(path).stat().st_size > MAX_BYTES:
-            return {"text": "", "error": "too_large"}
         data = Path(path).read_bytes()
         head = data[:HEAD_BYTES]
         if b"data-sfz" in head:  # the "self-extracting ZIP" format: the page is compressed inside

@@ -16,8 +16,8 @@ log = logging.getLogger(__name__)
 
 MIN_CHARS = 200  # below this a page is "thin" (JS shell, paywall, bot wall, ...)
 RECYCLE_AFTER = 500  # tasks per worker generation: freed address space never shrinks otherwise
-MAX_PDF_PAGES = 400
 TASK_TIMEOUT = 45  # seconds; a pathological document must not wedge the only worker
+PDF_SECONDS_PER_PAGE = 0.25  # added to TASK_TIMEOUT, so a very long PDF has time to be read in full
 
 try:
     _libc = ctypes.CDLL("libc.so.6")
@@ -105,8 +105,9 @@ def pdf_to_doc(path: str) -> dict:
     pdf = None
     try:
         pdf = pdfium.PdfDocument(path)
+        signal.alarm(TASK_TIMEOUT + int(len(pdf) * PDF_SECONDS_PER_PAGE))
         pages = []
-        for i in range(min(len(pdf), MAX_PDF_PAGES)):
+        for i in range(len(pdf)):
             page = pdf[i]
             textpage = page.get_textpage()
             pages.append(textpage.get_text_range().replace("\r\n", "\n").strip())
@@ -157,12 +158,15 @@ def decode_text(data: bytes, declared: str | None = None, lexicon: clean.Lexicon
 def _cleaned(fn, *args) -> dict:
     """Run an extractor and repair its text in the same worker, so every comparison of lengths
     after it, and the manifest's character count, sees the text as it will be stored."""
-    res = fn(*args)
-    if res.get("text"):
-        res["text"] = clean.clean_text(res["text"], pdf=getattr(fn, "pdf_text", False), producer=res.get("producer"),
-                                       lexicon=clean.lexicon_from_env())
-    if isinstance(res.get("title"), str):
-        res["title"] = clean.clean_title(res["title"])
+    try:
+        res = fn(*args)
+        if res.get("text"):
+            res["text"] = clean.clean_text(res["text"], pdf=getattr(fn, "pdf_text", False),
+                                           producer=res.get("producer"), lexicon=clean.lexicon_from_env())
+        if isinstance(res.get("title"), str):
+            res["title"] = clean.clean_title(res["title"])
+    except MemoryError:  # there's no limit on a document's size except the worker's memory
+        return {"text": "", "error": "too_large"}
     return res
 
 

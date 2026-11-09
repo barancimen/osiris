@@ -284,9 +284,11 @@ def _lane_table(out: Path) -> dict:
             "SELECT COUNT(DISTINCT doc_id), COALESCE(SUM(chars), 0) FROM"
             " (SELECT doc_id, MAX(chars) AS chars FROM urls WHERE status IN ('ok', 'thin') GROUP BY doc_id)"
         ).fetchone()
+        scholar = dict(db.execute("SELECT status, COUNT(*) FROM urls WHERE url LIKE 'https://scholar.google.%'"
+                                  " OR url LIKE 'http://scholar.google.%' GROUP BY status"))
     finally:
         db.close()
-    return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "documents": docs, "chars": chars}
+    return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "scholar": scholar, "documents": docs, "chars": chars}
 
 
 def _progress(out: Path, since: float) -> dict:
@@ -621,7 +623,7 @@ async def stop_job(request: web.Request) -> web.Response:
 
 # -- review --------------------------------------------------------------------------------------
 
-REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in review.DECISIONS}}
+REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in (*review.DECISIONS, review.CHOOSE)}}
 
 
 def _review_where(view: str, host: str | None) -> tuple[str, list]:
@@ -684,6 +686,25 @@ async def decide(request: web.Request) -> web.Response:
             ids = [d for d in body.get("ids", []) if DOC_ID.match(str(d))]
         n = review.decide(db, ids, decision, str(body.get("note") or "") or None)
         return web.json_response({"changed": n, "counts": review.counts(db)})
+    finally:
+        db.close()
+
+
+async def choose_version(request: web.Request) -> web.Response:
+    app = request.app
+    if app["job"].active:  # it could be writing this document or the manifest
+        raise web.HTTPConflict(text="Wait for the current job to finish first.")
+    body = await request.json()
+    did, keep = str(body.get("id", "")), body.get("keep")
+    if not DOC_ID.match(did) or keep not in ("new", "earlier"):
+        raise web.HTTPBadRequest(text="Unknown document or version.")
+    db = review.connect(app["out"])
+    try:
+        try:
+            review.choose(app["store"], db, did, keep == "new")
+        except ValueError:
+            raise web.HTTPConflict(text="This document isn't waiting for a choice any more.") from None
+        return web.json_response({"counts": review.counts(db)})
     finally:
         db.close()
 
@@ -870,6 +891,7 @@ async def document(request: web.Request) -> web.Response:
         scored = db.execute(
             "SELECT s.score, s.signals, s.source, d.decision, d.note FROM scores s LEFT JOIN decisions d USING (doc_id)"
             " WHERE s.doc_id = ?", (did,)).fetchone()
+        earlier = review.earlier_version(db, did)
     finally:
         db.close()
     url, lane, status, reason, http_status, final_url, chars, tried, *_ = rows[0]
@@ -890,6 +912,8 @@ async def document(request: web.Request) -> web.Response:
         "score": scored[0] if scored else None, "signals": json.loads(scored[1]) if scored else {},
         "pdf": review.is_pdf_source(scored[2]) if scored else False,
         "decision": scored[3] if scored else None, "note": scored[4] if scored else None,
+        "earlier": {**earlier, "body": earlier["body"][:MAX_BODY], "truncated": earlier["length"] > MAX_BODY}
+        if earlier else None,
     })
 
 
@@ -1021,6 +1045,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.post("/api/job/stop", stop_job),
         web.get("/api/review", review_list),
         web.post("/api/decide", decide),
+        web.post("/api/review/choose", choose_version),
         web.get("/api/documents", documents),
         web.get("/api/search", search_documents),
         web.get("/api/reasons", reasons),

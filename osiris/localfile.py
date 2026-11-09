@@ -19,8 +19,6 @@ from .store import REFRESH, Store
 
 log = logging.getLogger(__name__)
 
-MAX_TEXT_BYTES = 64 * 2**20
-
 
 def candidate_paths(url: str) -> list[Path]:
     """Where a file:// URL may live on this machine. file:///C:/x is /mnt/c/x under WSL."""
@@ -35,9 +33,7 @@ def candidate_paths(url: str) -> list[Path]:
 
 def text_to_doc(path: str) -> dict:
     with open(path, "rb") as f:
-        data = f.read(MAX_TEXT_BYTES + 1)
-    if len(data) > MAX_TEXT_BYTES:
-        return {"text": "", "error": "too_large"}
+        data = f.read()
     return {"text": extract.decode_text(data)}
 
 

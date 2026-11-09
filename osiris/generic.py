@@ -45,8 +45,6 @@ BASE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-HTML_CAP = 5 * 2**20
-PDF_CAP = 50 * 2**20
 CHUNK = 1 << 16
 MAX_ATTEMPTS = 3
 MAX_COOLDOWN = 60.0
@@ -147,13 +145,6 @@ class Reader:
         if not (ctype in HTML_TYPES or ctype in TEXT_TYPES or ctype in SNIFF_TYPES or ctype == "application/pdf"):
             f.error = f"non_text:{ctype}"  # images, video, archives...: never download the body
             return f
-        try:
-            if int(headers.get("Content-Length") or 0) > PDF_CAP:
-                f.error = "too_large"
-                return f
-        except ValueError:
-            pass
-
         it = chunks.__aiter__()
         try:
             first = await it.__anext__()
@@ -178,9 +169,6 @@ class Reader:
             buf = bytearray(first)
             async for chunk in it:
                 buf += chunk
-                if len(buf) > HTML_CAP:
-                    f.error = "too_large"
-                    return f
             f.body = bytes(buf)
         return f
 
@@ -188,24 +176,15 @@ class Reader:
         await self.pdf_slots.acquire()
         path = self.tmp_dir / f"{uuid.uuid4().hex}.pdf"
         try:
-            size = len(first)
             with open(path, "wb") as out:
                 out.write(first)
                 async for chunk in it:
-                    size += len(chunk)
-                    if size > PDF_CAP:
-                        f.error = "too_large"
-                        break
                     out.write(chunk)
         except BaseException:
             path.unlink(missing_ok=True)
             self.pdf_slots.release()
             raise
-        if f.error:
-            path.unlink(missing_ok=True)
-            self.pdf_slots.release()
-        else:
-            f.pdf_path = str(path)
+        f.pdf_path = str(path)
 
     def release_pdf(self, f: Fetched) -> None:
         if f.pdf_path:

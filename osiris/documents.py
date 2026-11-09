@@ -26,7 +26,6 @@ from urllib.parse import unquote
 from . import extract
 
 TIMEOUT = 300  # seconds per book; well above TASK_TIMEOUT because these are whole books
-MAX_UNPACKED = 2**30  # bytes of text in one file; past this it's a zip bomb, not a book
 DOCX_META = {"title": "title", "creator": "author", "modified": "date"}
 XML_PARSER_OPTIONS = {"recover": True, "resolve_entities": False, "no_network": True, "huge_tree": True}
 
@@ -102,8 +101,6 @@ def _read_epub(path: str) -> dict:
                       if _local(el) == "CipherReference"}
             if locked.intersection(spine):
                 return {"text": "", "error": "drm_protected"}
-        if sum(z.getinfo(name).file_size for name in spine) > MAX_UNPACKED:
-            return {"text": "", "error": "too_large"}
         chapters = [html_to_markdown(z.read(name)) for name in spine]
     return {"text": "\n\n".join(c for c in chapters if c), **_opf_metadata(opf)}
 

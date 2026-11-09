@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from osiris import review
 from osiris.route import doc_id, route
 from osiris.store import Store
@@ -74,35 +76,91 @@ def test_failed_fetch_keeps_the_document(tmp_path: Path):
     store.close()
 
 
-def test_worse_text_is_not_kept(tmp_path: Path):
+def fetched(store: Store, key: str, text: str, status: str = "ok") -> None:
+    chars = store.write_doc(key, {"url": "https://example.com/article", "source": "html"}, text)
+    store.record(key, status, None if status == "ok" else "short", chars=chars)
+    store.commit()
+
+
+def choose(store: Store, tmp_path: Path, did: str, keep_new: bool) -> None:
+    db = review.connect(tmp_path)
+    review.choose(store, db, did, keep_new)
+    db.close()
+
+
+def kept_copies(tmp_path: Path) -> int:
+    db = review.connect(tmp_path)
+    n = db.execute("SELECT COUNT(*) FROM refetch_kept").fetchone()[0]
+    db.close()
+    return n
+
+
+def test_different_text_waits_for_your_choice(tmp_path: Path):
     store, key, did = refetch_setup(tmp_path, CLEAN)
-    chars = store.write_doc(key, {"url": "https://example.com/article", "source": "html"}, GARBLED)
-    store.record(key, "ok", chars=chars)
-    store.commit()
+    fetched(store, key, GARBLED)
     status, text, decision = outcome(store, tmp_path, did)
-    assert (status, text) == ("ok", CLEAN.strip())
-    assert decision[0] == "bad" and "didn't give better text" in decision[1]
+    assert (status, text, decision[0]) == ("ok", GARBLED.strip(), "choose")
+    assert did in review.excluded(tmp_path)  # neither version is exported until you pick
+    db = review.connect(tmp_path)
+    earlier = review.earlier_version(db, did)
+    db.close()
+    assert earlier["body"] == CLEAN.strip() and earlier["length"] == len(CLEAN.strip())
+    assert outcome(store, tmp_path, did)[2][0] == "choose"  # later checks leave it waiting
     store.close()
 
 
-def test_newly_thin_text_is_not_kept(tmp_path: Path):
+def test_better_looking_text_still_waits(tmp_path: Path):
     store, key, did = refetch_setup(tmp_path, GARBLED)
-    chars = store.write_doc(key, {"url": "https://example.com/article", "source": "html"}, "We use cookies.")
-    store.record(key, "thin", "short", chars=chars)
-    store.commit()
-    status, text, decision = outcome(store, tmp_path, did)
-    assert (status, text) == ("ok", GARBLED.strip())
-    assert decision[0] == "bad"
+    fetched(store, key, CLEAN)
+    assert outcome(store, tmp_path, did)[2][0] == "choose"
     store.close()
 
 
-def test_better_text_is_kept(tmp_path: Path):
+def test_keeping_the_new_text(tmp_path: Path):
     store, key, did = refetch_setup(tmp_path, GARBLED)
-    chars = store.write_doc(key, {"url": "https://example.com/article", "source": "html"}, CLEAN)
-    store.record(key, "ok", chars=chars)
-    store.commit()
+    fetched(store, key, CLEAN)
+    outcome(store, tmp_path, did)
+    choose(store, tmp_path, did, True)
+    assert outcome(store, tmp_path, did) == ("ok", CLEAN.strip(), None)
+    assert kept_copies(tmp_path) == 0 and did not in review.excluded(tmp_path)
+    store.close()
+
+
+def test_keeping_the_earlier_text_restores_it(tmp_path: Path):
+    store, key, did = refetch_setup(tmp_path, GARBLED)
+    before = store.md_path(did).read_bytes()
+    fetched(store, key, "We use cookies.", "thin")
+    outcome(store, tmp_path, did)
+    choose(store, tmp_path, did, False)
+    assert store.md_path(did).read_bytes() == before
+    assert outcome(store, tmp_path, did) == ("ok", GARBLED.strip(), None)  # its earlier status, too
+    assert kept_copies(tmp_path) == 0
+    assert review.scan(store, tmp_path)["scored"] == 0  # put back and scored: nothing new for the next check
+    store.close()
+
+
+def test_only_a_waiting_document_can_be_chosen(tmp_path: Path):
+    store, key, did = refetch_setup(tmp_path, GARBLED)
+    with pytest.raises(ValueError):
+        choose(store, tmp_path, did, True)
+    store.close()
+
+
+def test_a_decision_cant_override_the_choice(tmp_path: Path):
+    store, key, did = refetch_setup(tmp_path, GARBLED)
+    fetched(store, key, CLEAN)
+    outcome(store, tmp_path, did)
+    db = review.connect(tmp_path)
+    assert review.decide(db, [did], "fine") == 0
+    db.close()
+    assert outcome(store, tmp_path, did)[2][0] == "choose" and kept_copies(tmp_path) == 1
+    store.close()
+
+
+def test_a_fetch_that_never_ran_keeps_the_document(tmp_path: Path):
+    store, key, did = refetch_setup(tmp_path, GARBLED)  # queued, then stopped before fetching
     status, text, decision = outcome(store, tmp_path, did)
-    assert (status, text, decision) == ("ok", CLEAN.strip(), None)  # a new text gets a new look
+    assert (status, text, decision[0]) == ("ok", GARBLED.strip(), "bad")
     store.close()
 
 
@@ -112,16 +170,4 @@ def test_same_text_is_noted(tmp_path: Path):
     store.commit()
     status, text, decision = outcome(store, tmp_path, did)
     assert decision == ("bad", "Fetching again changed nothing")
-    store.close()
-
-
-def test_restored_file_is_byte_for_byte(tmp_path: Path):
-    store, key, did = refetch_setup(tmp_path, GARBLED)
-    before = store.md_path(did).read_bytes()
-    chars = store.write_doc(key, {"url": "https://example.com/article", "source": "html"}, "Access denied.")
-    store.record(key, "thin", "short", chars=chars)
-    store.commit()
-    outcome(store, tmp_path, did)
-    assert store.md_path(did).read_bytes() == before
-    assert review.scan(store, tmp_path)["scored"] == 0  # put back and scored: nothing new for the next check
     store.close()

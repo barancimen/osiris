@@ -8,11 +8,10 @@ A decision holds for the exact text it was made about. When a document's text ch
 is dropped and it's scored afresh. A fix that was tried and changed nothing comes back as `bad`, so
 it can't be forgotten.
 
-Fetching again only ever improves a document. Its file and manifest rows are kept before it's
-queued, and the next check judges the result like OCR's: new text that's less garbled stays, unless
-it's thin where the old text wasn't (a cookie banner looks clean). Anything else, including a fetch
-that failed, puts the earlier document back as it was, with its earlier status. It comes back as
-Bad, so it stays out of exports until you mark it Fine.
+Fetching again never decides for you. A document's file and manifest rows are kept before it's
+queued. If the fetch gives different text, the next check keeps both versions and the document waits
+under Choose version until you pick one; until then it's left out of exports. A fetch that failed
+puts the earlier document back as it was, with its earlier status, and it comes back as Bad.
 """
 
 from __future__ import annotations
@@ -36,7 +35,8 @@ log = logging.getLogger(__name__)
 FLAGGED = 0.35  # at or above this, a document is on the review list
 SAMPLE = 60_000  # characters read from each of three places in a long document
 OUTSIDE_LIST = ("fine", "unfixable")
-EXCLUDED = ("bad", "unfixable")  # left out of `osiris export` and review-exclude.txt
+CHOOSE = "choose"  # set by the check, never by hand: fetching again gave different text, and you pick
+EXCLUDED = ("bad", "unfixable", CHOOSE)  # left out of `osiris export` and review-exclude.txt
 DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
 EXCLUDE_FILE = "review-exclude.txt"
 DB_FILE = "review.sqlite"
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE INDEX IF NOT EXISTS scores_score ON scores(score);
 CREATE TABLE IF NOT EXISTS decisions (
     doc_id     TEXT PRIMARY KEY,
-    decision   TEXT NOT NULL,  -- fine | bad | ocr | refetch | unfixable
+    decision   TEXT NOT NULL,  -- fine | bad | ocr | refetch | unfixable | choose
     note       TEXT,
     hash       TEXT,           -- the text this decision was about
     decided_at TEXT,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE TABLE IF NOT EXISTS refetch_kept (
     doc_id   TEXT PRIMARY KEY,
     original BLOB,             -- the document's file before fetching again, zstd; NULL if it had none
-    rows     TEXT NOT NULL     -- JSON: its manifest rows then, to put back if the new result isn't better
+    rows     TEXT NOT NULL     -- JSON: its manifest rows then, to put back if you keep the earlier version
 );
 """
 
@@ -254,14 +254,21 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
 
 def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str, int]:
     hashes = dict(db.execute("SELECT doc_id, hash FROM scores"))
-    changed = no_change = 0
+    changed = no_change = waiting = 0
     for did, decision, note, old_hash, applied in db.execute(
         "SELECT doc_id, decision, note, hash, applied_at FROM decisions"
     ).fetchall():
+        if decision == CHOOSE:  # yours to settle
+            continue
         kept = db.execute("SELECT original, rows FROM refetch_kept WHERE doc_id = ?", (did,)).fetchone()
         if decision == "refetch" and applied and kept:
             outcome = _judge_refetch(db, store, did, kept, did in current)
-            if outcome is None:  # better text: it gets a new look, like any changed text
+            if outcome == CHOOSE:  # both versions stay until you pick one
+                db.execute("UPDATE decisions SET decision = ?, hash = ?, applied_at = NULL WHERE doc_id = ?",
+                           (CHOOSE, hashes.get(did), did))
+                waiting += 1
+                continue
+            if outcome is None:  # nothing to compare it with: it gets a new look, like any changed text
                 db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))
                 changed += 1
             else:
@@ -281,7 +288,7 @@ def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str
                        ("; ".join(filter(None, (note, f"{label} {result}"))), did))
             no_change += 1
     db.commit()
-    return {"text_changed": changed, "fix_did_nothing": no_change}
+    return {"text_changed": changed, "fix_did_nothing": no_change, "to_choose": waiting}
 
 
 def carry_decision(db: sqlite3.Connection, did: str, old_hash: str, new_hash: str) -> None:
@@ -320,29 +327,23 @@ def _keep_for_refetch(store: Store, db: sqlite3.Connection, key: str) -> None:
 
 
 def _judge_refetch(db: sqlite3.Connection, store: Store, did: str, kept: tuple, here: bool) -> str | None:
-    """Keep what fetching again gave if it's better, and return None. Otherwise put the earlier
-    document back and return a note saying why."""
+    """What fetching again came to: CHOOSE if it gave different text. Otherwise a note saying what
+    happened, or None if there's no earlier document to compare it with."""
     import zstandard
 
     original, rows = kept
-    rows = json.loads(rows)
     if original is None:  # nothing to go back to: whatever came is all there is
         return None if here else "Fetching again failed"
     old_raw = zstandard.ZstdDecompressor().decompress(original)
-    path = store.md_path(did)
     if here:
-        new_text = store.read_doc(did)[1]
-        old_text = parse_doc(old_raw.decode("utf-8"))[1]
-        if new_text == old_text:
-            return "Fetching again changed nothing"
-        lane = store.db.execute("SELECT lane FROM urls WHERE doc_id = ? LIMIT 1", (did,)).fetchone()[0]
-        newly_thin = store.db.execute("SELECT 1 FROM urls WHERE doc_id = ? AND status = 'thin'", (did,)).fetchone() \
-            and not any(r["status"] == "thin" for r in rows)
-        if not newly_thin and score_text(new_text, lane) < score_text(old_text, lane):
-            return None
-        why = "Fetching again didn't give better text, so the earlier text was put back"
-    else:
-        why = "Fetching again failed, so the earlier text was put back"
+        return CHOOSE if store.read_doc(did)[1] != parse_doc(old_raw.decode("utf-8"))[1] \
+            else "Fetching again changed nothing"
+    _put_back(db, store, did, old_raw, json.loads(rows))
+    return "Fetching again failed, so the earlier text was put back"
+
+
+def _put_back(db: sqlite3.Connection, store: Store, did: str, old_raw: bytes, rows: list[dict]) -> None:
+    path = store.md_path(did)
     tmp = path.with_suffix(".md.tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(old_raw)
@@ -353,7 +354,35 @@ def _judge_refetch(db: sqlite3.Connection, store: Store, did: str, kept: tuple, 
     store.commit()
     meta, body = store.read_doc(did)
     rescore(db, did, meta.get("title"), body, path)
-    return why
+
+
+def earlier_version(db: sqlite3.Connection, did: str) -> dict | None:
+    """The text a document waiting for your choice had before it was fetched again."""
+    import zstandard
+
+    row = db.execute("SELECT k.original, s.lane FROM refetch_kept k JOIN decisions d USING (doc_id)"
+                     " JOIN scores s USING (doc_id) WHERE k.doc_id = ? AND d.decision = ?", (did, CHOOSE)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    body = parse_doc(zstandard.ZstdDecompressor().decompress(row[0]).decode("utf-8"))[1]
+    return {"body": body, "length": len(body), "score": score_text(body, row[1])}
+
+
+def choose(store: Store, db: sqlite3.Connection, did: str, keep_new: bool) -> None:
+    """Settle a document waiting between two versions. The one not kept is deleted. Either way it's
+    undecided again, so the text you kept gets a look like any other."""
+    import zstandard
+
+    kept = db.execute("SELECT k.original, k.rows FROM refetch_kept k JOIN decisions d USING (doc_id)"
+                      " WHERE k.doc_id = ? AND d.decision = ?", (did, CHOOSE)).fetchone()
+    if kept is None:
+        raise ValueError(did)
+    if not keep_new:
+        _put_back(db, store, did, zstandard.ZstdDecompressor().decompress(kept[0]), json.loads(kept[1]))
+    db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))
+    db.execute("DELETE FROM refetch_kept WHERE doc_id = ?", (did,))
+    db.commit()
+    write_exclude(db, store)
 
 
 def counts(db: sqlite3.Connection) -> dict[str, int]:
@@ -364,11 +393,14 @@ def counts(db: sqlite3.Connection) -> dict[str, int]:
     ).fetchone()[0]
     scored = db.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
     return {"to_review": to_review, "scored_total": scored,
-            **{name: decided.get(name, 0) for name in DECISIONS}}
+            **{name: decided.get(name, 0) for name in (*DECISIONS, CHOOSE)}}
 
 
 def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, note: str | None = None) -> int:
-    """Record a decision, or clear it with None. Nothing happens to the document itself."""
+    """Record a decision, or clear it with None. Nothing happens to the document itself, and a
+    document waiting between two versions stays waiting: only choose() can settle it."""
+    waiting = {did for (did,) in db.execute("SELECT doc_id FROM decisions WHERE decision = ?", (CHOOSE,))}
+    doc_ids = [d for d in doc_ids if d not in waiting]
     if decision is None:
         db.executemany("DELETE FROM decisions WHERE doc_id = ?", ((d,) for d in doc_ids))
     else:

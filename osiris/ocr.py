@@ -23,7 +23,6 @@ from pathlib import Path
 import aiohttp
 
 from . import extract, review
-from .generic import PDF_CAP
 from .localfile import candidate_paths
 from .route import doc_id
 from .store import Store
@@ -34,6 +33,7 @@ DEFAULT_LANG = "eng"
 DPI = 200
 PAGE_TIMEOUT = 180  # seconds for one page
 DOC_TIMEOUT = 3 * 3600  # a whole book; what's read by then is kept
+DOC_SECONDS_PER_PAGE = 30  # a book too long for DOC_TIMEOUT gets this long for each page
 TRIED = "ocr"
 LANES = ("generic", "localfile")  # the lanes whose PDFs can come back with no text
 
@@ -70,7 +70,8 @@ def pdf_to_doc(path: str, lang: str) -> dict:
     try:
         pdf = pdfium.PdfDocument(path)
         meta = pdf.get_metadata_dict(skip_empty=True)
-        for i in range(min(len(pdf), extract.MAX_PDF_PAGES)):
+        signal.alarm(max(DOC_TIMEOUT, len(pdf) * DOC_SECONDS_PER_PAGE))
+        for i in range(len(pdf)):
             page = pdf[i]
             buffer = BytesIO()
             page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
@@ -145,15 +146,12 @@ async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str
         async with session.get(url) as resp:
             if resp.status != 200:
                 return f"http_{resp.status}"
-            size, first = 0, True
+            first = True
             with open(path, "wb") as f:
                 async for chunk in resp.content.iter_chunked(2**16):
                     if first and not chunk.startswith(b"%PDF"):
                         return "not_a_pdf"
                     first = False
-                    size += len(chunk)
-                    if size > PDF_CAP:
-                        return "too_large"
                     f.write(chunk)
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         return f"network:{type(e).__name__}"

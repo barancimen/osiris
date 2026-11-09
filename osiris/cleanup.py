@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import clean, extract, review
-from .localfile import MAX_TEXT_BYTES, candidate_paths
+from .localfile import candidate_paths
 from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
@@ -184,7 +184,7 @@ def _reread(store: Store, did: str, source: str | None, body: str, lexicon: clea
         data = None
         if source == "file:text":
             path = next((p for p in candidate_paths(url) if p.is_file()), None)
-            if path is not None and path.stat().st_size <= MAX_TEXT_BYTES:
+            if path is not None:
                 data = path.read_bytes()
         elif raw_path and raw_path.endswith(".txt.zst") and (store.out / raw_path).is_file():
             data = zstandard.ZstdDecompressor().stream_reader((store.out / raw_path).read_bytes()).read()

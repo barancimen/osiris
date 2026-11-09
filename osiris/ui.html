@@ -298,7 +298,12 @@ const HELP = {
   "decide-fine": "This one looks OK. It won't come up for review again unless its text changes.",
   "decide-bad": "This one is garbage. It's left out of exports.",
   "decide-ocr": "Read this PDF again from pictures of its pages. The new text is only kept if it looks better.",
-  "decide-refetch": "Download or read this again from scratch. The new text is only kept if it looks better; otherwise this one is put back as it is.",
+  "decide-refetch": "Download or read this again from scratch. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
+  "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
+  "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
+  "keep-earlier": "Go back to the earlier text, exactly as it was. The new version is deleted.",
+  "show-new": "Read the text the new fetch gave.",
+  "show-earlier": "Read the text you had before fetching again.",
   "decide-unfixable": "Garbage that can't be repaired. It's left out of exports and off your to-do list.",
   "decide-undo": "Take back your decision.",
   score: "Garbage score: the longer the bar, the more likely the text is garbled.",
@@ -319,6 +324,7 @@ const LANE_HELP = {
 };
 const VIEW_HELP = {
   to_review: "Documents that might be garbled and that you haven't decided on yet, worst first.",
+  choose: "Fetching again gave different text. Both versions are kept until you pick one, and these stay out of exports until then.",
   bad: "Ones you marked as garbage. They're left out of exports.",
   ocr: "Scanned PDFs waiting to be read again when you press Run fixes.",
   refetch: "Waiting to be downloaded or read again when you press Run fixes.",
@@ -514,8 +520,13 @@ function renderState(s) {
     laneEl.replaceChildren(names.length ? h("table", {},
       h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Source"),
         [["Waiting", "pending"], ["Saved", "ok"], ["Thin", "thin"], ["Failed", "failed"], ["Skipped", "skipped"]].map(([c, st]) => h("th", {scope: "col"}, term(c, help("status-" + st)))))),
-      h("tbody", {}, names.map(n => h("tr", {}, h("td", {}, term(LANE_LABEL[n] || n, LANE_HELP[n])),
-        ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = lanes[n][st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }))))
+      h("tbody", {}, names.flatMap(n => {
+        const row = (name, counts, tip, style) => h("tr", {}, h("td", {style}, term(name, tip)),
+          ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = counts[st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }));
+        const rows = [row(LANE_LABEL[n] || n, lanes[n], LANE_HELP[n])];
+        if (n === "generic" && Object.keys(s.scholar).length) rows.push(row("Google Scholar", s.scholar, help("scholar-row"), "padding-left:22px"));
+        return rows;
+      }))
     ) : h("p", {class: "hint"}, "Nothing archived yet."));
   }
 
@@ -726,7 +737,7 @@ const REASONS = [
   [/^challenge$/, "A bot-challenge page didn't clear in the headless browser."],
   [/^not_in_scry$/, "Scry's archive doesn't have this tweet, and twitterapi.io wasn't used for it."],
   [/^not_found$/, "The source says it doesn't exist, or it was deleted."],
-  [/^too_large$/, "It's over the size limit: 50 MB for a PDF, 5 MB for a page."],
+  [/^too_large$/, "It was too big to read: either it didn't fit in memory, or an older version of osiris turned it down for its size. Trying again may work."],
   [/^non_text:/, "It isn't a page or a document but an image, video or other file, so it wasn't downloaded."],
   [/^(pdf_error|not_a_pdf)/, "The PDF couldn't be read."],
   [/^drm_protected$/, "The book is under DRM, which osiris doesn't work around."],
@@ -861,7 +872,7 @@ function statusPill(d) {
 }
 
 /* ---- review tab ---- */
-const VIEWS = [["to_review", "To review"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
+const VIEWS = [["to_review", "To review"], ["choose", "Choose version"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
 const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix"};
 const Review = {
   // `at` is the list position of the open document. A document you've decided on usually leaves the list
@@ -926,6 +937,7 @@ const Review = {
     $("#review-detail").replaceChildren(h("div", {class: "empty"},
       !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("review-scan"), onclick: guarded(async () => { await api("/api/job/review", {}); showTab("archive"); tick(); })}, "Check for garbage")]
       : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
+      : this.view === "choose" ? [h("h3", {}, "Nothing to choose"), h("p", {}, "When Fetch again gives different text, both versions wait here for you to pick one.")]
       : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
     this.doc = null;
   },
@@ -956,6 +968,19 @@ const Review = {
     }
     if (self.wanted !== id) return;  // another one was chosen meanwhile
     self.doc = d;
+    if (d.decision === "choose" && d.earlier) {
+      const paint = showEarlier => {
+        const facts = x => `${fmt(x.length)} characters, garbage score ${x.score.toFixed(2)}`;
+        const view = (label, earlier) => h("button", {class: "btn", "aria-pressed": showEarlier === earlier, title: help(earlier ? "show-earlier" : "show-new"), onclick: () => paint(earlier)}, label);
+        const keep = (key, label, which) => h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => self.keep(which))}, label, h("kbd", {}, key));
+        const actions = h("div", {class: "decide-row"},
+          h("span", {style: "flex-basis:100%"}, `Fetching again gave different text. New: ${facts(d)}. Earlier: ${facts(d.earlier)}.`),
+          view("New text", false), view("Earlier text", true), keep("1", "Keep new", "new"), keep("2", "Keep earlier", "earlier"));
+        renderDetail($("#review-detail"), showEarlier ? {...d, ...d.earlier} : d, {actions});
+      };
+      paint(false);
+      return;
+    }
     const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
     const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only for PDFs: OCR reads pictures of a PDF's pages." : "A saved page has nowhere to be fetched from again. Import it again instead.") : help("decide-" + decision), onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
     const actions = h("div", {class: "decide-row"},
@@ -971,6 +996,13 @@ const Review = {
     this.counts = r.counts;
     await this.load();
     toast((decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared") + (this.detached && this.items.length ? ". Press j for the next one." : "."));
+  },
+  async keep(which) {
+    if (this.doc?.decision !== "choose") return;
+    const r = await api("/api/review/choose", {id: this.doc.id, keep: which});
+    this.counts = r.counts;
+    await this.load();
+    toast(`Kept the ${which} text. The other version is deleted.` + (this.detached && this.items.length ? " Press j for the next one." : ""));
   },
   async markHost(decision) {
     const n = this.total;
@@ -1108,6 +1140,11 @@ document.addEventListener("keydown", e => {
   }
   if (currentTab !== "review") return;
   if (go) { e.preventDefault(); Review.step(go); return; }
+  if (Review.doc?.decision === "choose") {
+    const which = {1: "new", 2: "earlier"}[e.key];
+    if (which) { e.preventDefault(); guarded(() => Review.keep(which))(); }
+    return;
+  }
   const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
   const blocked = (decision === "ocr" && !Review.doc?.pdf) || (decision === "refetch" && Review.doc?.lane === "singlefile");
   if (decision && !blocked) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }
