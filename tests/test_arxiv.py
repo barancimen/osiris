@@ -397,6 +397,15 @@ def test_the_full_text_step_uses_scry_only_when_asked(store, scry, monkeypatch):
     assert not asked and scry.statements
 
 
+def test_papers_taken_from_scry_are_not_requeued_for_their_html(store, scry):
+    did = abstract_doc(store)
+    store.record(KEY, "ok", content_type="application/pdf")  # how a link once saved as a PDF can look
+    store.commit()
+    scry.catalog, scry.papers = {"2402.02637": ("key1", 500)}, {"key1": PAPER}
+    assert fill(store, [KEY]) == [] and store.read_doc(did)[0]["source"] == arxiv.SCRY_SOURCE
+    assert arxiv.requeue_pdf_papers(store) == 0 and store.done_without("arxiv", arxiv.FULLTEXT) == []
+
+
 def test_tidy_html_text():
     text = "# Title\n\nIntro\n\n- \u2022 \nFirst\n- \\[12\\]\nA reference"
     assert arxiv.tidy_html_text(text) == "Intro\n\n- First\n- \\[12\\] A reference"

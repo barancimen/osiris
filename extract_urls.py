@@ -90,21 +90,25 @@ def main():
 
     seen = set()
     ordered = []  # first-seen original spelling of each page
+    keys = {}  # dedup key of each exact URL, or None if it's filtered out: backups repeat most of their URLs
     for path in files:
         name = os.path.basename(path)
         if name.startswith('bookmarks_'):
             urls = extract_bookmarks(path)
         else:
             urls = extract_session_buddy(path)
-        kept = [u for u in urls if keep(u)]
-        added = 0
-        for u in kept:
-            k = dedup_key(u)
-            if k not in seen:
+        filtered = added = 0
+        for u in urls:
+            if u not in keys:
+                keys[u] = dedup_key(u) if keep(u) else None
+            k = keys[u]
+            if k is None:
+                filtered += 1
+            elif k not in seen:
                 seen.add(k)
                 ordered.append(u)
                 added += 1
-        print(f'{name}: {len(urls)} total, {len(urls) - len(kept)} filtered, '
+        print(f'{name}: {len(urls)} total, {filtered} filtered, '
               f'{added} new, running unique {len(seen)}', file=sys.stderr)
 
     out = args.output

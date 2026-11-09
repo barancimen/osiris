@@ -376,14 +376,18 @@ async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> l
 
 def requeue_pdf_papers(store: Store) -> int:
     """Give papers whose full text came from a PDF another look at their HTML, once each: until we've
-    actually read a paper's HTML, or know there isn't any, it stays eligible."""
-    changed = store.db.execute(
-        "UPDATE urls SET tried = replace(tried, ?, '') WHERE lane = 'arxiv' AND content_type = 'application/pdf'"
+    actually read a paper's HTML, or know there isn't any, it stays eligible. The document says where its
+    text came from: a paper saved earlier as a PDF link can have a PDF content type and text from Scry."""
+    candidates = store.db.execute(
+        "SELECT DISTINCT doc_key FROM urls WHERE lane = 'arxiv' AND content_type = 'application/pdf'"
         " AND instr(tried, ?) > 0 AND instr(tried, ?) = 0",
-        (f",{FULLTEXT}", f",{FULLTEXT}", f",{HTML_CHECKED}"),
-    ).rowcount
+        (f",{FULLTEXT}", f",{HTML_CHECKED}"),
+    ).fetchall()
+    keys = [key for (key,) in candidates if (doc := store.read_doc(doc_id(key))) and doc[0].get("source") == "pdf:arxiv"]
+    store.db.executemany("UPDATE urls SET tried = replace(tried, ?, '') WHERE doc_key = ?",
+                         ((f",{FULLTEXT}", key) for key in keys))
     store.commit()
-    return changed
+    return len(keys)
 
 
 async def run_arxiv(store: Store, pool: extract.WorkerPool, keep_raw: bool = False, full_text: bool = True,
