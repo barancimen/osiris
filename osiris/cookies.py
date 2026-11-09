@@ -16,10 +16,13 @@ keep it private.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from http.cookiejar import Cookie, CookieJar
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -86,22 +89,28 @@ def to_cookiejar(cookies: list[BrowserCookie]) -> CookieJar:
 
 def into_aiohttp(cookies: list[BrowserCookie], jar) -> None:
     """Load into an aiohttp.CookieJar, keeping host-only cookies host-only."""
-    from http.cookies import SimpleCookie
+    from http.cookies import CookieError, SimpleCookie
 
     from yarl import URL
 
+    skipped = 0
     for c in cookies:
-        morsel = SimpleCookie()
-        morsel[c.name] = c.value
-        m = morsel[c.name]
-        m["path"] = c.path
-        if not c.host_only:
-            m["domain"] = c.domain
-        if c.secure:
-            m["secure"] = True
-        if c.expires:
-            m["expires"] = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(c.expires))
-        jar.update_cookies(morsel, URL(f"https://{c.domain.lstrip('.')}/"))
+        try:
+            morsel = SimpleCookie()
+            morsel[c.name] = c.value
+            m = morsel[c.name]
+            m["path"] = c.path
+            if not c.host_only:
+                m["domain"] = c.domain
+            if c.secure:
+                m["secure"] = True
+            if c.expires:
+                m["expires"] = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(c.expires))
+            jar.update_cookies(morsel, URL(f"https://{c.domain.lstrip('.')}/"))
+        except (CookieError, ValueError, OverflowError, OSError):  # a name Python won't accept, an impossible date
+            skipped += 1
+    if skipped:
+        log.warning("skipped %d of %d browser cookies that can't be used", skipped, len(cookies))
 
 
 def for_playwright(cookies: list[BrowserCookie]) -> list[dict]:

@@ -12,6 +12,7 @@ import signal
 import sys
 import time
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -117,7 +118,13 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
                                        chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait,
                                        refresh=refresh.get("generic", ()), pdf_at_once=args.pdf_at_once),
     }
+    def report_crash(lane: str, task: asyncio.Task) -> None:  # at once: other lanes can run for hours
+        if not task.cancelled() and task.exception():
+            log.error("%s lane crashed; its documents stay pending", lane, exc_info=task.exception())
+
     tasks = {lane: asyncio.create_task(jobs[lane]()) for lane in lanes}
+    for lane, task in tasks.items():
+        task.add_done_callback(partial(report_crash, lane))
 
     ocr_lanes = [lane for lane in OCR_LANES if lane in tasks]
     ocr = bool(ocr_lanes) and not args.no_ocr
@@ -137,6 +144,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
 
     if ocr_lanes:
         tasks["ocr"] = asyncio.create_task(after_reading())
+        tasks["ocr"].add_done_callback(partial(report_crash, "ocr"))
 
     async def note_youtube_alone() -> None:
         others = [task for lane, task in tasks.items() if lane != "youtube"]
@@ -146,10 +154,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
 
     notice = asyncio.create_task(note_youtube_alone())
     try:
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        for lane, result in zip(tasks, results):
-            if isinstance(result, BaseException):
-                log.error("%s lane crashed", lane, exc_info=result)
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
     finally:
         notice.cancel()
         reporter.cancel()

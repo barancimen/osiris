@@ -898,6 +898,10 @@ async def choose_version(request: web.Request) -> web.Response:
 
 # -- documents -----------------------------------------------------------------------------------
 
+def _fold(text: str | None) -> str:
+    return text.casefold() if text else ""
+
+
 async def documents(request: web.Request) -> web.Response:
     """The plain list, newest first, filtered by URL or title text: for every status, including
     documents with no text, which the search index doesn't hold."""
@@ -908,11 +912,12 @@ async def documents(request: web.Request) -> web.Response:
             where.append(f"{column} = ?")
             params.append(q[column])
     if term := q.get("q", "").strip():
-        where.append("(url LIKE ? OR title LIKE ?)")
-        params += [f"%{term}%", f"%{term}%"]
+        where.append("(url LIKE ? OR fold(title) LIKE ?)")
+        params += [f"%{term}%", f"%{term.casefold()}%"]
     offset = max(int(q.get("offset", 0)), 0)
     clause = " AND ".join(where)
     manifest = read_manifest(request.app["out"])
+    manifest.create_function("fold", 1, _fold, deterministic=True)  # SQLite's LIKE only ignores case for A to Z
     try:
         rows = manifest.execute(
             f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars), MAX(title) FROM urls WHERE {clause} AND doc_id IS NOT NULL"
