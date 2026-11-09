@@ -131,6 +131,10 @@ class Store:
         self.db.executescript(SCHEMA)
         self._migrate()
         self._last_commit = time.monotonic()
+        self.only: set[str] | None = None  # doc keys: while set, the lanes see only these (carrying out fixes)
+
+    def _only(self, rows: list) -> list:
+        return rows if self.only is None else [row for row in rows if row[0] in self.only]
 
     def _migrate(self) -> None:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(urls)")}
@@ -164,6 +168,23 @@ class Store:
         self.db.commit()
         added = self.db.total_changes - before
         return added, seen + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
+
+    def delete(self, did: str) -> bool:
+        """Remove a document's saved text and osiris's own copies of its original. Its links stay in the
+        manifest, marked deleted, so that no later run fetches them again from your tab backups. Your own
+        files (local files, saved pages) are never touched. False if there's no such document."""
+        rows = self.db.execute("SELECT raw_path FROM urls WHERE doc_id = ?", (did,)).fetchall()
+        if not rows:
+            return False
+        ours = (self.out / "md").resolve(), (self.out / "raw").resolve()
+        files = {self.md_path(did), *(self.out / "raw" / did[:2]).glob(f"{did}.*"), *(self.out / raw for (raw,) in rows if raw)}
+        for path in files:
+            if any(path.resolve().is_relative_to(folder) for folder in ours):
+                path.unlink(missing_ok=True)
+        self.db.execute("UPDATE urls SET lane = 'skip', status = 'skipped', reason = 'deleted', chars = NULL,"
+                        " raw_path = NULL, title = '', updated_at = ? WHERE doc_id = ?", (now_iso(), did))
+        self.db.commit()
+        return True
 
     def mark_inputs_read(self, files: Iterable[tuple[str, str]]) -> None:
         self.db.executemany("INSERT OR REPLACE INTO input_files VALUES (?, ?, ?)",
@@ -199,19 +220,19 @@ class Store:
 
     def pending(self, lane: str) -> list[tuple[str, str]]:
         """(doc_key, url) for each pending document in a lane; one URL per doc_key."""
-        return self.db.execute(
+        return self._only(self.db.execute(
             "SELECT doc_key, MIN(url) FROM urls WHERE lane = ? AND status = 'pending'"
             " GROUP BY doc_key ORDER BY MIN(rowid)",
             (lane,),
-        ).fetchall()
+        ).fetchall())
 
     def done_without(self, lane: str, pass_name: str) -> list[tuple[str, str]]:
         """(doc_key, url) for each finished document in a lane that this pass hasn't touched."""
-        return self.db.execute(
+        return self._only(self.db.execute(
             "SELECT doc_key, MIN(url) FROM urls WHERE lane = ? AND status = 'ok' AND instr(tried, ?) = 0"
             " GROUP BY doc_key ORDER BY MIN(rowid)",
             (lane, f",{pass_name}"),
-        ).fetchall()
+        ).fetchall())
 
     def archived_in(self, lane: str, route_fn: Callable[[str], Route | None],
                     fetched_before: str | None = None) -> dict[str, tuple[int, list[str]]]:
@@ -227,7 +248,7 @@ class Store:
             if fetched_before and url_lane == lane and updated and updated >= fetched_before:
                 continue
             r = route_fn(url)
-            if r is not None and r.lane == lane:
+            if r is not None and r.lane == lane and (self.only is None or r.doc_key in self.only):
                 longest, urls = found.get(r.doc_key, (0, []))
                 found[r.doc_key] = (max(longest, chars), [*urls, url])
         return found
@@ -292,11 +313,11 @@ class Store:
     def retry_candidates(self, lane: str, pass_name: str, eligible: Callable[[str], bool]) -> list[tuple[str, int]]:
         """(doc_key, chars so far; -1 if failed) for thin docs and failures whose reason is
         eligible, skipping those this fallback pass already tried."""
-        rows = self.db.execute(
+        rows = self._only(self.db.execute(
             "SELECT doc_key, status, reason, COALESCE(chars, -1) FROM urls WHERE lane = ?"
             " AND status IN ('thin', 'failed') AND instr(tried, ?) = 0 ORDER BY rowid",
             (lane, f",{pass_name}"),
-        )
+        ).fetchall())
         return [(key, chars) for key, status, reason, chars in rows if status == "thin" or eligible(reason or "")]
 
     def mark_tried(self, doc_key: str, pass_name: str) -> None:

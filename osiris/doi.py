@@ -120,9 +120,11 @@ async def _from_openalex(session: aiohttp.ClientSession, dois: list[str], contac
     return found
 
 
-async def run_doi_pass(store: Store, contact: str | None) -> None:
-    candidates = [(key, prev, doi) for key, prev in store.retry_candidates("generic", "doi", lambda reason: True)
-                  if (doi := doi_of(key))]
+async def run_doi_pass(store: Store, contact: str | None, candidates: list[tuple[str, int, str]] | None = None) -> None:
+    """`candidates`, (url, length to beat, DOI), are the links to look up instead of the failed and thin ones."""
+    if candidates is None:
+        candidates = [(key, prev, doi) for key, prev in store.retry_candidates("generic", "doi", lambda reason: True)
+                      if (doi := doi_of(key))]
     if not candidates:
         return
     dois = sorted({doi for _, _, doi in candidates})

@@ -296,20 +296,21 @@ def _text_batches(found: dict[str, tuple[str, int]]) -> list[list[str]]:
     return batches
 
 
-def _save_scry_text(store: Store, key: str, text: str) -> None:
+def _save_scry_text(store: Store, key: str, text: str, replace: bool = False) -> None:
     meta, body = store.read_doc(doc_id(key))
-    body = with_full_text(body, text)
+    body = f"{body.partition(FULLTEXT_SEP)[0]}{FULLTEXT_SEP}{text}" if replace else with_full_text(body, text)
     if body is not None:
         meta = {k: v for k, v in meta.items() if k not in ("id", "fetched_at")}
         store.record(key, "ok", chars=store.write_doc(key, {**meta, "source": SCRY_SOURCE}, body))
     store.mark_tried(key, FULLTEXT)
 
 
-async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> list[str]:
+async def fill_from_scry(store: Store, todo: list[str], max_dollars: float, replace: bool = False) -> list[str]:
     """Full text from Scry for papers that have only their abstract, without asking arXiv for them.
     Returns the papers arXiv should still be asked for: those Scry doesn't have, and those that already
     have text, because Scry's copy drops formulas and shouldn't replace better text. If Scry fails or the
-    spending limit is reached, papers it wasn't asked about wait for the next run instead of going to arXiv."""
+    spending limit is reached, papers it wasn't asked about wait for the next run instead of going to arXiv.
+    With `replace` (a fix that asks for Scry's copy), papers that have text get Scry's in its place."""
     key = load_key()
     if not key:
         log.warning("arxiv: no Scry key, so every paper comes from arXiv")
@@ -317,7 +318,7 @@ async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> l
     for_arxiv, ids = [], {}
     for doc_key in todo:
         found = store.read_doc(doc_id(doc_key))
-        if found is not None and FULLTEXT_SEP not in found[1]:
+        if found is not None and (replace or FULLTEXT_SEP not in found[1]):
             ids[doc_key.split(":", 1)[1]] = doc_key
         else:
             for_arxiv.append(doc_key)
@@ -360,7 +361,7 @@ async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> l
             got = {r["paper_key"]: r["text"].strip() for r in rows}
             for paper_key, arxiv_id in by_paper.items():
                 if len(got.get(paper_key, "")) >= MIN_FULLTEXT_CHARS:
-                    _save_scry_text(store, ids[arxiv_id], got[paper_key])
+                    _save_scry_text(store, ids[arxiv_id], got[paper_key], replace)
                     saved += 1
                 else:
                     for_arxiv.append(ids[arxiv_id])

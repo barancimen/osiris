@@ -550,14 +550,33 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                       rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
                       browser_ua: str | None = None, render: bool = False, render_concurrency: int = 2,
                       chrome_profile: str | None = None, challenge_wait: float = 15.0,
-                      refresh: list[tuple[str, str, int]] = (), pdf_at_once: int | None = None) -> None:
+                      refresh: list[tuple[str, str, int]] = (), pdf_at_once: int | None = None,
+                      via: str = "plain") -> None:
+    """`via` fetches with one fallback's client from the start (impersonate, render or wayback),
+    for a fix that asks for that method."""
     pdf_slots = asyncio.Semaphore(pdf_at_once or max(3, 2 * workers))  # downloaded and waiting to be read, or being read
     reader = Reader(store.tmp_dir, pdf_slots)
 
     urls = [key for key, _ in store.pending("generic")]
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
-    client = AiohttpClient(reader, concurrency, per_host, contact, cookies, browser_ua)
+    if via == "impersonate":
+        client, concurrency, per_host = CurlClient(reader, 16, cookies), 16, 2
+    elif via == "render":
+        from .render import RenderClient
+
+        client, concurrency, per_host = RenderClient(render_concurrency, cookies, browser_ua, chrome_profile,
+                                                     challenge_wait), render_concurrency, 1
+    elif via == "wayback":  # requests go to archive.org, so the per-site rules don't apply
+        client, concurrency, per_host, rules = WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, ()
+    else:
+        client = AiohttpClient(reader, concurrency, per_host, contact, cookies, browser_ua)
     try:
+        if hasattr(client, "start") and urls:
+            try:
+                await client.start()
+            except Exception as e:
+                log.error("generic: the headless browser couldn't start, so %d links weren't fetched. %s", len(urls), e)
+                return
         await GenericPass(store, client, reader, pool, workers, keep_raw, rules=rules).run(urls, concurrency, per_host)
         if refresh:
             log.info("generic: refreshing %d PDFs that have text; each keeps its text unless the new copy has more",

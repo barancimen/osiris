@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE INDEX IF NOT EXISTS scores_score ON scores(score);
 CREATE TABLE IF NOT EXISTS decisions (
     doc_id     TEXT PRIMARY KEY,
-    decision   TEXT NOT NULL,  -- fine | bad | ocr | refetch | unfixable | choose
+    decision   TEXT NOT NULL,  -- fine | bad | ocr | refetch | unfixable | choose | fixed
+    method     TEXT,           -- ocr: the languages; refetch: how (fixes.METHODS); NULL for the usual way
     note       TEXT,
     hash       TEXT,           -- the text this decision was about
     decided_at TEXT,
@@ -121,6 +122,8 @@ def connect(out: str | Path) -> sqlite3.Connection:
     db = sqlite3.connect(Path(out) / DB_FILE, timeout=10)
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
+    if "method" not in {row[1] for row in db.execute("PRAGMA table_info(decisions)")}:  # from before fix methods
+        db.execute("ALTER TABLE decisions ADD COLUMN method TEXT")
     return db
 
 
@@ -225,14 +228,7 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
             missing += 1
             current.discard(did)
             continue
-        meta, body = doc
-        found = signals(body)
-        db.execute(
-            "INSERT OR REPLACE INTO scores VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (did, key, url, lane, status, meta.get("source"), urlsplit(url).hostname or "local file",
-             meta.get("title"), len(body), stat.st_mtime, stat.st_size, text_hash(body), score(found, lane),
-             json.dumps(found), _excerpt(body)),
-        )
+        _insert_score(db, (did, key, url, lane, status), doc, stat)
         scored += 1
         if time.monotonic() - last > 5:
             db.commit()
@@ -251,6 +247,38 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
     result = {"documents": len(current), "scored": scored, "missing": missing, **settled, **counts(db)}
     db.close()
     return result
+
+
+def _insert_score(db: sqlite3.Connection, row: tuple, doc: tuple[dict, str] | None, stat) -> None:
+    """row: (doc_id, doc_key, url, lane, status). With no document (one that failed), a row with no
+    score, so a fix can still be queued for it."""
+    did, key, url, lane, status = row
+    meta, body = doc or ({}, "")
+    found = signals(body) if doc else {}
+    db.execute(
+        "INSERT OR REPLACE INTO scores VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (did, key, url, lane, status, meta.get("source"), urlsplit(url).hostname or "local file",
+         meta.get("title"), len(body), stat.st_mtime if stat else None, stat.st_size if stat else None,
+         text_hash(body) if doc else None, score(found, lane) if doc else 0.0, json.dumps(found),
+         _excerpt(body) if doc else ""),
+    )
+
+
+def ensure_scored(db: sqlite3.Connection, store: Store, doc_ids: list[str]) -> None:
+    """Score documents the check hasn't seen yet, so a decision can be recorded for any of them."""
+    known = {did for (did,) in db.execute(f"SELECT doc_id FROM scores WHERE doc_id IN ({','.join('?' * len(doc_ids))})",
+                                          doc_ids)} if doc_ids else set()
+    for did in doc_ids:
+        if did in known:
+            continue
+        row = store.db.execute("SELECT doc_id, MIN(doc_key), MIN(url), lane, status FROM urls WHERE doc_id = ?"
+                               " GROUP BY doc_id", (did,)).fetchone()
+        if row is None:
+            continue
+        path = store.md_path(did)
+        doc = store.read_doc(did) if path.is_file() else None
+        _insert_score(db, row, doc, path.stat() if doc else None)
+    db.commit()
 
 
 def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str, int]:
@@ -402,7 +430,8 @@ def counts(db: sqlite3.Connection) -> dict[str, int]:
             **{name: decided.get(name, 0) for name in (*DECISIONS, CHOOSE, FIXED)}}
 
 
-def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, note: str | None = None) -> int:
+def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, note: str | None = None,
+           method: str | None = None) -> int:
     """Record a decision, or clear it with None. Nothing happens to the document itself, and a
     document waiting between two versions stays waiting: only choose() can settle it."""
     waiting = {did for (did,) in db.execute("SELECT doc_id FROM decisions WHERE decision = ?", (CHOOSE,))}
@@ -413,9 +442,9 @@ def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, not
         if decision not in DECISIONS:
             raise ValueError(decision)
         db.executemany(
-            "INSERT OR REPLACE INTO decisions (doc_id, decision, note, hash, decided_at)"
-            " SELECT doc_id, ?, ?, hash, ? FROM scores WHERE doc_id = ?",
-            ((decision, note, now_iso(), d) for d in doc_ids),
+            "INSERT OR REPLACE INTO decisions (doc_id, decision, method, note, hash, decided_at)"
+            " SELECT doc_id, ?, ?, ?, hash, ? FROM scores WHERE doc_id = ?",
+            ((decision, method, note, now_iso(), d) for d in doc_ids),
         )
     db.commit()
     return len(doc_ids)
@@ -457,32 +486,32 @@ def forget(store: Store, doc_ids: set[str]) -> None:
         db.close()
 
 
-def pending_fixes(db: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]]]:
-    """Doc keys queued for forced OCR, and (doc_key, lane) queued for fetching again."""
-    rows = db.execute(
-        "SELECT s.doc_key, s.lane, d.decision FROM decisions d JOIN scores s USING (doc_id)"
+def queued_fixes(db: sqlite3.Connection) -> list[tuple[str, str, str, str | None]]:
+    """(doc_key, lane, ocr or refetch, method) for each fix queued and not yet carried out."""
+    return db.execute(
+        "SELECT s.doc_key, s.lane, d.decision, d.method FROM decisions d JOIN scores s USING (doc_id)"
         " WHERE d.decision IN ('ocr', 'refetch') AND d.applied_at IS NULL"
     ).fetchall()
-    return ([key for key, _, decision in rows if decision == "ocr"],
-            [(key, lane) for key, lane, decision in rows if decision == "refetch"])
 
 
-def apply_refetch(store: Store, db: sqlite3.Connection) -> list[str]:
-    """Queue documents for fetching again. Returns the lanes that now have work to do."""
-    _, refetch = pending_fixes(db)
-    lanes = set()
-    for key, lane in refetch:
+def prepare_refetch(store: Store, db: sqlite3.Connection, fixes: list[tuple[str, str, str]],
+                    fetched_like_new: set[str]) -> list[tuple[str, str, str]]:
+    """Keep each document as it is, to compare with or put back, and send back to waiting those whose
+    method fetches them from scratch. Returns the (doc_key, lane, method) that can go ahead."""
+    ready = []
+    for key, lane, method in fixes:
         if lane == CANNOT_REFETCH:  # no source to go back to, so queueing it would only strand it
             db.execute("UPDATE decisions SET decision = 'bad', note = 'A saved page can only be imported again'"
                        " WHERE doc_id = ?", (doc_id(key),))
             continue
         _keep_for_refetch(store, db, key)
-        store.db.execute("UPDATE urls SET status = 'pending', tried = '' WHERE doc_key = ?", (key,))
+        if method in fetched_like_new:
+            store.db.execute("UPDATE urls SET status = 'pending', tried = '' WHERE doc_key = ?", (key,))
         db.execute("UPDATE decisions SET applied_at = ? WHERE doc_id = ?", (now_iso(), doc_id(key)))
-        lanes.add(lane)
+        ready.append((key, lane, method))
     store.commit()
     db.commit()
-    return sorted(lanes)
+    return ready
 
 
 def mark_ocr_applied(db: sqlite3.Connection, keys: list[str]) -> None:

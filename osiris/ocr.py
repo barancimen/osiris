@@ -135,7 +135,7 @@ def candidates(store: Store, retry: bool = False, lanes: Iterable[str] = LANES) 
         " GROUP BY doc_key ORDER BY MIN(rowid)",
         lanes,
     ).fetchall()
-    return rows
+    return store._only(rows)
 
 
 def forced_rows(store: Store, keys: list[str]) -> list[tuple]:

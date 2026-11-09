@@ -353,6 +353,17 @@ def read_report(out: Path) -> tuple[dict, list[tuple[str, ...]]] | None:
         return None
 
 
+def forget(out: Path, did: str) -> None:
+    """A deleted document's original goes too, so that putting originals back can't bring it back."""
+    if (out / BACKUP_FILE).exists():
+        db = _backups(out)
+        try:
+            db.execute("DELETE FROM originals WHERE doc_id = ?", (did,))
+            db.commit()
+        finally:
+            db.close()
+
+
 def kept_originals(out: Path) -> int:
     """How many originals `undo` could put back."""
     if not (out / BACKUP_FILE).exists():

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from osiris import review
+from osiris import fixes, review
 from osiris.route import doc_id, route
 from osiris.store import Store
 
@@ -23,7 +23,8 @@ def refetch_setup(tmp_path: Path, text: str) -> tuple[Store, str, str]:
     review.scan(store, tmp_path)
     db = review.connect(tmp_path)
     review.decide(db, [doc_id(r.doc_key)], "refetch")
-    review.apply_refetch(store, db)
+    review.prepare_refetch(store, db, [(key, lane, method or "again") for key, lane, _, method in review.queued_fixes(db)],
+                           fixes.FETCHED_LIKE_NEW)
     db.close()
     return store, r.doc_key, doc_id(r.doc_key)
 

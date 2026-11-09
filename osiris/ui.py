@@ -9,12 +9,14 @@ Originals are only served for files the manifest already knows about, never for 
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
 import re
 import signal
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -25,7 +27,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import cleanup, cookies, review, search, tuning
+from . import cleanup, cookies, fixes, review, search, tuning
 from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
@@ -470,8 +472,25 @@ async def state(request: web.Request) -> web.Response:
 
 # -- folders -------------------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=1)
+def _ocr_langs() -> list[str]:
+    """The languages tesseract has installed, for choosing one when queueing OCR."""
+    try:
+        listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [lang for lang in listed.split()[1:] if re.fullmatch(r"[A-Za-z_]+", lang) and lang != "osd"]
+
+
+def _has_browser() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("playwright") is not None
+
+
 def _config_for_page(app: web.Application, config: dict) -> dict:
     return {**config, "search_index": app["index"] is not None,  # not a setting: `osiris ui --search-index`
+            "ocr_langs": _ocr_langs(),
             "defaults": {**DEFAULT_CONFIG["options"], "workers": os.cpu_count() or 1, "pdf_at_once": max(3, 2 * (os.cpu_count() or 1))}}
 
 
@@ -587,9 +606,9 @@ async def scan_folder(request: web.Request) -> web.Response:
 
 # -- jobs ----------------------------------------------------------------------------------------
 
-def _run_args(options: dict, url_file: Path) -> list[str]:
+def _run_args(options: dict, url_file: Path, every_lane: bool = False) -> list[str]:
     args = ["run", str(url_file)]
-    lanes = _chosen_lanes(options)
+    lanes = LANES if every_lane else _chosen_lanes(options)
     if not lanes:
         raise web.HTTPBadRequest(text="Choose at least one kind of source.")
     if len(lanes) < len(LANES):
@@ -751,24 +770,22 @@ async def start_fixes(request: web.Request) -> web.Response:
     job, out = app["job"], app["out"]
     if job.active:
         raise web.HTTPConflict(text="A job is already running.")
-    options = load_config(out)["options"]
-    lang = str(options.get("ocr_lang") or "eng")
-    no_scry = [] if options.get("scry_twitter", True) else ["--no-scry-tweets"]
     empty = out / "ui_no_urls.txt"
     empty.write_text("", encoding="utf-8")
+    run_args = _run_args(load_config(out)["options"], empty, every_lane=True)  # your settings, for any source
+    db = review.connect(out)
+    try:
+        billed = db.execute("SELECT 1 FROM decisions WHERE decision = 'refetch' AND method = 'twitterapi'"
+                            " AND applied_at IS NULL LIMIT 1").fetchone() is not None
+    finally:
+        db.close()
 
     async def flow(j: Job) -> None:
-        output = await j.run("Applying fixes", j.osiris("review", "apply", "--lang", lang))
-        lanes = next((ln.removeprefix("lanes to run:").split() for ln in reversed(output)
-                      if ln.startswith("lanes to run:")), [])
-        if lanes:
-            only = [arg for lane in lanes for arg in ("--only", lane)]
-            j.plan = _plan(lanes, {})  # that run uses the default pacing
-            await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr", *no_scry))
-            j.plan = None
+        await j.run("Carrying out fixes", j.osiris(*run_args, "--fixes"))
         await j.run("Checking the results", j.osiris("review", "scan"))
 
-    job.start("Fixes", flow, env={BILLED_KEY: None})
+    # twitterapi.io bills per tweet, so the run only sees that key when you queued a fix that asks for it
+    job.start("Fixes", flow, env={} if billed else {BILLED_KEY: None})
     return web.json_response({"ok": True})
 
 
@@ -847,68 +864,69 @@ async def stop_job(request: web.Request) -> web.Response:
 
 # -- review --------------------------------------------------------------------------------------
 
-REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in (*review.DECISIONS, review.CHOOSE, review.FIXED)}}
+DECISION_FILTERS = ("none", *review.DECISIONS, review.CHOOSE, review.FIXED)  # none: not decided yet
 
 
-def _review_where(view: str, host: str | None) -> tuple[str, list]:
-    if view not in REVIEW_VIEWS:
-        raise web.HTTPBadRequest(text="Unknown view.")
-    where = REVIEW_VIEWS[view]
-    params: list = [review.FLAGGED if view == "to_review" else view]
-    if host:
-        where += " AND s.host = ?"
-        params.append(host)
-    return where, params
+def _decision_filter(value: str) -> tuple[str, list] | None:
+    if value == "none":
+        return "d.doc_id IS NULL", []
+    if value in DECISION_FILTERS:
+        return "d.decision = ?", [value]
+    return None
 
 
-def _row_for_page(row: tuple) -> dict:
-    did, url, lane, source, host, title, chars, score, signals, excerpt, decision, note = row
-    return {"id": did, "url": url, "lane": lane, "source": source, "host": host, "title": title, "chars": chars,
-            "score": score, "signals": json.loads(signals), "excerpt": excerpt, "decision": decision, "note": note,
-            "pdf": review.is_pdf_source(source)}
-
-
-async def review_list(request: web.Request) -> web.Response:
-    q = request.query
-    view = q.get("view", "to_review")
-    where, params = _review_where(view, q.get("host") or None)
-    offset = max(int(q.get("offset", 0)), 0)
-    db = review.connect(request.app["out"])
+def _review_facts(out: Path, ids: list[str]) -> dict[str, tuple]:
+    """{doc_id: (score, signals, decision, note, method)} from the garbage check, for listing."""
+    if not ids:
+        return {}
+    db = review.connect(out)
     try:
-        rows = db.execute(
-            "SELECT s.doc_id, s.url, s.lane, s.source, s.host, s.title, s.chars, s.score, s.signals, s.excerpt,"
-            " d.decision, d.note FROM scores s LEFT JOIN decisions d USING (doc_id)"
-            f" WHERE {where} ORDER BY s.score DESC, s.doc_id LIMIT ? OFFSET ?",
-            (*params, PAGE_SIZE, offset),
-        ).fetchall()
-        total = db.execute(f"SELECT COUNT(*) FROM scores s LEFT JOIN decisions d USING (doc_id) WHERE {where}",
-                           params).fetchone()[0]
-        view_where, view_params = _review_where(view, None)
-        hosts = db.execute(
-            f"SELECT s.host, COUNT(*) AS n, ROUND(AVG(s.score), 2) FROM scores s LEFT JOIN decisions d USING (doc_id)"
-            f" WHERE {view_where} GROUP BY s.host ORDER BY n DESC LIMIT 40", view_params,
-        ).fetchall()
-        return web.json_response({"items": [_row_for_page(r) for r in rows], "total": total,
-                                  "hosts": [{"host": h, "count": n, "score": s} for h, n, s in hosts],
-                                  "counts": review.counts(db)})
+        return {did: rest for did, *rest in db.execute(
+            "SELECT s.doc_id, s.score, s.signals, d.decision, d.note, d.method FROM scores s"
+            f" LEFT JOIN decisions d USING (doc_id) WHERE s.doc_id IN ({','.join('?' * len(ids))})", ids)}
     finally:
         db.close()
 
 
+def _with_review(out: Path, items: list[dict]) -> list[dict]:
+    facts = _review_facts(out, [it["id"] for it in items])
+    for it in items:
+        score, signals, decision, note, method = facts.get(it["id"], (None, "{}", None, None, None))
+        it.update(score=score, signals=json.loads(signals or "{}"), decision=decision, note=note, method=method)
+    return items
+
+
+def _fix_method(decision: str | None, method) -> str | None:
+    if method in (None, "", "again"):
+        return None
+    if decision == "refetch" and method in fixes.METHODS:
+        return method
+    if decision == "ocr" and re.fullmatch(r"[A-Za-z_]+(\+[A-Za-z_]+)*", str(method)):
+        return method
+    raise web.HTTPBadRequest(text="That way of fixing it doesn't exist.")
+
+
 async def decide(request: web.Request) -> web.Response:
+    app = request.app
     body = await request.json()
     decision = body.get("decision")
     if decision is not None and decision not in review.DECISIONS:
         raise web.HTTPBadRequest(text="Unknown decision.")
-    db = review.connect(request.app["out"])
+    method = _fix_method(decision, body.get("method"))
+    if isinstance(body.get("filter"), dict):  # the whole list as filtered: what's flagged and still undecided in it
+        where, params = _list_where({**body["filter"], "decision": "none"})
+        manifest = _list_db(app["out"])
+        try:
+            ids = [did for (did,) in manifest.execute(
+                f"SELECT DISTINCT u.doc_id FROM urls u{LIST_JOINS} WHERE {where} AND s.score >= ?", (*params, review.FLAGGED))]
+        finally:
+            manifest.close()
+    else:
+        ids = [d for d in body.get("ids", []) if DOC_ID.match(str(d))]
+    db = review.connect(app["out"])
     try:
-        if body.get("host"):  # one decision for a whole group: only what's still undecided in it
-            ids = [did for (did,) in db.execute(
-                "SELECT s.doc_id FROM scores s LEFT JOIN decisions d USING (doc_id)"
-                " WHERE d.doc_id IS NULL AND s.score >= ? AND s.host = ?", (review.FLAGGED, body["host"]))]
-        else:
-            ids = [d for d in body.get("ids", []) if DOC_ID.match(str(d))]
-        n = review.decide(db, ids, decision, str(body.get("note") or "") or None)
+        review.ensure_scored(db, app["store"], ids)  # never checked, or failed: it can still be decided on
+        n = review.decide(db, ids, decision, str(body.get("note") or "") or None, method)
         return web.json_response({"changed": n, "counts": review.counts(db)})
     finally:
         db.close()
@@ -933,40 +951,75 @@ async def choose_version(request: web.Request) -> web.Response:
         db.close()
 
 
+async def delete_document(request: web.Request) -> web.Response:
+    app = request.app
+    if app["job"].active:  # it could be writing this document or the manifest
+        raise web.HTTPConflict(text="Wait for the current job to finish first.")
+    did = str((await request.json()).get("id", ""))
+    if not DOC_ID.match(did):
+        raise web.HTTPBadRequest(text="Unknown document.")
+    store: Store = app["store"]
+    if not store.delete(did):
+        raise web.HTTPNotFound(text="Not in the archive.")
+    review.forget(store, {did})
+    cleanup.forget(app["out"], did)
+    if app["index"]:
+        app["index"].wanted.set()  # the next refresh drops it from the search index
+    return web.json_response({"ok": True})
+
+
 # -- documents -----------------------------------------------------------------------------------
 
 def _fold(text: str | None) -> str:
     return text.casefold() if text else ""
 
 
-async def documents(request: web.Request) -> web.Response:
-    """The plain list, newest first, filtered by URL or title text: for every status, including
-    documents with no text, which the search index doesn't hold."""
-    q = request.query
-    where, params = ["lane != 'skip'"], []
+LIST_JOINS = " LEFT JOIN r.scores s ON s.doc_id = u.doc_id LEFT JOIN r.decisions d ON d.doc_id = u.doc_id"
+
+
+def _list_db(out: Path) -> sqlite3.Connection:
+    """The manifest, with the garbage check's scores and decisions alongside as `r`."""
+    db = read_manifest(out)
+    db.create_function("fold", 1, _fold, deterministic=True)  # SQLite's LIKE only ignores case for A to Z
+    db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / review.DB_FILE))}?mode=ro",))
+    return db
+
+
+def _list_where(q) -> tuple[str, list]:
+    where, params = ["u.lane != 'skip'", "u.doc_id IS NOT NULL"], []
     for column in ("lane", "status", "reason"):
         if q.get(column):
-            where.append(f"{column} = ?")
+            where.append(f"u.{column} = ?")
             params.append(q[column])
-    if term := q.get("q", "").strip():
-        where.append("(url LIKE ? OR fold(title) LIKE ?)")
+    if term := str(q.get("q", "")).strip():
+        where.append("(u.url LIKE ? OR fold(u.title) LIKE ?)")
         params += [f"%{term}%", f"%{term.casefold()}%"]
+    if decided := _decision_filter(q.get("decision", "")):
+        where.append(decided[0])
+        params += decided[1]
+    return " AND ".join(where), params
+
+
+async def documents(request: web.Request) -> web.Response:
+    """The plain list, newest first or most likely garbage first, filtered by URL or title text and the
+    rest: for every status, including documents with no text, which the search index doesn't hold."""
+    q = request.query
+    where, params = _list_where(q)
+    order = "COALESCE(s.score, -1) DESC, u.doc_id" if q.get("sort") == "garbage" else "MIN(u.rowid) DESC"
     offset = max(int(q.get("offset", 0)), 0)
-    clause = " AND ".join(where)
-    manifest = read_manifest(request.app["out"])
-    manifest.create_function("fold", 1, _fold, deterministic=True)  # SQLite's LIKE only ignores case for A to Z
+    manifest = _list_db(request.app["out"])
     try:
         rows = manifest.execute(
-            f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars), MAX(title) FROM urls WHERE {clause} AND doc_id IS NOT NULL"
-            " GROUP BY doc_id ORDER BY MIN(rowid) DESC LIMIT ? OFFSET ?", (*params, PAGE_SIZE, offset),
+            f"SELECT u.doc_id, MIN(u.url), u.lane, u.status, u.reason, MAX(u.chars), MAX(u.title) FROM urls u{LIST_JOINS}"
+            f" WHERE {where} GROUP BY u.doc_id ORDER BY {order} LIMIT ? OFFSET ?", (*params, PAGE_SIZE, offset),
         ).fetchall()
-        total = manifest.execute(f"SELECT COUNT(DISTINCT doc_id) FROM urls WHERE {clause}", params).fetchone()[0]
+        total = manifest.execute(f"SELECT COUNT(DISTINCT u.doc_id) FROM urls u{LIST_JOINS} WHERE {where}", params).fetchone()[0]
     finally:
         manifest.close()
-    return web.json_response({"total": total, "items": [
+    return web.json_response({"total": total, "items": _with_review(request.app["out"], [
         {"id": did, "url": url, "lane": lane, "status": status, "reason": reason, "chars": chars,
          "title": title or None, "host": urlsplit(url).hostname or "local file"}
-        for did, url, lane, status, reason, chars, title in rows]})
+        for did, url, lane, status, reason, chars, title in rows])})
 
 
 async def failures_list(request: web.Request) -> web.Response:
@@ -999,7 +1052,7 @@ async def reasons(request: web.Request) -> web.Response:
         for r, ids in sorted(docs.items(), key=lambda kv: -len(kv[1]))]})
 
 
-def _scan_text(out: Path, term: str, lane: str, status: str) -> dict:
+def _scan_text(out: Path, term: str, lane: str, status: str, garbage_first: bool = False, decision: str = "") -> dict:
     """Without the search index: a plain case-insensitive scan of the documents, newest first,
     stopping at the limit. The filters apply while scanning, so a filtered scan isn't cut short."""
     where, params = ["status IN ('ok', 'thin')", "doc_id IS NOT NULL"], []
@@ -1028,6 +1081,13 @@ def _scan_text(out: Path, term: str, lane: str, status: str) -> dict:
                       "snippet": search.snippet(body, pattern)})
         if len(items) >= SCAN_LIMIT:
             break
+    items = _with_review(out, items)
+    if decision == "none":
+        items = [it for it in items if it["decision"] is None]
+    elif decision in DECISION_FILTERS:
+        items = [it for it in items if it["decision"] == decision]
+    if garbage_first:
+        items.sort(key=lambda it: -(it["score"] if it["score"] is not None else -1))
     return {"items": items, "total": len(items), "limited": len(items) >= SCAN_LIMIT, "searched": searched,
             "terms": [{"word": term, "substring": True}]}
 
@@ -1040,12 +1100,15 @@ async def search_documents(request: web.Request) -> web.Response:
     if index is None:
         if len(term) < 2:
             raise web.HTTPBadRequest(text="Search for at least 2 characters.")
-        found = await asyncio.to_thread(_scan_text, out, term, q.get("lane", ""), q.get("status", ""))
+        found = await asyncio.to_thread(_scan_text, out, term, q.get("lane", ""), q.get("status", ""),
+                                        q.get("sort") == "garbage", q.get("decision", ""))
         return web.json_response(found)
     if not term:
         raise web.HTTPBadRequest(text="Type something to search for.")
     found = await asyncio.to_thread(search.search, out, term, q.get("lane", ""), q.get("status", ""),
-                                    search.PAGE, max(int(q.get("offset", 0)), 0))
+                                    search.PAGE, max(int(q.get("offset", 0)), 0), q.get("sort") == "garbage",
+                                    _decision_filter(q.get("decision", "")))
+    found["items"] = _with_review(out, found["items"])
     return web.json_response({**found, "index": index.status()})
 
 
@@ -1105,7 +1168,7 @@ async def document(request: web.Request) -> web.Response:
     db = review.connect(out)
     try:
         scored = db.execute(
-            "SELECT s.score, s.signals, s.source, d.decision, d.note FROM scores s LEFT JOIN decisions d USING (doc_id)"
+            "SELECT s.score, s.signals, s.source, d.decision, d.note, d.method FROM scores s LEFT JOIN decisions d USING (doc_id)"
             " WHERE s.doc_id = ?", (did,)).fetchone()
         earlier = review.earlier_version(db, did)
     finally:
@@ -1126,8 +1189,10 @@ async def document(request: web.Request) -> web.Response:
                      "viewer": _viewer(path or saved) if (path or saved) else None},
         "local_missing": local and not (path or saved),
         "score": scored[0] if scored else None, "signals": json.loads(scored[1]) if scored else {},
-        "pdf": review.is_pdf_source(scored[2]) if scored else False,
         "decision": scored[3] if scored else None, "note": scored[4] if scored else None,
+        "method": scored[5] if scored else None,
+        "pdf": review.is_pdf_source(meta.get("source") or (scored[2] if scored else None)),
+        "methods": fixes.methods_for(rows[0][-1], lane, bool(load_key()), _has_browser()),
         "earlier": {**earlier, "body": earlier["body"][:MAX_BODY], "truncated": earlier["length"] > MAX_BODY}
         if earlier else None,
     })
@@ -1290,9 +1355,9 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.get("/api/cleanup", cleanup_state),
         web.get("/api/cleanup/report", cleanup_report),
         web.post("/api/job/stop", stop_job),
-        web.get("/api/review", review_list),
         web.post("/api/decide", decide),
         web.post("/api/review/choose", choose_version),
+        web.post("/api/delete", delete_document),
         web.get("/api/documents", documents),
         web.get("/api/search", search_documents),
         web.get("/api/reasons", reasons),

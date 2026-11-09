@@ -28,20 +28,17 @@ Optional system and Python extras:
 
 ## Web interface
 
-`osiris ui` opens one page with three tabs. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
+`osiris ui` opens one page with two tabs, **Archive** and **Documents**. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. Fallback passes, OCR and the garbage check aren't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
 - **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them.
-- **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
-- **Documents:** titles are saved as each document is, so they show and can be searched straight away. Search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
+- **Documents:** everything you've saved, with garbage scores and ways to fix each document. Titles are saved as each document is, so they show and can be searched straight away. Search titles and URLs, or the text inside documents, and filter by source, status and decision. **Review** sorts whatever is listed by garbage score, worst first, keeping your search and filters; the number on it counts documents flagged and not decided yet. See [Finding garbage](#finding-garbage). **Delete…** removes a document's saved text and osiris's copy of its original for good, after asking. Its links stay in the manifest marked `deleted`, so later runs don't fetch them again from your tab backups. Your own files, such as local files and saved pages, are never touched. It waits while a job is running. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
 - **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
 
 **Explanations:** hover over any button, option or status to see what it does or means. A word with a dotted underline, such as **thin** or a garbage signal, has an explanation too.
 
-**Keyboard in Review:** `j`/`k` move, `f` fine, `b` bad, `o` OCR it, `r` fetch again, `x` can't fix, `u` undo, `n` write a note.
-
-**Keyboard in Documents:** `/` search, `j`/`k` move, `n`/`N` next or previous match in the open document.
+**Keyboard in Documents:** `/` search, `j`/`k` move, `n`/`N` next or previous match in the open document (or write a note when there are no matches), `f` fine, `b` bad, `o` OCR it, `r` fetch again the way chosen next to it, `x` can't fix, `u` undo, `1`/`2` keep the new or earlier version.
 
 **Links:** the address names the open tab and document, such as `#documents/<id>`, so a document can be bookmarked or opened again after a reload.
 
@@ -62,7 +59,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 
 ## Finding garbage
 
-**Check for garbage** scores every document from cheap text signals, then lists anything scoring 0.35 or higher, worst first. Unchanged documents aren't scored again. It's a ranking for you to read, not a verdict, so expect some false alarms, such as tables, code and languages other than English and Turkish.
+**Check for garbage** scores every document from cheap text signals. Anything scoring 0.35 or higher is flagged, and **Review** on the Documents tab lists the worst first. Unchanged documents aren't scored again. It's a ranking for you to read, not a verdict, so expect some false alarms, such as tables, code and languages other than English and Turkish.
 
 | Signal | What it catches |
 |---|---|
@@ -78,19 +75,34 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 |---|---|
 | **Fine** | Stays off the list unless its text changes |
 | **Bad** | Left out of `export` and listed in `data/review-exclude.txt`. It stays under **Bad** until you decide otherwise |
-| **OCR it** | PDFs only. Reads the PDF with OCR, and replaces the text if the new text scores better, even if it's shorter |
-| **Fetch again** | Fetches or reads it from scratch. If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
+| **OCR it** | PDFs only. Reads the PDF with OCR in the language chosen next to it, and replaces the text if the new text scores better, even if it's shorter |
+| **Fetch again** | Fetches or reads it again, the way chosen next to it (below). If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
 | **Can't fix** | Like Bad, but no longer counted as something to come back to |
 
-**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before.
+Any document can be decided on, including ones the check hasn't scored yet and ones that failed.
 
-**Choose version** lists documents that Fetch again changed. It shows each version's length and garbage score, and lets you read both. **Keep new** or **Keep earlier** deletes the other version and returns the document to undecided. Until you pick, the new text is the one on disk, and the document is left out of `export`. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris review apply` and the run it prints.
+| Way to fetch again | For |
+|---|---|
+| The usual way | Every document except saved pages: what an archive run does, with your settings from the Archive tab (cookies, headless browser, Scry options, YouTube pacing) and the fallbacks |
+| With a browser's fingerprint, in the headless browser, the Wayback Machine's copy | Web pages: that one way, from the start. The headless browser is offered once Playwright is installed |
+| Scry's copy of the page | Web pages, with a Scry key: the text Scry's crawler last read from that address |
+| Title and abstract by DOI | Paper links with a DOI in them |
+| arXiv's full text again, web version first; full text from Scry | arXiv papers. Scry's copy replaces the full text you have |
+| Transcript from Scry | YouTube videos, with a Scry key |
+| Scry's copy of the post | LessWrong posts, with a Scry key |
+| From twitterapi.io | Tweets. It's billed per tweet, so the page asks first, and only a run with such a fix queued gets the key |
+
+Fetching again the usual way picks up new comments on Hacker News, LessWrong and Stack Exchange threads.
+
+**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out for those documents only: nothing else waiting in the archive is fetched. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before.
+
+**Choose version** lists documents that Fetch again changed. It shows each version's length and garbage score, and lets you read both. **Keep new** or **Keep earlier** deletes the other version and returns the document to undecided. Until you pick, the new text is the one on disk, and the document is left out of `export`. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris run --fixes`.
 
 **Fixed** lists documents whose text OCR or Fetch again changed, where there was no earlier version to choose from. They stay there, however well they score now, until you mark them **Fine** or queue another fix. They aren't left out of exports.
 
 If your indexer reads `data/md` directly, `data/review-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
 
-From the command line: `osiris review scan`, then `osiris review apply`, which also prints the lanes to run for documents queued to fetch again.
+From the command line: `osiris review scan` scores documents, and `osiris run --fixes` carries out the queued fixes with that run's other options, such as `--cookies` and `--render`. Run `osiris review scan` afterwards to settle them.
 
 ## Text cleanup
 
@@ -178,7 +190,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
 - **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
 
-**What can change:** files in `data/`. **OCR it** replaces a document's saved text when the new text is better, and **Fetch again** when you choose the new version, though neither touches the original. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
+**What can change:** files in `data/`. **OCR it** replaces a document's saved text when the new text is better, and **Fetch again** when you choose the new version, though neither touches the original. **Delete…** removes a document's files from `data/` only. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
 
 ## Commands
 

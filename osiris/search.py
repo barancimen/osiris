@@ -254,8 +254,9 @@ def snippet(body: str, pattern: re.Pattern | None) -> list[tuple[str, bool]]:
 
 
 def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: int = PAGE,
-           offset: int = 0) -> dict:
-    """Ranked matches with a snippet each: {"items", "total", "terms"}."""
+           offset: int = 0, garbage_first: bool = False, decision: tuple[str, list] | None = None) -> dict:
+    """Matches with a snippet each: {"items", "total", "terms"}, best first, or most likely garbage first.
+    `decision` is a condition on the garbage check's `d.decision` with its parameters."""
     out = Path(out)
     expr, terms = parse(text)
     if expr is None:
@@ -265,14 +266,22 @@ def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: 
         if value:
             where.append(f"d.{column} = ?")
             params.append(value)
+    if decision:
+        where.append(decision[0].replace("d.decision", "dec.decision").replace("d.doc_id", "dec.doc_id"))
+        params += decision[1]
     clause = " AND ".join(where)
+    joins = (" LEFT JOIN r.scores s ON s.doc_id = d.doc_id LEFT JOIN r.decisions dec ON dec.doc_id = d.doc_id"
+             if garbage_first or decision else "")
+    order = "COALESCE(s.score, -1) DESC, d.doc_id" if garbage_first else f"bm25(fts, {', '.join(map(str, WEIGHTS))})"
     db = connect(out, readonly=True)
     try:
-        total = db.execute(f"SELECT COUNT(*) FROM fts JOIN docs d ON d.rowid = fts.rowid WHERE {clause}",
+        if joins:
+            db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / 'review.sqlite'))}?mode=ro",))
+        total = db.execute(f"SELECT COUNT(*) FROM fts JOIN docs d ON d.rowid = fts.rowid{joins} WHERE {clause}",
                            params).fetchone()[0]
         rows = db.execute(
             f"SELECT d.doc_id, d.url, d.lane, d.status, d.host, d.title, d.chars FROM fts JOIN docs d ON d.rowid = fts.rowid"
-            f" WHERE {clause} ORDER BY bm25(fts, {', '.join(map(str, WEIGHTS))}) LIMIT ? OFFSET ?",
+            f"{joins} WHERE {clause} ORDER BY {order} LIMIT ? OFFSET ?",
             (*params, limit, offset)).fetchall()
     finally:
         db.close()

@@ -211,14 +211,12 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 <header>
   <nav role="tablist">
     <button role="tab" data-tab="archive" aria-selected="true">Archive</button>
-    <button role="tab" data-tab="review" aria-selected="false">Review <span class="count" id="review-count" hidden></span></button>
-    <button role="tab" data-tab="documents" aria-selected="false">Documents</button>
+    <button role="tab" data-tab="documents" aria-selected="false">Documents <span class="count" id="review-count" hidden></span></button>
   </nav>
   <div id="jobline"></div>
 </header>
 <main>
   <section class="tab on" id="archive"><div class="column" id="archive-column"></div></section>
-  <section class="tab split" id="review"></section>
   <section class="tab split" id="documents"></section>
 </main>
 <dialog id="picker"></dialog>
@@ -259,7 +257,6 @@ function showTab(name) {
   if (name !== "documents" || !location.hash.startsWith("#documents/")) setHash(name);
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === name);
   for (const s of document.querySelectorAll(".tab")) s.classList.toggle("on", s.id === name);
-  if (name === "review") Review.load();
   if (name === "documents") Docs.load();
 }
 for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => showTab(b.dataset.tab));
@@ -268,9 +265,8 @@ for (const b of document.querySelectorAll("nav button")) b.addEventListener("cli
 const HELP = {
   // tabs
   "tab-archive": "Choose what to save, then turn it into searchable text.",
-  "tab-review": "Look over documents whose text might have come out garbled, and decide what to do with each.",
-  "tab-documents": "Browse and search everything you've saved.",
-  "review-count": "Documents waiting for you to look at them.",
+  "tab-documents": "Browse and search everything you've saved, find what came out garbled, and fix it.",
+  "review-count": "Documents that might be garbled and that you haven't decided on yet.",
   // archive tab
   start: "Go through everything you've added, and fetch or read whatever isn't saved yet. Anything already saved is skipped, so it's fine to press this again.",
   stop: "Pause the current job. Everything done so far is kept, and starting again carries on from there. Press again to stop right away.",
@@ -340,7 +336,7 @@ const HELP = {
   chars: "How much text that adds up to.",
   waiting: "Links and files that haven't been processed yet.",
   failed: "Documents where no text could be saved. Why things failed, below, shows the reasons.",
-  "to-review": "Documents that might be garbled, waiting for you on the Review tab.",
+  "to-review": "Documents that might be garbled and not decided yet. Review on the Documents tab lists them first.",
   "status-pending": "Not processed yet.",
   "status-ok": "Saved, with a good amount of text.",
   "status-thin": "Saved, but with very little text. Often a login wall, a cookie banner, or a page that needs JavaScript.",
@@ -362,21 +358,33 @@ const HELP = {
   "web-page": "Go to the live page. It may have changed since it was saved, or be gone.",
   "prev-match": "Previous match (Shift+N)",
   "next-match": "Next match (N)",
-  "garbage-score": "How likely this text is to be garbled, from 0 (looks fine) to 1 (clearly broken). Anything from 0.35 up shows up on the Review tab.",
+  "garbage-score": "How likely this text is to be garbled, from 0 (looks fine) to 1 (clearly broken). Anything from 0.35 up is flagged, and comes first when you press Review on the Documents tab.",
   "doc-search": "Searches titles and web addresses. Tick \"Inside documents\" to search the text itself.",
   "doc-search-indexed": "Searches titles, web addresses and the text, best matches first.",
   "inside-documents": "Search the text of every document. It's slower, so it starts when you press Enter.",
   "doc-lane": "Show only one kind of source.",
   "doc-status": "Show only documents in one state.",
   "doc-reason": "Show only documents that failed for one reason.",
-  "review-host": "Show only documents from one site.",
-  "host-bad": "Mark everything from this site that's still waiting for a decision as Bad. You can change each one later.",
-  "host-fine": "Mark everything from this site that's still waiting for a decision as Fine. You can change each one later.",
-  "run-fixes": "Carry out the OCR and fetch-again jobs you've queued.",
+  "review-sort": "Put the documents listed in order of how likely their text is to be garbled, worst first. Your search and filters still apply. Press again for the usual order.",
+  "doc-decision": "Show only documents with one decision, or those you haven't decided on.",
+  "bulk-bad": "Mark everything listed here that's flagged as possible garbage and not decided yet as Bad. You can change each one later.",
+  "bulk-fine": "Mark everything listed here that's flagged as possible garbage and not decided yet as Fine. You can change each one later.",
+  "run-fixes": "Carry out the OCR and fetch-again jobs you've queued, for those documents only, with your settings from the Archive tab.",
+  "fix-method": "How to fetch it again. The usual way is what an archive run does, fallbacks included.",
+  "ocr-lang": "The language the PDF is written in.",
+  "method-again": "What an archive run does, with your settings and fallbacks.",
+  "method-impersonate": "Fetch the page presenting a real browser's TLS fingerprint, which gets past some bot walls.",
+  "method-render": "Open the page in the headless browser, for pages that need JavaScript or a bot check.",
+  "method-wayback": "Take the newest copy the Wayback Machine has, for pages that are gone or blocked.",
+  "method-crawl": "Take the text Scry's crawler last read from this address. It costs a little from your Scry wallet.",
+  "method-doi": "Look the paper's DOI up and keep its title, authors and abstract.",
+  "method-scry": "Take Scry's copy. It costs a little from your Scry wallet.",
+  "method-html": "Get the full text from arXiv again, trying its web version before the PDF.",
+  "method-twitterapi": "Look the tweet up on twitterapi.io, which charges for every tweet.",
   "decide-fine": "This one looks OK. It won't come up for review again unless its text changes.",
   "decide-bad": "This one is garbage. It's left out of exports.",
   "decide-ocr": "Read this PDF again from pictures of its pages. The new text is only kept if it looks better.",
-  "decide-refetch": "Download or read this again from scratch. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
+  "decide-refetch": "Download or read this again, the way chosen next to it. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
   "arxiv-full-text-row": "Counted by paper. Waiting: full text not looked for yet. Saved: it has its full text. Thin: arXiv had no full text for it, so it keeps its abstract.",
   "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
   "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
@@ -385,6 +393,7 @@ const HELP = {
   "show-earlier": "Read the text you had before fetching again.",
   "decide-unfixable": "Garbage that can't be repaired. It's left out of exports and off your to-do list.",
   "decide-undo": "Take back your decision.",
+  delete: "Delete this document's saved text and osiris's copy of its original, for good. Later runs won't fetch it again. Your own files, like local files and saved pages, aren't touched.",
   score: "Garbage score: the longer the bar, the more likely the text is garbled.",
 };
 const LANE_HELP = {
@@ -402,7 +411,7 @@ const LANE_HELP = {
   skip: "Links left alone on purpose, like chat links, profiles and image files.",
 };
 const VIEW_HELP = {
-  to_review: "Documents that might be garbled and that you haven't decided on yet, worst first.",
+  none: "Documents you haven't decided on yet.",
   choose: "Fetching again gave different text. Both versions are kept until you pick one, and these stay out of exports until then.",
   fixed: "Documents whose text a fix you queued has changed. They stay here until you mark them, so you can check the result.",
   bad: "Ones you marked as garbage. They're left out of exports.",
@@ -761,7 +770,8 @@ function renderState(s) {
   const c = $("#review-count");
   c.hidden = !s.review.to_review;
   c.textContent = fmt(s.review.to_review);
-  if (Review.fixing && !j.active) { Review.fixing = false; if (currentTab === "review") Review.load(); }
+  Docs.renderCounts(s.review);
+  if (Docs.fixing && !j.active) { Docs.fixing = false; if (currentTab === "documents") Docs.reload(); }
   if (renderState.wasActive && !j.active) { reloadConfig(); Cleanup.refresh(); }  // a finished run clears the sites it retried
   renderState.wasActive = j.active;
 }
@@ -1246,160 +1256,28 @@ function statusPill(d) {
 }
 
 /* ---- review tab ---- */
-const VIEWS = [["to_review", "To review"], ["choose", "Choose version"], ["fixed", "Fixed"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
-const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix"};
-const Review = {
-  // `at` is the list position of the open document. A document you've decided on usually leaves the list
-  // but stays open (`detached`), and then `at` is where it was, so j opens the one that took its place
-  view: "to_review", host: "", items: [], total: 0, hosts: [], counts: {}, at: 0, doc: null, built: false, fixing: false,
-  detached: false, wanted: null,
-  build() {
-    if (this.built) return; this.built = true;
-    $("#review").append(
-      h("div", {class: "list-pane"},
-        h("div", {class: "list-tools"},
-          h("div", {class: "segments", id: "review-views", role: "group", "aria-label": "Filter by decision"}),
-          h("div", {class: "tool-row"},
-            h("select", {id: "review-host", "aria-label": "Filter by site", title: help("review-host"), onchange: e => { this.host = e.target.value; this.at = 0; this.load({fresh: true}); }}),
-            h("button", {class: "btn", id: "host-bad", title: help("host-bad"), onclick: guarded(() => this.markHost("bad"))}, "All bad"),
-            h("button", {class: "btn", id: "host-fine", title: help("host-fine"), onclick: guarded(() => this.markHost("fine"))}, "All fine"))),
-        h("div", {id: "fix-banner"}),
-        h("div", {class: "rows", id: "review-rows"})),
-      h("div", {class: "detail", id: "review-detail"}));
-  },
-  // the list again; the open document stays open unless `fresh` (another list or site was chosen)
-  load: guarded(async function ({fresh = false} = {}) {
-    Review.build();
-    const self = Review;
-    const r = await api(`/api/review?view=${self.view}&host=${encodeURIComponent(self.host)}`);
-    Object.assign(self, {items: r.items, total: r.total, hosts: r.hosts, counts: r.counts});
-    if (self.doc && !fresh) {
-      const i = self.items.findIndex(it => it.id === self.doc.id);
-      self.detached = i < 0;
-      self.at = i < 0 ? Math.min(self.at, self.items.length) : i;
-      self.renderList();
-      await self.show(self.doc.id);  // its new decision, or its new text after a fix
-      return;
-    }
-    self.detached = false;
-    self.at = Math.min(self.at, Math.max(self.items.length - 1, 0));
-    self.renderList();
-    if (self.items.length) await self.open(self.at);
-    else self.renderEmpty();
-  }),
-  renderList() {
-    $("#review-views").replaceChildren(...VIEWS.map(([v, l]) => h("button", {"aria-pressed": this.view === v, title: VIEW_HELP[v], onclick: () => { this.view = v; this.host = ""; this.at = 0; this.load({fresh: true}); }}, l, " ", h("span", {class: "count"}, fmt(this.counts[v] ?? 0)))));
-    const sel = $("#review-host");
-    sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(this.view === "to_review" && !this.host ? this.total : this.hosts.reduce((a, x) => a + x.count, 0))})`),
-      ...this.hosts.map(x => h("option", {value: x.host, selected: this.host === x.host}, `${x.host} (${fmt(x.count)})`)));
-    const groupable = this.view === "to_review" && this.host;
-    for (const id of ["host-bad", "host-fine"]) $("#" + id).hidden = !groupable;
-    const queued = (this.counts.ocr || 0) + (this.counts.refetch || 0);
-    $("#fix-banner").replaceChildren(...(queued ? [h("div", {class: "banner"},
-      `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
-      h("button", {class: "btn", title: help("run-fixes"), onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
-    const rows = $("#review-rows");
-    rows.replaceChildren(...this.items.map((it, i) => h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
-      h("div", {class: "title"}, it.title || it.url),
-      h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})), h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))),
-      it.note && h("div", {class: "snippet"}, it.note),
-    )));
-    if (this.total > this.items.length) rows.append(h("div", {class: "more hint"}, `Showing the worst ${fmt(this.items.length)} of ${fmt(this.total)}. Decide on these and the next ones appear.`));
-  },
-  renderEmpty() {
-    const scored = this.counts.scored_total;
-    $("#review-detail").replaceChildren(h("div", {class: "empty"},
-      !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("review-scan"), onclick: guarded(async () => { await api("/api/job/review", {}); showTab("archive"); tick(); })}, "Check for garbage")]
-      : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
-      : this.view === "choose" ? [h("h3", {}, "Nothing to choose"), h("p", {}, "When Fetch again gives different text, both versions wait here for you to pick one.")]
-      : this.view === "fixed" ? [h("h3", {}, "Nothing fixed to check"), h("p", {}, "When OCR or Fetch again changes a document's text, it waits here until you mark it.")]
-      : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
-    this.doc = null;
-  },
-  open: guarded(async function (i) {
-    const self = Review;
-    const it = self.items[i];
-    if (!it) return;
-    self.at = i;
-    self.detached = false;
-    for (const [n, el] of [...$("#review-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
-    $("#review-rows").querySelectorAll(".row")[i]?.scrollIntoView({block: "nearest"});
-    await self.show(it.id);
-  }),
-  // j and k: from a document that has left the list, j opens the one now in its place
-  step(by) {
-    const n = this.detached && by > 0 ? this.at : this.at + by;
-    if (n >= 0 && n < this.items.length) this.open(n);
-  },
-  show: guarded(async function (id) {
-    const self = Review;
-    self.wanted = id;
-    let d;
-    try {
-      d = await api("/api/document/" + id);
-    } catch (e) {  // gone from the archive: carry on with the list
-      if (self.doc?.id === id) { self.doc = null; self.detached = false; }
-      throw e;
-    }
-    if (self.wanted !== id) return;  // another one was chosen meanwhile
-    self.doc = d;
-    if (d.decision === "choose" && d.earlier) {
-      const paint = showEarlier => {
-        const facts = x => `${fmt(x.length)} characters, garbage score ${x.score.toFixed(2)}`;
-        const view = (label, earlier) => h("button", {class: "btn", "aria-pressed": showEarlier === earlier, title: help(earlier ? "show-earlier" : "show-new"), onclick: () => paint(earlier)}, label);
-        const keep = (key, label, which) => h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => self.keep(which))}, label, h("kbd", {}, key));
-        const actions = h("div", {class: "decide-row"},
-          h("span", {style: "flex-basis:100%"}, `Fetching again gave different text. New: ${facts(d)}. Earlier: ${facts(d.earlier)}.`),
-          view("New text", false), view("Earlier text", true), keep("1", "Keep new", "new"), keep("2", "Keep earlier", "earlier"));
-        renderDetail($("#review-detail"), showEarlier ? {...d, ...d.earlier} : d, {actions});
-      };
-      paint(false);
-      return;
-    }
-    const note = h("input", {type: "text", id: "review-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
-    const btn = (key, label, decision, disabled) => h("button", {class: "btn", disabled, "aria-pressed": d.decision === decision, title: disabled ? (decision === "ocr" ? "Only for PDFs: OCR reads pictures of a PDF's pages." : "A saved page has nowhere to be fetched from again. Import it again instead.") : help("decide-" + decision), onclick: guarded(() => self.decide(decision))}, label, h("kbd", {}, key));
-    const actions = h("div", {class: "decide-row"},
-      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"), btn("o", "OCR it", "ocr", !d.pdf), btn("r", "Fetch again", "refetch", d.lane === "singlefile"), btn("x", "Can't fix", "unfixable"),
-      d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => self.decide(null))}, "Undo", h("kbd", {}, "u")),
-      note);
-    renderDetail($("#review-detail"), d, {actions});
-  }),
-  async decide(decision) {
-    if (!this.doc) return;
-    const note = $("#review-note")?.value || null;
-    const r = await api("/api/decide", {ids: [this.doc.id], decision, note});
-    this.counts = r.counts;
-    await this.load();
-    toast((decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared") + (this.detached && this.items.length ? ". Press j for the next one." : "."));
-  },
-  async keep(which) {
-    if (this.doc?.decision !== "choose") return;
-    const r = await api("/api/review/choose", {id: this.doc.id, keep: which});
-    this.counts = r.counts;
-    await this.load();
-    toast(`Kept the ${which} text. The other version is deleted.` + (this.detached && this.items.length ? " Press j for the next one." : ""));
-  },
-  async markHost(decision) {
-    const n = this.total;
-    if (!confirm(`Mark all ${fmt(n)} documents from ${this.host} as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
-    await api("/api/decide", {host: this.host, decision});
-    this.host = ""; this.at = 0;
-    await this.load({fresh: true});
-  },
-};
-const topSignal = sig => Object.entries(sig).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
-
-/* ---- documents tab ---- */
+/* ---- documents tab: browsing, searching and reviewing in one list ---- */
 // With the search index (osiris ui --search-index), typing searches titles, URLs and text, best match
 // first. Documents with no text aren't in it, so for failed and waiting ones the box filters the plain
 // list by URL and title. Without the index, the box filters by URL and title, and "Inside documents"
-// scans the text when you press Enter.
+// scans the text when you press Enter. Review puts whatever is listed in order of garbage score.
+const DECISION_FILTERS = [["", "Any decision"], ["none", "Not decided"], ["choose", "Choose version"], ["fixed", "Fixed"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
+const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix", choose: "waiting for you to choose a version", fixed: "fixed, for you to check"};
+const METHOD_LABEL = {again: "The usual way", impersonate: "With a browser's fingerprint", render: "In the headless browser", wayback: "The Wayback Machine's copy", crawl: "Scry's copy of the page", doi: "Title and abstract by DOI", html: "arXiv's full text again, web version first", twitterapi: "From twitterapi.io (paid per tweet)"};
+const SCRY_LABEL = {arxiv: "Full text from Scry", youtube: "Transcript from Scry", lesswrong: "Scry's copy of the post"};
+const methodLabel = (method, lane) => method === "scry" ? SCRY_LABEL[lane] || "Scry's copy" : METHOD_LABEL[method] || method;
+const FLAGGED_SCORE = 0.35;
 const NO_TEXT = ["failed", "pending"];
+const topSignal = sig => Object.entries(sig || {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
 const Docs = {
-  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", terms: [], note: "", seq: 0, ranked: false, inText: false,
+  // `at` is the list position of the open document. One you've decided on can leave the list but stay open
+  // (`detached`), and then `at` is where it was, so j opens the one that took its place
+  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", decision: "", garbage: false,
+  terms: [], note: "", seq: 0, ranked: false, inText: false, counts: {}, doc: null, openTerms: [], detached: false,
+  wanted: null, fixing: false,
   build() {
     if (this.built) return; this.built = true;
-    const refresh = () => { this.at = -1; this.load(); };
+    const refresh = () => this.load();
     const indexed = config.search_index;
     const placeholder = () => indexed ? "Search titles, URLs and text" : this.inText ? "Search inside documents, then press Enter" : "Search titles and URLs";
     let timer;
@@ -1409,7 +1287,9 @@ const Docs = {
           h("div", {class: "tool-row"},
             h("input", {type: "search", id: "doc-q", placeholder: placeholder(), "aria-label": "Search", title: help(indexed ? "doc-search-indexed" : "doc-search"), oninput: e => {
               this.q = e.target.value; clearTimeout(timer); if (indexed || !this.inText) timer = setTimeout(refresh, 250);
-            }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }})),
+            }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }}),
+            h("button", {class: "btn", id: "doc-review", style: "flex:none", "aria-pressed": this.garbage, title: help("review-sort"), onclick: () => { this.garbage = !this.garbage; refresh(); }},
+              "Review", " ", h("span", {class: "count", id: "doc-review-count", hidden: true}))),
           h("div", {class: "tool-row"},
             !indexed && h("label", {class: "opt", style: "flex:none", title: help("inside-documents")}, h("input", {type: "checkbox", onchange: e => {
               this.inText = e.target.checked; $("#doc-q").placeholder = placeholder();
@@ -1417,44 +1297,66 @@ const Docs = {
             }}), "Inside documents"),
             h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
             h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),
-            h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }})),
+            h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }}),
+            h("select", {"aria-label": "Decision", id: "doc-decision", title: help("doc-decision"), onchange: e => { this.decision = e.target.value; refresh(); }}, DECISION_FILTERS.map(([v, l]) => h("option", {value: v, title: VIEW_HELP[v] || ""}, l)))),
+          h("div", {class: "tool-row", id: "doc-bulk", hidden: true},
+            h("span", {class: "hint", style: "flex:1"}, "Flagged and not decided here:"),
+            h("button", {class: "btn", title: help("bulk-bad"), onclick: guarded(() => this.markAll("bad"))}, "All bad"),
+            h("button", {class: "btn", title: help("bulk-fine"), onclick: guarded(() => this.markAll("fine"))}, "All fine")),
           h("p", {class: "hint", id: "doc-help"}, 'All words must appear. "Quoted words" appear together, and -word leaves out documents with it.')),
+        h("div", {id: "fix-banner"}),
         h("div", {class: "rows", id: "doc-rows"})),
-      h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here."))));
+      h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here, with ways to fix it."))));
+    this.renderCounts(this.counts);
   },
-  load: guarded(async function (more) {
+  // `keep`: the same list again after a decision, so the open document stays open even if it has left it
+  load: guarded(async function ({more = false, keep = false} = {}) {
     const self = Docs;
     self.build();
     const seq = ++self.seq, off = more ? self.items.length : 0;
     const term = self.q.trim(), indexed = config.search_index;
     const ranked = indexed && !!term && !NO_TEXT.includes(self.status);
     const scan = !indexed && self.inText && term.length > 1 && !NO_TEXT.includes(self.status);
+    $("#doc-review").setAttribute("aria-pressed", self.garbage);
     $("#doc-help").hidden = !ranked;
     if (self.status === "failed") self.loadReasons();
     else $("#doc-reason").hidden = true;
+    const common = `lane=${self.lane}&status=${self.status}&decision=${self.decision}&sort=${self.garbage ? "garbage" : ""}`;
+    const order = self.garbage ? ", most likely garbage first" : "";
     let r;
     if (ranked) {
-      r = await api(`/api/search?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&offset=${off}`);
+      r = await api(`/api/search?q=${encodeURIComponent(term)}&${common}&offset=${off}`);
       const ix = r.index;
       self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
-        + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}, best first`;
+        + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}` + (order || ", best first");
       self.terms = r.terms;
     } else if (scan) {
       if (!more) $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
-      r = await api(`/api/search?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}`);
-      self.note = r.limited ? `The newest ${fmt(r.items.length)} matches. Search for something more specific to narrow it.`
-        : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`;
+      r = await api(`/api/search?q=${encodeURIComponent(term)}&${common}`);
+      self.note = (r.limited ? `The newest ${fmt(r.items.length)} matches. Search for something more specific to narrow it.`
+        : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`) + order;
       self.terms = r.terms;
     } else {
-      r = await api(`/api/documents?q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&reason=${encodeURIComponent(self.reason)}&offset=${off}`);
-      self.note = `${fmt(r.total)} documents` + (term ? ` with "${term}" in the URL or title` : "");
+      r = await api(`/api/documents?q=${encodeURIComponent(term)}&${common}&reason=${encodeURIComponent(self.reason)}&offset=${off}`);
+      self.note = `${fmt(r.total)} documents` + (term ? ` with "${term}" in the URL or title` : "") + order;
       self.terms = [];
     }
     if (seq !== self.seq) return;  // a newer search has started
+    if (self.garbage && self.counts.scored_total === 0) self.note += ". Nothing has been checked for garbage yet: press Check for garbage on the Archive tab";
     self.items = more ? [...self.items, ...r.items] : r.items;
     self.total = r.total; self.ranked = ranked || scan;
+    if (!more) {
+      const i = self.doc ? self.items.findIndex(it => it.id === self.doc.id) : -1;
+      self.detached = keep && !!self.doc && i < 0;
+      self.at = i >= 0 ? i : self.detached ? Math.min(self.at, self.items.length) : -1;
+    }
     self.renderList();
   }),
+  // after a fix or a decision: the list, and the open document as it is now
+  async reload() {
+    await this.load({keep: true});
+    if (this.doc) await this.show(this.doc.id, this.openTerms);
+  },
   async loadReasons() {
     const r = await api(`/api/reasons?lane=${this.lane}`);
     const sel = $("#doc-reason");
@@ -1465,35 +1367,144 @@ const Docs = {
   renderList() {
     const rows = $("#doc-rows");
     rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note),
-      ...this.items.map((it, i) => h("button", {class: "row", "aria-current": i === this.at, onclick: () => this.open(i)},
-        h("div", {class: "title"}, it.title || it.url),
-        h("div", {class: "sub"}, h("span", {}, it.host), h("span", {class: "right", title: [help("status-" + it.status), it.status === "failed" ? explainReason(it.reason) : ""].filter(Boolean).join(" ")},
-          it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
-        it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)))));
-    if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
+      ...this.items.map((it, i) => {
+        const flagged = it.score !== null && it.score >= FLAGGED_SCORE;
+        return h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
+          h("div", {class: "title"}, it.title || it.url),
+          h("div", {class: "sub"}, h("span", {}, it.host),
+            (flagged || (this.garbage && it.score !== null)) && h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Garbage score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})),
+            flagged ? h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))
+              : h("span", {class: "right", title: [help("status-" + it.status), it.status === "failed" ? explainReason(it.reason) : ""].filter(Boolean).join(" ")},
+                it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
+          it.decision && h("div", {class: "snippet"}, decisionText(it)),
+          it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)));
+      }));
+    if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load({more: true})}, "Show more")));
+    $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason);
+  },
+  // the counts the garbage check keeps: on the Review button, the decision filter and the fixes banner
+  renderCounts(counts) {
+    this.counts = counts || {};
+    if (!this.built) return;
+    const c = $("#doc-review-count");
+    c.hidden = !this.counts.to_review;
+    c.textContent = fmt(this.counts.to_review || 0);
+    for (const o of $("#doc-decision").options) {
+      const label = DECISION_FILTERS.find(([v]) => v === o.value)[1], n = o.value && o.value !== "none" ? this.counts[o.value] : 0;
+      o.textContent = n ? `${label} (${fmt(n)})` : label;
+    }
+    const queued = (this.counts.ocr || 0) + (this.counts.refetch || 0);
+    $("#fix-banner").replaceChildren(...(queued ? [h("div", {class: "banner"},
+      `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
+      h("button", {class: "btn", title: help("run-fixes"), onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
   },
   open: guarded(async function (i) {
     const self = Docs;
     const it = self.items[i];
     if (!it) return;
     self.at = i;
+    self.detached = false;
     for (const [n, el] of [...$("#doc-rows").querySelectorAll(".row")].entries()) el.setAttribute("aria-current", n === i);
     $("#doc-rows").querySelectorAll(".row")[i]?.scrollIntoView({block: "nearest"});
     await self.show(it.id, self.ranked ? self.terms : []);
   }),
-  async show(id, terms = []) {
-    this.build();
-    const d = await api("/api/document/" + id);
-    renderDetail($("#doc-detail"), d, {terms});
+  // j and k: from a document that has left the list, j opens the one now in its place
+  step(by) {
+    const n = this.detached && by > 0 ? this.at : this.at + by;
+    if (n >= 0 && n < this.items.length) this.open(n);
+  },
+  show: guarded(async function (id, terms = []) {
+    const self = Docs;
+    self.build();
+    self.wanted = id;
+    let d;
+    try {
+      d = await api("/api/document/" + id);
+    } catch (e) {  // gone from the archive: carry on with the list
+      if (self.doc?.id === id) { self.doc = null; self.detached = false; }
+      throw e;
+    }
+    if (self.wanted !== id) return;  // another one was chosen meanwhile
+    self.doc = d; self.openTerms = terms;
     setHash("documents/" + id);
+    if (d.decision === "choose" && d.earlier) {
+      const paint = showEarlier => {
+        const facts = x => `${fmt(x.length)} characters, garbage score ${x.score.toFixed(2)}`;
+        const view = (label, earlier) => h("button", {class: "btn", "aria-pressed": showEarlier === earlier, title: help(earlier ? "show-earlier" : "show-new"), onclick: () => paint(earlier)}, label);
+        const keep = (key, label, which) => h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => self.keep(which))}, label, h("kbd", {}, key));
+        const actions = h("div", {class: "decide-row"},
+          h("span", {style: "flex-basis:100%"}, `Fetching again gave different text. New: ${facts(d)}. Earlier: ${facts(d.earlier)}.`),
+          view("New text", false), view("Earlier text", true), keep("1", "Keep new", "new"), keep("2", "Keep earlier", "earlier"), self.deleteButton());
+        renderDetail($("#doc-detail"), showEarlier ? {...d, ...d.earlier} : d, {terms, actions});
+      };
+      paint(false);
+      return;
+    }
+    renderDetail($("#doc-detail"), d, {terms, actions: self.fixRow(d)});
+  }),
+  fixRow(d) {
+    const note = h("input", {type: "text", id: "doc-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
+    const btn = (key, label, decision, why, method) => h("button", {class: "btn", disabled: !!why, "aria-pressed": d.decision === decision, title: why || help("decide-" + decision), onclick: guarded(() => this.decide(decision, method?.()))}, label, h("kbd", {}, key));
+    const usual = config.options.ocr_lang || "eng";
+    const langs = [...new Set([usual, ...(config.ocr_langs || [])])];
+    const chosenLang = d.decision === "ocr" && d.method ? d.method : usual;
+    const ways = d.methods || [];
+    const chosenWay = d.decision === "refetch" && d.method ? d.method : "again";
+    return h("div", {class: "decide-row"},
+      d.decision === "fixed" && h("span", {style: "flex-basis:100%"}, `${d.note || "A fix changed this text"}. Check it, then mark it Fine, or try another fix.`),
+      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"),
+      btn("o", "OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value),
+      d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
+      btn("r", "Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value),
+      ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),
+      btn("x", "Can't fix", "unfixable"),
+      d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo", h("kbd", {}, "u")),
+      note, this.deleteButton());
+  },
+  deleteButton() {
+    return h("button", {class: "btn", style: "color:var(--bad)", title: help("delete"), onclick: guarded(() => this.remove())}, "Delete…");
+  },
+  async remove() {
+    const d = this.doc;
+    if (!d || !confirm(`Delete "${d.meta.title || d.url}" from the archive? Its saved text and osiris's copy of the original are deleted for good, and later runs won't fetch it again. Your own files aren't touched.`)) return;
+    await api("/api/delete", {id: d.id});
+    await this.load({keep: true});  // it has left the list, so j opens the one now in its place
+    this.doc = null;
+    $("#doc-detail").replaceChildren(h("div", {class: "empty"}, h("h3", {}, "Deleted"), h("p", {}, this.items.length ? "Press j for the next one." : "")));
+    toast("Deleted.");
+  },
+  async decide(decision, method = null) {
+    if (!this.doc) return;
+    if (decision === "refetch" && method === "twitterapi" && !confirm("twitterapi.io charges for every tweet it looks up. Queue this tweet for it?")) return;
+    const note = $("#doc-note")?.value || null;
+    await api("/api/decide", {ids: [this.doc.id], decision, note, method: ["ocr", "refetch"].includes(decision) ? method || null : null});
+    await this.reload();
+    toast((decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared") + (this.detached && this.items.length ? ". Press j for the next one." : "."));
+  },
+  async keep(which) {
+    if (this.doc?.decision !== "choose") return;
+    await api("/api/review/choose", {id: this.doc.id, keep: which});
+    await this.reload();
+    toast(`Kept the ${which} text. The other version is deleted.` + (this.detached && this.items.length ? " Press j for the next one." : ""));
+  },
+  async markAll(decision) {
+    if (!confirm(`Mark everything listed here that's flagged as possible garbage and not decided yet as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
+    const r = await api("/api/decide", {filter: {q: this.q, lane: this.lane, status: this.status, reason: this.reason}, decision});
+    toast(`Marked ${fmt(r.changed)} as ${DECISION_LABEL[decision]}.`);
+    await this.reload();
   },
 };
+function decisionText(it) {
+  const how = it.method ? ` (${it.decision === "ocr" ? it.method : methodLabel(it.method, it.lane)})` : "";
+  return `Marked ${DECISION_LABEL[it.decision] || it.decision}${how}` + (it.note ? `: ${it.note}` : "");
+}
 
 /* ---- address: #review, #documents, #documents/<id> ---- */
 function setHash(value) { if (location.hash.slice(1) !== value) history.replaceState(null, "", "#" + value); }
 function followHash() {
   const [tab, id] = location.hash.slice(1).split("/");
-  if (!["archive", "review", "documents"].includes(tab)) return;
+  if (tab === "review") { Docs.garbage = true; showTab("documents"); return; }  // where the Review tab was
+  if (!["archive", "documents"].includes(tab)) return;
   showTab(tab);
   if (tab === "documents" && /^[0-9a-f]{16}$/.test(id || "")) guarded(() => Docs.show(id))();
 }
@@ -1505,26 +1516,25 @@ document.addEventListener("keydown", e => {
   const typing = e.target.matches("input, select, textarea");
   if (typing) { if (e.key === "Escape") e.target.blur(); return; }
   const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];
-  if (currentTab === "documents") {
-    if (go && e.target.closest(".body")) return;  // arrows scroll the text
-    if (go) { e.preventDefault(); const n = Docs.at + go; if (n >= 0 && n < Docs.items.length) Docs.open(n); return; }
-    if (e.key === "/") { e.preventDefault(); $("#doc-q")?.focus(); $("#doc-q")?.select(); return; }
-    if (e.key === "n" && Matches.go) { e.preventDefault(); Matches.go(1); return; }
-    if (e.key === "N" && Matches.go) { e.preventDefault(); Matches.go(-1); }
-    return;
-  }
-  if (currentTab !== "review") return;
-  if (go) { e.preventDefault(); Review.step(go); return; }
-  if (Review.doc?.decision === "choose") {
+  if (currentTab !== "documents") return;
+  if (go && e.target.closest(".body")) return;  // arrows scroll the text
+  if (go) { e.preventDefault(); Docs.step(go); return; }
+  if (e.key === "/") { e.preventDefault(); $("#doc-q")?.focus(); $("#doc-q")?.select(); return; }
+  if (e.key === "n" && Matches.go) { e.preventDefault(); Matches.go(1); return; }
+  if (e.key === "N" && Matches.go) { e.preventDefault(); Matches.go(-1); return; }
+  const d = Docs.doc;
+  if (!d) return;
+  if (d.decision === "choose") {
     const which = {1: "new", 2: "earlier"}[e.key];
-    if (which) { e.preventDefault(); guarded(() => Review.keep(which))(); }
+    if (which) { e.preventDefault(); guarded(() => Docs.keep(which))(); }
     return;
   }
   const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
-  const blocked = (decision === "ocr" && !Review.doc?.pdf) || (decision === "refetch" && Review.doc?.lane === "singlefile");
-  if (decision && !blocked) { e.preventDefault(); guarded(() => Review.decide(decision))(); return; }
-  if (e.key === "u" && Review.doc?.decision) { e.preventDefault(); guarded(() => Review.decide(null))(); }
-  if (e.key === "n") { e.preventDefault(); $("#review-note")?.focus(); }
+  const blocked = (decision === "ocr" && !d.pdf) || (decision === "refetch" && !(d.methods || []).length);
+  const method = decision === "ocr" ? $("#ocr-lang")?.value : decision === "refetch" ? $("#fix-method")?.value : null;
+  if (decision && !blocked) { e.preventDefault(); guarded(() => Docs.decide(decision, method))(); return; }
+  if (e.key === "u" && d.decision) { e.preventDefault(); guarded(() => Docs.decide(null))(); return; }
+  if (e.key === "n") { e.preventDefault(); $("#doc-note")?.focus(); }
 });
 
 /* ---- start ---- */

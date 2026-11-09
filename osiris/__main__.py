@@ -16,9 +16,10 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import clean, cookies, extract, review, safety, tuning
+from . import arxiv, clean, cookies, extract, fixes, review, safety, tuning, youtube
 from .arxiv import run_arxiv
-from .forums import run_hackernews, run_lesswrong
+from .doi import doi_of, run_doi_pass
+from .forums import lesswrong_from_scry, run_hackernews, run_lesswrong
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
 from .localfile import run_localfile
@@ -196,6 +197,15 @@ def cmd_run(args: argparse.Namespace) -> None:
     for stale in store.tmp_dir.glob("*.pdf"):
         if TEMP_DOWNLOAD.fullmatch(stale.name):
             stale.unlink()
+    if args.fixes:
+        try:
+            uvloop.run(_run_fixes(store, args))
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            log.warning("interrupted: the next garbage check puts back what a fix didn't finish")
+        finally:
+            store.commit()
+            store.close()
+        return
 
     routes = []
     if Path(args.urlfile) == DEFAULT_URLFILE and not DEFAULT_URLFILE.exists():
@@ -318,42 +328,106 @@ def cmd_ocr(args: argparse.Namespace) -> None:
         store.close()
 
 
-def cmd_review(args: argparse.Namespace) -> None:
-    store = Store(args.out)
+BILLED_KEY = "TWITTERAPI_IO_KEY"
+
+
+async def _run_fixes(store: Store, args: argparse.Namespace) -> None:
+    """The fixes queued on the Documents tab, each for its own documents only, with this run's settings."""
     db = review.connect(args.out)
+    billed = os.environ.pop(BILLED_KEY, None)  # tweets cost money only through the fix that says so
+    # these widen a run to documents nobody queued
+    args.refetch_arxiv_pdfs = args.refetch_comments = args.refetch_stackexchange = False
     try:
-        if args.action == "scan":
-            for name, n in review.scan(store, args.out).items():
-                print(f"{n:>8}  {name.replace('_', ' ')}")
-        else:
-            cmd_review_apply(store, db, args)
+        ocr_langs: dict[str, list[str]] = {}
+        wanted = []
+        for key, lane, decision, method in review.queued_fixes(db):
+            if decision == "ocr":
+                ocr_langs.setdefault(method or args.ocr_lang, []).append(key)
+            else:
+                wanted.append((key, lane, method or "again"))
+        groups: dict[str, list[tuple[str, str]]] = {}
+        for key, lane, method in review.prepare_refetch(store, db, wanted, fixes.FETCHED_LIKE_NEW):
+            groups.setdefault(method, []).append((key, lane))
+        if not groups and not ocr_langs:
+            log.info("fixes: nothing queued")
+        for method, docs in groups.items():
+            keys = sorted({key for key, _ in docs})
+            log.info("fixes: %d to fetch again (%s)", len(keys), method)
+            store.only = set(keys)
+            try:
+                await _fix(store, args, method, docs, billed)
+            finally:
+                store.only = None
+                store.commit()
+        for lang, keys in ocr_langs.items():
+            if problem := ocr_unavailable(lang):
+                log.warning("fixes: %d PDFs not read with OCR: %s", len(keys), problem)
+                continue
+            await run_ocr(store, lang, args.workers, args.worker_mem_mb, forced=keys)
+            review.mark_ocr_applied(db, keys)
     finally:
         db.close()
-        store.close()
 
 
-def cmd_review_apply(store: Store, db, args: argparse.Namespace) -> None:
-    """Carry out queued fixes. Fetching again happens in the next run, for the lanes this prints."""
-    import uvloop
-
-    forced, _ = review.pending_fixes(db)
-    lanes = review.apply_refetch(store, db)
-    if forced and (problem := ocr_unavailable(args.lang)):
-        log.warning("not running OCR: %s", problem)
-    elif forced:
-        async def main() -> None:
-            stop_on_signals()
-            await run_ocr(store, args.lang, args.workers, args.worker_mem_mb, forced=forced)
-
+async def _fix(store: Store, args: argparse.Namespace, method: str, docs: list[tuple[str, str]],
+               billed: str | None) -> None:
+    keys = sorted({key for key, _ in docs})
+    if method == "again":  # a normal run, seeing only these documents
+        await _run_lanes(store, args, sorted({lane for _, lane in docs}), {})
+        return
+    if method == "twitterapi":
+        if not billed:
+            log.warning("fixes: %s isn't set, so %d tweets weren't looked up on twitterapi.io", BILLED_KEY, len(keys))
+            return
+        os.environ[BILLED_KEY] = billed
         try:
-            uvloop.run(main())
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            log.warning("interrupted: progress is saved, re-run the same command to resume")
-            store.commit()
-            sys.exit(130)
-        review.mark_ocr_applied(db, forced)
-    store.commit()
-    print("lanes to run: " + " ".join(lanes))
+            await run_twitter(store, use_scry=False)
+        finally:
+            os.environ.pop(BILLED_KEY, None)
+        return
+    if method == "crawl":
+        await fixes.from_crawl(store, keys)
+        return
+    if method == "doi":
+        await run_doi_pass(store, args.contact, [(key, -1, doi) for key in keys if (doi := doi_of(key))])
+        return
+    if method == "scry":
+        by_lane: dict[str, list[str]] = {}
+        for key, lane in docs:
+            by_lane.setdefault(lane, []).append(key)
+        if by_lane.get("arxiv"):
+            await arxiv.fill_from_scry(store, by_lane["arxiv"], args.scry_arxiv_max_dollars, replace=True)
+        if by_lane.get("youtube"):
+            videos = [(key, store.db.execute("SELECT MIN(url) FROM urls WHERE doc_key = ?", (key,)).fetchone()[0])
+                      for key in by_lane["youtube"]]
+            await youtube.fill_from_scry(store, videos, args.scry_youtube_max_dollars)
+        if by_lane.get("lesswrong"):
+            await lesswrong_from_scry(store, by_lane["lesswrong"])
+        return
+    pool = extract.WorkerPool(args.workers, args.worker_mem_mb)
+    try:
+        if method == "html":  # arXiv's full text again, its web version first
+            store.db.executemany("UPDATE urls SET tried = replace(tried, ?, '') WHERE doc_key = ?",
+                                 ((f",{arxiv.FULLTEXT}", key) for key in keys))
+            await arxiv.add_full_text(store, pool, args.keep_raw_pdfs)
+        else:  # impersonate, render or wayback: that one way of fetching a web page, from the start
+            await run_generic(store, pool, args.workers, args.concurrency, args.per_host, args.contact,
+                              impersonate=False, keep_raw=args.keep_raw_pdfs, wayback=False, doi=False,
+                              rules=host_rules(args.host_limit),
+                              cookies=cookies.load(args.cookies) if args.cookies else [],
+                              browser_ua=args.user_agent, render_concurrency=args.render_concurrency,
+                              chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait, via=method)
+    finally:
+        pool.shutdown()
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    store = Store(args.out)
+    try:
+        for name, n in review.scan(store, args.out).items():
+            print(f"{n:>8}  {name.replace('_', ' ')}")
+    finally:
+        store.close()
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -485,6 +559,9 @@ def main() -> None:
     run.add_argument("urlfile", nargs="?", default=DEFAULT_URLFILE,
                      help=f"text file with one URL per line (default: {DEFAULT_URLFILE}, from extract_urls.py)")
     run.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    run.add_argument("--fixes", action="store_true",
+                     help="instead of the links waiting, carry out the fixes queued on the Documents tab, for those "
+                          "documents only, with this run's other options")
     run.add_argument("--mark-inputs", metavar="FILE",
                      help="once the URLs are queued, record the backup files listed here (from extract_urls.py "
                           "--hashes-out) as read, so that later runs can skip them if they haven't changed")
@@ -596,12 +673,10 @@ def main() -> None:
                          "search of titles, URLs and text; without it, text search scans the documents")
     ui.set_defaults(func=cmd_ui)
 
-    aud = sub.add_parser("review", help="find probable garbage to review (scan), or carry out the fixes you queued in review (apply)")
-    aud.add_argument("action", choices=("scan", "apply"))
+    aud = sub.add_parser("review", help="score documents for probable garbage and settle queued fixes (scan); "
+                                        "`osiris run --fixes` carries the fixes out")
+    aud.add_argument("action", choices=("scan",))
     aud.add_argument("--out", default=DEFAULT_OUT)
-    aud.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages for apply (default {OCR_LANG})")
-    aud.add_argument("--workers", type=int, default=1, help="OCR pages at a time for apply (default 1)")
-    aud.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
     aud.set_defaults(func=cmd_review)
 
     find = sub.add_parser("search", help="full-text search of the archived documents, best matches first")

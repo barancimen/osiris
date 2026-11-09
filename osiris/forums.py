@@ -246,6 +246,23 @@ async def _fetch_lw(session: aiohttp.ClientSession, key: str) -> Found | None:
     return lw_thread(post, data["data"]["comments"]["results"] or [])
 
 
+async def lesswrong_from_scry(store: Store, keys: list[str]) -> None:
+    """Scry's copy of each post, for a fix that asks for it."""
+    async with aiohttp.ClientSession(headers={"User-Agent": UA}, timeout=aiohttp.ClientTimeout(total=180)) as session:
+        for key in keys:
+            try:
+                found = await _lw_from_scry(session, key.split(":", 1)[1])
+            except ForumError as e:
+                log.warning("lesswrong: Scry's copy of %s couldn't be looked up: %s", key, e)
+                continue
+            if found is None:
+                log.info("lesswrong: Scry has no copy of %s", key)
+                continue
+            meta, body = found
+            store.record(key, "ok", chars=store.write_doc(key, meta, body), final_url=meta["url"], http_status=200)
+    store.commit()
+
+
 # -- both --------------------------------------------------------------------------------------
 
 
