@@ -767,7 +767,6 @@ function renderState(s) {
 /* how far a run is. Sources run side by side, each on its own schedule, so a run lasts as long as its
    slowest source. Stages inside a source (arXiv's abstracts, then its full text) run one after the other. */
 const PACE_WINDOW = 180000;  // how much recent progress a pace is measured over
-const QUIET_AFTER = 180000;  // this long without progress: it has done what it can, or is waiting something out
 const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text"};
 const Progress = {stages: {}, job: null};
 function renderProgress(j) {
@@ -784,27 +783,24 @@ function renderProgress(j) {
   else parts.push("now trying fallbacks for what failed or came back thin, then OCR");
   $("#run-text").textContent = parts.filter(Boolean).join(" · ");
 }
-/* Seconds per item: what the stage has really been taking lately, but never quicker than its schedule allows. */
+/* Seconds per item: what the stage last really took, but never quicker than its schedule allows. */
 function stagePace(st, seen, now) {
   const [t0, left0] = seen.samples[0], seconds = (now - t0) / 1000;
-  const measured = seconds >= 20 && left0 > st.left ? seconds / (left0 - st.left) : 0;
-  return Math.max(st.each || 0, measured);
+  if (seconds >= 20 && left0 > st.left) seen.measured = seconds / (left0 - st.left);
+  return Math.max(st.each || 0, seen.measured || 0);
 }
 function timeLeft(stages) {
-  const now = Date.now(), seconds = {}, shown = [], measuring = [], quiet = [];
-  const current = new Set(), stopped = new Set();
+  const now = Date.now(), seconds = {}, shown = [], measuring = [], current = new Set();
   for (const st of stages) {
     const label = STAGE_LABEL[st.stage];
-    if (!st.left || stopped.has(st.source)) { delete Progress.stages[st.stage]; continue; }
+    if (!st.left) { delete Progress.stages[st.stage]; continue; }
     let each = st.each;
     if (current.has(st.source)) delete Progress.stages[st.stage];  // its turn hasn't come
     else {
       current.add(st.source);
-      const seen = Progress.stages[st.stage] ??= {samples: [], moved: now};
-      if (seen.samples.length && seen.samples.at(-1)[1] !== st.left) seen.moved = now;
+      const seen = Progress.stages[st.stage] ??= {samples: []};
       seen.samples.push([now, st.left]);
       while (seen.samples.length > 2 && now - seen.samples[0][0] > PACE_WINDOW) seen.samples.shift();
-      if (now - seen.moved > QUIET_AFTER) { quiet.push(label); stopped.add(st.source); continue; }
       each = stagePace(st, seen, now);
     }
     if (!each) { measuring.push(label); continue; }
@@ -817,7 +813,6 @@ function timeLeft(stages) {
     longest && "about " + duration(longest) + " left",
     shown.length > 1 && shown.map(([label, sec]) => `${label} ${duration(sec)}`).join(", "),
     measuring.length && "still measuring " + measuring.join(", "),
-    quiet.length && "not moving: " + quiet.join(", "),
   ];
 }
 function duration(sec) {

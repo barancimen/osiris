@@ -41,6 +41,7 @@ LANES = ("twitter", "arxiv", "stackexchange", "reddit", "hackernews", "lesswrong
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 DOC_ID = re.compile(r"^[0-9a-f]{16}$")
 BILLED_KEY = "TWITTERAPI_IO_KEY"
+FETCHING_JOBS = ("Archive", "Fixes")  # jobs whose failures the page reports as this run's
 MAX_BODY = 400_000  # characters of a document sent to the page; the raw link has the rest
 PAGE_SIZE = 100
 SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
@@ -1260,7 +1261,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
 
     def job_changed() -> None:
         job = app["job"]
-        if job.name in PROGRESS_JOBS:
+        if job.name in FETCHING_JOBS:
             app["failures"].note_run(job.started, job.finished)
         if app["index"]:
             app["index"].wanted.set()
