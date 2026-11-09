@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -58,6 +59,32 @@ FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "dat
 DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
+log = logging.getLogger(__name__)
+
+
+class RefreshProgress:
+    """The log of a PDF refresh: when it starts, how far it is about every 30 seconds, and what it came to."""
+
+    EVERY = 30.0
+
+    def __init__(self, lane: str, what: str, total: int):
+        self.lane, self.what, self.total = lane, what, total
+        self.done = self.improved = self.failed = 0
+        self.last = time.monotonic()
+        log.info("%s: reading %d %s again; each keeps its text unless the new copy has more", lane, total, what)
+
+    def _counts(self) -> str:
+        return (f"{self.done:,} of {self.total:,} {self.what} read again, {self.improved:,} got more text"
+                + (f", {self.failed:,} couldn't be read and kept their text" if self.failed else ""))
+
+    def one(self) -> None:
+        self.done += 1
+        if time.monotonic() - self.last >= self.EVERY:
+            self.last = time.monotonic()
+            log.info("%s: refresh: %s", self.lane, self._counts())
+
+    def finish(self) -> None:
+        log.info("%s: refresh finished: %s", self.lane, self._counts())
 
 
 def now_iso() -> str:

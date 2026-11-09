@@ -27,7 +27,7 @@ import aiohttp
 
 from . import clean, extract
 from .cookies import BrowserCookie, into_aiohttp, to_cookiejar
-from .store import REFRESH, Store
+from .store import REFRESH, RefreshProgress, Store
 
 log = logging.getLogger(__name__)
 
@@ -432,6 +432,7 @@ class GenericPass:
         self.attempts: Counter[str] = Counter()
         self.host_failures: Counter[str] = Counter()
         self.host_forbidden: Counter[str] = Counter()
+        self.progress: RefreshProgress | None = None  # a refresh, which says how far it is
 
     async def run(self, urls: list[str], concurrency: int, per_host: int) -> None:
         sched = HostScheduler(urls, per_host, self.rules)
@@ -476,15 +477,21 @@ class GenericPass:
             finally:
                 if requeue is None and not unfinished:
                     self._mark_tried(url)
+                    if self.progress:
+                        self.progress.one()
                 for lost in sched.done(key, requeue, cooldown, drop is not None):
                     self._fail(lost, drop, Fetched())
                     self._mark_tried(lost)
+                    if self.progress:
+                        self.progress.one()
 
     def _mark_tried(self, url: str) -> None:
         if self.pass_name:
             self.store.mark_tried(url, self.pass_name)
 
     def _fail(self, url: str, reason: str, f: Fetched, raw_path: str | None = None) -> None:
+        if self.progress:
+            self.progress.failed += 1
         if self.prev_chars is not None:
             return  # upgrade pass: keep the pass-1 record
         self.store.record(url, "failed", reason, http_status=f.status or None, final_url=f.final_url,
@@ -544,6 +551,8 @@ class GenericPass:
         self.store.record(url, "ok" if ok else "thin", None if ok else "short", chars=chars,
                           http_status=f.status, final_url=f.final_url, content_type=f.content_type,
                           **({"raw_path": raw_path} if raw_path else {}))
+        if self.progress:
+            self.progress.improved += 1
 
 
 async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, concurrency: int, per_host: int,
@@ -560,6 +569,8 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
 
     urls = [key for key, _ in store.pending("generic")]
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
+    if refresh and urls:
+        log.info("generic: %d web PDFs will be read again once the %d waiting URLs are done", len(refresh), len(urls))
     if via == "impersonate":
         client, concurrency, per_host = CurlClient(reader, 16, cookies), 16, 2
     elif via == "render":
@@ -580,11 +591,11 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                 return
         await GenericPass(store, client, reader, pool, workers, keep_raw, rules=rules).run(urls, concurrency, per_host)
         if refresh:
-            log.info("generic: refreshing %d PDFs that have text; each keeps its text unless the new copy has more",
-                     len(refresh))
-            await GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars={key: chars for key, _, chars in refresh},
-                              pass_name=REFRESH, rules=rules, pdf_only=True).run([key for key, _, _ in refresh],
-                                                                                 concurrency, per_host)
+            refresher = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars={key: chars for key, _, chars in refresh},
+                                    pass_name=REFRESH, rules=rules, pdf_only=True)
+            refresher.progress = RefreshProgress("generic", "web PDFs", len(refresh))
+            await refresher.run([key for key, _, _ in refresh], concurrency, per_host)
+            refresher.progress.finish()
     finally:
         await client.close()
 

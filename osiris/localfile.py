@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 
 from . import documents, extract
 from .singlefile import saved_page_to_doc
-from .store import REFRESH, Store
+from .store import REFRESH, RefreshProgress, Store
 
 log = logging.getLogger(__name__)
 
@@ -53,10 +53,8 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int,
     pending = store.pending("localfile")
     # (doc_key, url, chars to beat): a refreshed document keeps its text unless the new read has more
     todo = [(key, url, None) for key, url in pending]
-    if refresh:
-        todo += refresh
-        log.info("localfile: refreshing %d PDFs that have text; each keeps its text unless the new read has more",
-                 len(refresh))
+    progress = RefreshProgress("localfile", "local PDFs", len(refresh)) if refresh else None
+    todo += refresh
     if todo:
         log.info("localfile: %d local files", len(todo))
     slots = asyncio.Semaphore(workers + 1)
@@ -65,11 +63,14 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int,
         await read_one(doc_key, url, keep)
         if keep is not None:
             store.mark_tried(doc_key, REFRESH)
+            progress.one()
 
     async def read_one(doc_key: str, url: str, keep: int | None) -> None:
         def fail(reason: str) -> None:
             if keep is None:
                 store.record(doc_key, "failed", reason)
+            else:
+                progress.failed += 1
 
         path = next((p for p in candidate_paths(url) if p.is_file()), None)
         if path is None:
@@ -97,6 +98,10 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int,
             "author": res.get("author"), "date": res.get("date"), "site": res.get("site")}, text)
         ok = chars >= extract.MIN_CHARS
         store.record(doc_key, "ok" if ok else "thin", None if ok else "short", chars=chars)
+        if keep is not None:
+            progress.improved += 1
 
     await asyncio.gather(*(one(*item) for item in todo))
     store.commit()
+    if progress:
+        progress.finish()

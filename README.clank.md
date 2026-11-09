@@ -406,6 +406,8 @@ Files of any size are accepted. What's left to stop a runaway file is each worke
 .venv/bin/osiris run --refresh-pdfs both
 ```
 
+**In the log:** a line when each refresh starts, progress about every 30 seconds (`refresh: 120 of 900 web PDFs read again, 14 got more text`) and a summary when it finishes. Web PDFs are read again only after every waiting web link is done, and the log says so at the start of the run.
+
 This downloads or reads every PDF again, whatever its status.
 
 | Status before | What happens |
