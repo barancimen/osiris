@@ -204,6 +204,7 @@ Common `osiris run` options:
 | `--keep-raw-pdfs` | Also keep originals under `data/raw/`, each named after its document: PDFs from the web, and arXiv papers' HTML, or their PDF if they have no HTML. Ordinary web pages and your local files aren't kept |
 | `--no-arxiv-fulltext` | arXiv papers keep only their abstracts this run |
 | `--refetch-arxiv-pdfs` | Look again at arXiv's web version for papers whose full text came from a PDF. It replaces the PDF text unless it's less than half as long |
+| `--scry-arxiv`, `--scry-arxiv-max-dollars N` | Take a paper's full text from Scry when it has one, and don't ask arXiv for that paper. Far faster, but formulas are dropped. Papers with only their abstract are affected, and a run stops taking them after spending N dollars (5) |
 | `--pdf-at-once N` | Web PDFs being downloaded or read at once. The default is twice `--workers`, at least 3 |
 | `--cookies FILE`, `--user-agent UA` | Use your browser session. See [Browser session](#browser-session) |
 | `--render` | Add the headless browser pass |

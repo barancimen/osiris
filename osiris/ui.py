@@ -18,7 +18,6 @@ import signal
 import sqlite3
 import sys
 import time
-import webbrowser
 from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +64,7 @@ DEFAULT_CONFIG = {
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
                 "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
                 "refetch_comments_days": 30, "refetch_arxiv_pdfs": False, "pdf_at_once": "",
+                "scry_arxiv": False, "scry_arxiv_dollars": 5, "log_font_px": 7,
                 "contact": "", "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
@@ -592,9 +592,11 @@ def _run_args(options: dict, url_file: Path) -> list[str]:
             args += ["--retry-host", host]
     for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw_pdfs", "--keep-raw-pdfs"),
                          ("refetch_comments", "--refetch-comments"), ("refetch_stackexchange", "--refetch-stackexchange"),
-                         ("refetch_arxiv_pdfs", "--refetch-arxiv-pdfs")):
+                         ("refetch_arxiv_pdfs", "--refetch-arxiv-pdfs"), ("scry_arxiv", "--scry-arxiv")):
         if options.get(option):
             args.append(flag)
+    if options.get("scry_arxiv"):
+        args += ["--scry-arxiv-max-dollars", f"{_number(options, 'scry_arxiv_dollars', float, 0, 5):g}"]
     if options.get("refetch_comments"):
         args += ["--refetch-comments-days", f"{_number(options, 'refetch_comments_days', float, 0, 0):g}"]
     if options.get("pdf_at_once") not in ("", None):
@@ -1277,7 +1279,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     return app
 
 
-def serve(out: str | os.PathLike, port: int, no_browser: bool, search_index: bool = False) -> None:
+def serve(out: str | os.PathLike, port: int, search_index: bool = False) -> None:
     app = make_app(out, search_index)
     address = f"http://127.0.0.1:{port}/?token={app['token']}"
 
@@ -1286,10 +1288,6 @@ def serve(out: str | os.PathLike, port: int, no_browser: bool, search_index: boo
         if os.environ.get("SSH_CONNECTION"):
             print(f"Over ssh, first run this on your own machine: ssh -N -L {port}:127.0.0.1:{port} <this server>",
                   flush=True)
-        # a terminal browser would take over this window, so only open one where there's a desktop
-        desktop = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or sys.platform == "darwin"
-        if desktop and not no_browser and not os.environ.get("SSH_CONNECTION"):
-            webbrowser.open(address)
 
     app.on_startup.append(announce)
     web.run_app(app, host="127.0.0.1", port=port, print=None, access_log=None)

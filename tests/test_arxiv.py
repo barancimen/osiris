@@ -276,6 +276,127 @@ def test_shorter_full_text_does_not_replace_a_longer_one():
     assert arxiv.with_full_text(body, "a much longer full text").endswith("a much longer full text")
 
 
+class FakeScry:
+    """Answers the two statements fill_from_scry sends."""
+    spent_nanodollars = 0
+    catalog: dict = {}
+    papers: dict = {}
+    fail_on = None
+    cost = 0
+    statements: list = []
+
+    def __init__(self, session, key):
+        pass
+
+    async def query(self, sql, max_seconds=60):
+        FakeScry.statements.append(sql)
+        FakeScry.spent_nanodollars += FakeScry.cost
+        table = "catalog" if "academic.catalog" in sql else "papers"
+        if FakeScry.fail_on == table:
+            raise arxiv.ScryError("boom")
+        if table == "catalog":
+            return [{"arxiv_id": i, "paper_key": k, "fulltext_tokens": t} for i, (k, t) in FakeScry.catalog.items() if f"'{i}'" in sql]
+        return [{"paper_key": k, "text": t} for k, t in FakeScry.papers.items() if f"'{k}'" in sql]
+
+
+@pytest.fixture
+def scry(monkeypatch):
+    monkeypatch.setattr(arxiv, "ScryClient", FakeScry)
+    monkeypatch.setattr(arxiv, "load_key", lambda: "a key")
+    for name, value in (("spent_nanodollars", 0), ("catalog", {}), ("papers", {}), ("fail_on", None), ("cost", 0), ("statements", [])):
+        monkeypatch.setattr(FakeScry, name, value)
+    return FakeScry
+
+
+def fill(store, todo, dollars=5.0):
+    return asyncio.run(arxiv.fill_from_scry(store, todo, dollars))
+
+
+def test_a_paper_scry_has_is_finished_without_asking_arxiv(store, scry):
+    did = abstract_doc(store)
+    scry.catalog, scry.papers = {"2402.02637": ("key1", 500)}, {"key1": PAPER}
+    assert fill(store, [KEY]) == []
+    meta, body = store.read_doc(did)
+    assert meta["source"] == arxiv.SCRY_SOURCE and "The abstract." in body and "Body of the paper." in body
+    assert store.done_without("arxiv", arxiv.FULLTEXT) == []
+
+
+def test_a_paper_scry_lacks_still_goes_to_arxiv(store, scry):
+    did = abstract_doc(store)
+    assert fill(store, [KEY]) == [KEY] and "## Full text" not in store.read_doc(did)[1]
+
+
+def test_a_paper_listed_but_with_no_usable_text_goes_to_arxiv(store, scry):
+    abstract_doc(store)
+    scry.catalog, scry.papers = {"2402.02637": ("key1", 500)}, {"key1": "too short"}
+    assert fill(store, [KEY]) == [KEY]
+
+
+def test_scry_does_not_replace_text_a_paper_already_has(store, scry, tmp_path):
+    did = abstract_doc(store)
+    ft, _ = full_text(store, {"html": missing(), "pdf": pdf(tmp_path)})
+    assert run(ft)
+    before = store.read_doc(did)[1]
+    scry.catalog, scry.papers = {"2402.02637": ("key1", 500)}, {"key1": "A different text. " * 200}
+    assert fill(store, [KEY]) == [KEY] and store.read_doc(did)[1] == before and not scry.statements
+
+
+@pytest.mark.parametrize("broken", ["catalog", "papers"])
+def test_when_scry_fails_papers_wait_rather_than_going_to_arxiv(store, scry, broken):
+    did = abstract_doc(store)
+    scry.catalog, scry.papers, scry.fail_on = {"2402.02637": ("key1", 500)}, {"key1": PAPER}, broken
+    assert fill(store, [KEY]) == []
+    assert "## Full text" not in store.read_doc(did)[1] and len(store.done_without("arxiv", arxiv.FULLTEXT)) == 1
+
+
+def test_scry_stops_at_the_spending_limit(store, scry):
+    ids = [f"2402.{10000 + i}" for i in range(250)]
+    store.add([route(f"https://arxiv.org/abs/{i}") for i in ids])
+    for i in ids:
+        chars = store.write_doc(f"arxiv:{i}", {"title": "T", "url": "u"}, "An abstract.")
+        store.record(f"arxiv:{i}", "ok", chars=chars)
+    store.commit()
+    scry.catalog = {i: (f"k{i}", 10) for i in ids}
+    scry.papers = {f"k{i}": PAPER for i in ids}
+    scry.cost = 400_000_000  # $0.40 a statement
+    assert fill(store, [f"arxiv:{i}" for i in ids], 0.5) == []  # the rest wait; arXiv isn't asked for them
+    done = 250 - len(store.done_without("arxiv", arxiv.FULLTEXT))
+    assert done == 100  # one catalog statement, then one batch of text, is past the limit
+
+
+def test_without_a_key_everything_goes_to_arxiv(store, monkeypatch):
+    abstract_doc(store)
+    monkeypatch.setattr(arxiv, "load_key", lambda: None)
+    assert fill(store, [KEY]) == [KEY]
+
+
+def test_big_papers_are_kept_out_of_scry_and_batches_stay_small():
+    found = {"a": ("ka", 400_000), "b": ("kb", 400_000), "c": ("kc", 900_000), "d": ("kd", 100)}
+    assert arxiv._text_batches(found) == [["a"], ["b", "d"]]
+    assert all(len(b) <= arxiv.SCRY_TEXT_BATCH for b in arxiv._text_batches({str(i): (str(i), 1) for i in range(250)}))
+
+
+def test_quotes_in_ids_cannot_break_the_statement():
+    assert arxiv._sql_list(["a'b", "c\\d"]) == "'a\\'b','c\\\\d'"
+
+
+def test_the_full_text_step_uses_scry_only_when_asked(store, scry, monkeypatch):
+    abstract_doc(store)
+    scry.catalog, scry.papers = {"2402.02637": ("key1", 500)}, {"key1": PAPER}
+    asked = []
+
+    async def one(self, session, key):
+        asked.append(key)
+        return True
+
+    monkeypatch.setattr(arxiv.FullText, "one", one)
+    asyncio.run(arxiv.add_full_text(store, Pool(), False))
+    assert asked == [KEY] and not scry.statements
+    asked.clear()
+    asyncio.run(arxiv.add_full_text(store, Pool(), False, scry_dollars=5.0))
+    assert not asked and scry.statements
+
+
 def test_tidy_html_text():
     text = "# Title\n\nIntro\n\n- \u2022 \nFirst\n- \\[12\\]\nA reference"
     assert arxiv.tidy_html_text(text) == "Intro\n\n- First\n- \\[12\\] A reference"

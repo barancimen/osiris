@@ -315,6 +315,9 @@ const HELP = {
   scry_twitter: "Look posts up in Scry's archive first. Turned off, they only come from twitterapi.io if you've allowed it, and otherwise they wait.",
   refetch_comments: "Fetch your saved Hacker News and LessWrong threads again, to pick up new comments. A document only changes if the new text is at least as long. Stays on until you untick it.",
   refetch_comments_days: "Skip threads fetched more recently than this, so ticking the box above doesn't redo them all every run. Pages saved before these sources existed are always updated. 0 updates every thread.",
+  scry_arxiv: "For papers with only their summary so far, take the full text from Scry if it has it, and don't ask arXiv for those. Far faster, but Scry's copy drops formulas and is about a quarter shorter. Your paper IDs are sent to Scry. Papers Scry doesn't have still come from arXiv.",
+  scry_arxiv_dollars: "Scry charges for the data it sends beyond a free allowance. Once a run has spent this much on papers, the rest wait for the next run.",
+  log_font_px: "How big the text in the log is.",
   refetch_arxiv_pdfs: "For papers whose full text came from a PDF, look at arXiv's web version again. It's cleaner, so it replaces the PDF text unless it's less than half as long. Each paper is only looked at again until its web version has really been read, so it's safe to leave on.",
   pdf_at_once: "How many PDFs from the web can be downloading or waiting to be read at once. It starts at twice your processor cores. Lower it if your disk is nearly full.",
   refetch_stackexchange: "Fetch your saved Stack Exchange threads again so they include comments. A question deleted since keeps its document.",
@@ -441,7 +444,7 @@ const SOURCE_WHAT = {
   doi: "The paper's title, authors and summary, found through its DOI", arxiv_abstract: "The paper's title, authors and summary from arXiv",
   github: "The repository's description and README", reddit: "The post and its comments", tweet: "The post",
   hackernews: "The discussion and its comments", lesswrong: "The post and its comments",
-  stackexchange: "The question with its answers and comments", youtube: "From YouTube",
+  stackexchange: "The question with its answers and comments", youtube: "From YouTube", fulltext: "The paper's summary and full text",
 };
 const FILE_KIND = {pdf: "A PDF on this computer", text: "A text file on this computer", html: "A web page saved on this computer",
                    docx: "A Word document on this computer", epub: "An ebook on this computer", kindle: "A Kindle ebook on this computer"};
@@ -504,7 +507,14 @@ function renderArchive() {
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
-      h("div", {id: "log", tabindex: 0, "aria-label": "Job output"})),
+      h("label", {class: "opt", style: "justify-content:flex-end;margin-bottom:6px", title: help("log_font_px")}, "Log text size",
+        h("input", {class: "short", style: "flex:none", type: "number", min: 4, max: 48, step: 1, value: config.options.log_font_px, "aria-label": "Log text size", onchange: e => {
+          const px = Math.min(48, Math.max(4, Math.round(Number(e.target.value)) || config.defaults.log_font_px));
+          e.target.value = px;
+          setOption("log_font_px", px);
+          $("#log").style.fontSize = px + "px";
+        }}), "px"),
+      h("div", {id: "log", tabindex: 0, "aria-label": "Job output", style: `font-size:${config.options.log_font_px}px`})),
     Cleanup.card(),
     Failures.card(),
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
@@ -659,8 +669,8 @@ function renderOptions() {
         ticks(check("scry_twitter", "Look up tweets in Scry"), check("billed_twitter", "Allow twitterapi.io"))),
       group("Papers and forums",
         ticks(check("arxiv_fulltext", "Get the full text of arXiv papers"), check("keep_raw_pdfs", "Keep raw copies of PDFs"),
-          check("refetch_comments", "Update Hacker News and LessWrong threads"), check("refetch_stackexchange", "Update Stack Exchange threads"), check("refetch_arxiv_pdfs", "Try arXiv's web version again for papers that used the PDF")),
-        numbers(number("refetch_comments_days", "Update threads last fetched over", "days"), number("arxiv_delay", "Wait between arXiv papers", "sec"), number("stackexchange_delay", "Wait between Stack Exchange requests", "sec")),
+          check("refetch_comments", "Update Hacker News and LessWrong threads"), check("refetch_stackexchange", "Update Stack Exchange threads"), check("refetch_arxiv_pdfs", "Try arXiv's web version again for papers that used the PDF"), check("scry_arxiv", "Use Scry's copy of arXiv papers when it has one")),
+        numbers(number("refetch_comments_days", "Update threads last fetched over", "days"), number("scry_arxiv_dollars", "Spend at most this on Scry's copies, per run", "$"), number("arxiv_delay", "Wait between arXiv papers", "sec"), number("stackexchange_delay", "Wait between Stack Exchange requests", "sec")),
         fields(field("Contact for APIs", help("contact"), h("input", {type: "text", value: o.contact, placeholder: "None sent", "aria-label": "Contact for APIs", onchange: e => setOption("contact", e.target.value.trim())})))),
       h("div", {class: "reset-row"}, h("button", {class: "btn", title: help("reset-numbers"), onclick: () => {
         const patch = Object.fromEntries(numberNames.map(n => [n, ""]));

@@ -88,6 +88,12 @@ def test_comment_updates_can_skip_recently_fetched_threads():
     assert "--refetch-arxiv-pdfs" in ui._run_args(options(refetch_arxiv_pdfs=True), Path("urls"))
 
 
+def test_scry_for_arxiv_is_opt_in_and_capped():
+    assert "--scry-arxiv" not in ui._run_args(options(), Path("urls"))
+    args = ui._run_args(options(scry_arxiv=True, scry_arxiv_dollars=2.5), Path("urls"))
+    assert "--scry-arxiv" in args and args[args.index("--scry-arxiv-max-dollars") + 1] == "2.5"
+
+
 def test_site_limits():
     rows = [*OPTIONS["host_limits"], {"pattern": "Example.com", "at_once": 2, "seconds": 1.5}, {"pattern": "", "at_once": 1, "seconds": 0}]
     args = ui._run_args(options(host_limits=rows), Path("urls"))

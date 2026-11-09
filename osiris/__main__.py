@@ -98,7 +98,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
     jobs = {
         "twitter": lambda: run_twitter(store, use_scry=not args.no_scry_tweets),
         "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext,
-                                   refetch_pdfs=args.refetch_arxiv_pdfs),
+                                   refetch_pdfs=args.refetch_arxiv_pdfs,
+                                   scry_dollars=args.scry_arxiv_max_dollars if args.scry_arxiv else None),
         "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
         "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments, older_than_days=args.refetch_comments_days),
@@ -374,7 +375,7 @@ def cmd_clean(args: argparse.Namespace) -> None:
 def cmd_ui(args: argparse.Namespace) -> None:
     from .ui import serve
 
-    serve(args.out, args.port, args.no_browser, args.search_index)
+    serve(args.out, args.port, args.search_index)
 
 
 def refresh_search_index(out: str | Path) -> dict[str, int]:
@@ -533,6 +534,11 @@ def main() -> None:
     run.add_argument("--refetch-arxiv-pdfs", action="store_true",
                      help="give arXiv papers whose full text came from a PDF another look at their HTML, once each. "
                           "The HTML replaces the PDF text unless it's less than half as long")
+    run.add_argument("--scry-arxiv", action="store_true",
+                     help="take an arXiv paper's full text from Scry when it has one, and don't ask arXiv for that paper. "
+                          "Much faster, but Scry's copy drops formulas. Sends your paper ids to Scry")
+    run.add_argument("--scry-arxiv-max-dollars", type=float, default=5.0, metavar="N",
+                     help="stop taking papers from Scry after spending this much in a run; the rest wait (default 5)")
     run.add_argument("--pdf-at-once", type=int, metavar="N",
                      help="web PDFs being downloaded or read at once (default: twice --workers, at least 3)")
     run.add_argument("--no-arxiv-fulltext", action="store_true",
@@ -566,7 +572,7 @@ def main() -> None:
     ui = sub.add_parser("ui", help="open the web interface")
     ui.add_argument("--out", default=DEFAULT_OUT)
     ui.add_argument("--port", type=int, default=8321, help="local port (default 8321)")
-    ui.add_argument("--no-browser", action="store_true", help="just print the address")
+    ui.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)  # the page never opens by itself now
     ui.add_argument("--search-index", action="store_true",
                     help="keep a full-text index (data/search.sqlite) up to date in the background, for ranked "
                          "search of titles, URLs and text; without it, text search scans the documents")
