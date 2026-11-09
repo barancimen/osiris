@@ -86,6 +86,8 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 
 **Choose version** lists documents that Fetch again changed. It shows each version's length and garbage score, and lets you read both. **Keep new** or **Keep earlier** deletes the other version and returns the document to undecided. Until you pick, the new text is the one on disk, and the document is left out of `export`. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris review apply` and the run it prints.
 
+**Fixed** lists documents whose text OCR or Fetch again changed, where there was no earlier version to choose from. They stay there, however well they score now, until you mark them **Fine** or queue another fix. They aren't left out of exports.
+
 If your indexer reads `data/md` directly, `data/review-exclude.txt` lists the paths to leave out. The file is rewritten by each check.
 
 From the command line: `osiris review scan`, then `osiris review apply`, which also prints the lanes to run for documents queued to fetch again.

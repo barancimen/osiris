@@ -404,6 +404,7 @@ const LANE_HELP = {
 const VIEW_HELP = {
   to_review: "Documents that might be garbled and that you haven't decided on yet, worst first.",
   choose: "Fetching again gave different text. Both versions are kept until you pick one, and these stay out of exports until then.",
+  fixed: "Documents whose text a fix you queued has changed. They stay here until you mark them, so you can check the result.",
   bad: "Ones you marked as garbage. They're left out of exports.",
   ocr: "Scanned PDFs waiting to be read again when you press Run fixes.",
   refetch: "Waiting to be downloaded or read again when you press Run fixes.",
@@ -1245,7 +1246,7 @@ function statusPill(d) {
 }
 
 /* ---- review tab ---- */
-const VIEWS = [["to_review", "To review"], ["choose", "Choose version"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
+const VIEWS = [["to_review", "To review"], ["choose", "Choose version"], ["fixed", "Fixed"], ["bad", "Bad"], ["ocr", "OCR queued"], ["refetch", "Fetch queued"], ["fine", "Fine"], ["unfixable", "Can't fix"]];
 const DECISION_LABEL = {fine: "fine", bad: "bad", ocr: "queued for OCR", refetch: "queued to fetch again", unfixable: "can't fix"};
 const Review = {
   // `at` is the list position of the open document. A document you've decided on usually leaves the list
@@ -1311,6 +1312,7 @@ const Review = {
       !scored ? [h("h3", {}, "Nothing checked yet"), h("p", {}, "Check your archive for garbled text and block pages. It only reads your documents."), h("button", {class: "btn primary", title: help("review-scan"), onclick: guarded(async () => { await api("/api/job/review", {}); showTab("archive"); tick(); })}, "Check for garbage")]
       : this.view === "to_review" ? [h("h3", {}, "All reviewed"), h("p", {}, `${fmt(scored)} documents checked, and none are waiting for a decision.`)]
       : this.view === "choose" ? [h("h3", {}, "Nothing to choose"), h("p", {}, "When Fetch again gives different text, both versions wait here for you to pick one.")]
+      : this.view === "fixed" ? [h("h3", {}, "Nothing fixed to check"), h("p", {}, "When OCR or Fetch again changes a document's text, it waits here until you mark it.")]
       : [h("h3", {}, "Nothing here"), h("p", {}, "Documents you mark this way appear here.")]));
     this.doc = null;
   },

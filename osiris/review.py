@@ -36,6 +36,7 @@ FLAGGED = 0.35  # at or above this, a document is on the review list
 SAMPLE = 60_000  # characters read from each of three places in a long document
 OUTSIDE_LIST = ("fine", "unfixable")
 CHOOSE = "choose"  # set by the check, never by hand: fetching again gave different text, and you pick
+FIXED = "fixed"  # set by the check, never by hand: a fix you queued changed the text, for you to look over
 EXCLUDED = ("bad", "unfixable", CHOOSE)  # left out of `osiris export` and review-exclude.txt
 DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
 EXCLUDE_FILE = "review-exclude.txt"
@@ -260,6 +261,8 @@ def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str
     ).fetchall():
         if decision == CHOOSE:  # yours to settle
             continue
+        label = "OCR" if decision == "ocr" else "Fetching again"
+        fixed = (FIXED, "; ".join(filter(None, (note, f"{label} changed the text"))), hashes.get(did), did)
         kept = db.execute("SELECT original, rows FROM refetch_kept WHERE doc_id = ?", (did,)).fetchone()
         if decision == "refetch" and applied and kept:
             outcome = _judge_refetch(db, store, did, kept, did in current)
@@ -268,8 +271,8 @@ def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str
                            (CHOOSE, hashes.get(did), did))
                 waiting += 1
                 continue
-            if outcome is None:  # nothing to compare it with: it gets a new look, like any changed text
-                db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))
+            if outcome is None:  # nothing to compare it with: what came is all there is
+                db.execute("UPDATE decisions SET decision = ?, note = ?, hash = ?, applied_at = NULL WHERE doc_id = ?", fixed)
                 changed += 1
             else:
                 db.execute("UPDATE decisions SET decision = 'bad', note = ?, applied_at = NULL WHERE doc_id = ?",
@@ -279,10 +282,12 @@ def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str
             db.execute("DELETE FROM refetch_kept WHERE doc_id = ?", (did,))
             continue
         if did in current and hashes.get(did) != old_hash:
-            db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))  # new text gets a new look
+            if applied and decision in ("ocr", "refetch"):  # stays in view, however well it scores now
+                db.execute("UPDATE decisions SET decision = ?, note = ?, hash = ?, applied_at = NULL WHERE doc_id = ?", fixed)
+            else:
+                db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))  # new text gets a new look
             changed += 1
         elif applied and decision in ("ocr", "refetch"):
-            label = "OCR" if decision == "ocr" else "Fetching again"
             result = "changed nothing" if did in current else "failed"
             db.execute("UPDATE decisions SET decision = 'bad', note = ?, applied_at = NULL WHERE doc_id = ?",
                        ("; ".join(filter(None, (note, f"{label} {result}"))), did))
@@ -394,7 +399,7 @@ def counts(db: sqlite3.Connection) -> dict[str, int]:
     ).fetchone()[0]
     scored = db.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
     return {"to_review": to_review, "scored_total": scored,
-            **{name: decided.get(name, 0) for name in (*DECISIONS, CHOOSE)}}
+            **{name: decided.get(name, 0) for name in (*DECISIONS, CHOOSE, FIXED)}}
 
 
 def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, note: str | None = None) -> int:

@@ -847,7 +847,7 @@ async def stop_job(request: web.Request) -> web.Response:
 
 # -- review --------------------------------------------------------------------------------------
 
-REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in (*review.DECISIONS, review.CHOOSE)}}
+REVIEW_VIEWS = {"to_review": "d.doc_id IS NULL AND s.score >= ?", **{d: "d.decision = ? " for d in (*review.DECISIONS, review.CHOOSE, review.FIXED)}}
 
 
 def _review_where(view: str, host: str | None) -> tuple[str, list]:
