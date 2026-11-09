@@ -17,6 +17,7 @@ much text as it, so a thread deleted or emptied since keeps what was archived.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import html
 import logging
 import re
@@ -210,9 +211,10 @@ async def _fetch_lw(session: aiohttp.ClientSession, key: str) -> Found | None:
 # -- both --------------------------------------------------------------------------------------
 
 
-async def _run(store: Store, lane: str, fetch: Fetch, concurrency: int, refetch: bool) -> None:
+async def _run(store: Store, lane: str, fetch: Fetch, concurrency: int, refetch: bool, older_than_days: float = 0) -> None:
     pending = {key for key, _ in store.pending(lane)}
-    archived = store.archived_in(lane, route) if refetch else {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).strftime("%Y-%m-%dT%H:%M:%SZ") if older_than_days else None
+    archived = store.archived_in(lane, route, fetched_before=cutoff) if refetch else {}
     if not pending and not archived:
         return
     log.info("%s: %d to fetch, %d already archived to update", lane, len(pending), len(archived))
@@ -237,6 +239,8 @@ async def _run(store: Store, lane: str, fetch: Fetch, concurrency: int, refetch:
             else:
                 log.info("%s: keeping what's archived for %s", lane, key)
                 outcome["kept"] += 1
+                if found is not None:  # it was fetched, so it isn't due again yet
+                    store.touch(key)
             return
         meta, body = found
         if urls:
@@ -261,9 +265,9 @@ async def _run(store: Store, lane: str, fetch: Fetch, concurrency: int, refetch:
         review.forget(store, replaced)
 
 
-async def run_hackernews(store: Store, refetch: bool = False) -> None:
-    await _run(store, "hackernews", _fetch_hn, 4, refetch)
+async def run_hackernews(store: Store, refetch: bool = False, older_than_days: float = 0) -> None:
+    await _run(store, "hackernews", _fetch_hn, 4, refetch, older_than_days)
 
 
-async def run_lesswrong(store: Store, refetch: bool = False) -> None:
-    await _run(store, "lesswrong", _fetch_lw, 2, refetch)
+async def run_lesswrong(store: Store, refetch: bool = False, older_than_days: float = 0) -> None:
+    await _run(store, "lesswrong", _fetch_lw, 2, refetch, older_than_days)

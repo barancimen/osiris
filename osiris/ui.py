@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
                 "review_after": True, "cookies": "", "user_agent": "", "user_agent_edit": False, "render": False,
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
                 "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
+                "refetch_comments_days": 30, "refetch_arxiv_pdfs": False, "pdf_at_once": "",
                 "contact": "", "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
@@ -455,7 +456,7 @@ async def state(request: web.Request) -> web.Response:
 
 def _config_for_page(app: web.Application, config: dict) -> dict:
     return {**config, "search_index": app["index"] is not None,  # not a setting: `osiris ui --search-index`
-            "defaults": {**DEFAULT_CONFIG["options"], "workers": os.cpu_count() or 1}}
+            "defaults": {**DEFAULT_CONFIG["options"], "workers": os.cpu_count() or 1, "pdf_at_once": max(3, 2 * (os.cpu_count() or 1))}}
 
 
 async def get_config(request: web.Request) -> web.Response:
@@ -590,9 +591,14 @@ def _run_args(options: dict, url_file: Path) -> list[str]:
         for host in _retry_hosts(options):
             args += ["--retry-host", host]
     for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw_pdfs", "--keep-raw-pdfs"),
-                         ("refetch_comments", "--refetch-comments"), ("refetch_stackexchange", "--refetch-stackexchange")):
+                         ("refetch_comments", "--refetch-comments"), ("refetch_stackexchange", "--refetch-stackexchange"),
+                         ("refetch_arxiv_pdfs", "--refetch-arxiv-pdfs")):
         if options.get(option):
             args.append(flag)
+    if options.get("refetch_comments"):
+        args += ["--refetch-comments-days", f"{_number(options, 'refetch_comments_days', float, 0, 0):g}"]
+    if options.get("pdf_at_once") not in ("", None):
+        args += ["--pdf-at-once", str(_number(options, "pdf_at_once", int, 1, 1))]
     for option, flag in (("arxiv_fulltext", "--no-arxiv-fulltext"), ("impersonate", "--no-impersonate"), ("doi", "--no-doi"),
                          ("wayback", "--no-wayback"), ("scry_twitter", "--no-scry-tweets")):
         if not options.get(option, True):

@@ -203,6 +203,8 @@ Common `osiris run` options:
 | `--no-ocr`, `--ocr-lang eng+tur` | Turn off automatic OCR, or set its languages |
 | `--keep-raw-pdfs` | Also keep originals under `data/raw/`, each named after its document: PDFs from the web, and arXiv papers' HTML, or their PDF if they have no HTML. Ordinary web pages and your local files aren't kept |
 | `--no-arxiv-fulltext` | arXiv papers keep only their abstracts this run |
+| `--refetch-arxiv-pdfs` | Look again at arXiv's web version for papers whose full text came from a PDF. It replaces the PDF text unless it's less than half as long |
+| `--pdf-at-once N` | Web PDFs being downloaded or read at once. The default is twice `--workers`, at least 3 |
 | `--cookies FILE`, `--user-agent UA` | Use your browser session. See [Browser session](#browser-session) |
 | `--render` | Add the headless browser pass |
 | `--no-impersonate`, `--no-doi`, `--no-wayback` | Skip a fallback pass |
@@ -252,7 +254,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | Lane | URLs | How |
 |---|---|---|
 | `twitter` | `x.com/…/status/<id>` | Scry's archive, which also holds some deleted tweets, then twitterapi.io if keyed |
-| `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call, for title, authors and abstract. Then the full text, whichever form of link you saved: arXiv's HTML, or the PDF if there is none. One paper every 15 seconds, as arXiv's robots.txt asks, so a large first run takes hours; it's safe to stop and resumes |
+| `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call, for title, authors and abstract. Then the full text, whichever form of link you saved: arXiv's HTML, or the PDF if there is none. One request every 15 seconds, as arXiv's robots.txt asks, with papers read in the background so a slow one doesn't hold up the next. A large first run takes hours; it's safe to stop and resumes. If this machine is too busy to read a paper's HTML, the next run tries it again before settling for the PDF |
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
 | `hackernews` | `news.ycombinator.com/item?id=<id>` | Algolia's item API: the story, or one comment, with every reply |
@@ -284,6 +286,8 @@ New links go to these lanes automatically. This command fetches every thread alr
 ```sh
 .venv/bin/osiris run --only hackernews --only lesswrong --refetch-comments
 ```
+
+Add `--refetch-comments-days 30` to leave out threads these lanes fetched in the last 30 days. Pages saved before the lanes existed are always included.
 
 A document changes only when the API returns at least as much text as it has, so a thread deleted since keeps what was archived. A page moved from the generic lane gets a new document id: its old file is removed once the new one is written, and any Review decision on it is dropped so the new text gets a new look. Pages you saved with SingleFile are left alone.
 
@@ -362,6 +366,7 @@ Files of any size are accepted. What's left to stop a runaway file is each worke
 - **Scope:** it covers only the lanes in that run. `--only localfile` leaves web PDFs alone, and `--only youtube` does no OCR.
 - **Earlier PDFs:** it also works through PDFs left from earlier runs, so the first run after installing tesseract can take a while.
 - **Files:** local files are read in place and never changed. Web PDFs are downloaded again to a temporary file, which is then deleted.
+- **Speed:** the work is split by page, with `--workers` pages read at once, so every core stays busy even on a single long book.
 - **Tries:** each PDF is tried once. Ctrl-C stops at once, and the PDF in progress is tried again next run.
 - **Results:** text is kept only if there's more of it than before, with `source: pdf:ocr` or `file:pdf:ocr`.
 - **Languages:** `--ocr-lang eng+tur` sets them, after installing their packs. The default is English. List only what you need, since each extra language is slower and can lower accuracy.

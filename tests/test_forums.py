@@ -176,6 +176,49 @@ def test_rerun_updates_in_place(store):
     assert "second" in store.read_doc(doc_id(key))[1]
 
 
+LW_KEY = "lw:CEGnJBHmkcwPTysb7"
+
+
+def update_if_older(store, fetch, days=7):
+    asyncio.run(forums._run(store, "lesswrong", fetch, 2, True, older_than_days=days))
+
+
+def age_everything(store):
+    store.db.execute("UPDATE urls SET updated_at = '2020-01-01T00:00:00Z'")
+    store.commit()
+
+
+def test_threads_fetched_recently_are_left_out_until_they_are_old_enough(store):
+    store.add([route(LW_URL)])
+    run(store, answer("first version of the thread " * 5), refetch=False)
+    update_if_older(store, answer("second version of the thread, with a new comment " * 5))
+    assert "first" in store.read_doc(doc_id(LW_KEY))[1]
+    age_everything(store)
+    update_if_older(store, answer("second version of the thread, with a new comment " * 5))
+    assert "second" in store.read_doc(doc_id(LW_KEY))[1]
+
+
+def test_a_page_from_before_the_lane_existed_is_updated_however_recent(store):
+    preview(store, LW_URL, "preview")
+    update_if_older(store, answer("the full post " * 20))
+    assert rows(store, LW_URL)[0] == "lesswrong"
+
+
+def test_a_thread_fetched_but_kept_is_not_due_again_yet(store):
+    store.add([route(LW_URL)])
+    run(store, answer("first version of the thread " * 5), refetch=False)
+    age_everything(store)
+    asked = []
+
+    async def fetch(session, key):
+        asked.append(key)
+        return {"url": "https://example.com/new", "title": "New"}, "short"
+
+    update_if_older(store, fetch)
+    update_if_older(store, fetch)
+    assert asked == [LW_KEY]
+
+
 def test_new_url_that_fails_is_recorded(store):
     store.add([route(HN_URL)])
 

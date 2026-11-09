@@ -81,6 +81,13 @@ def test_switches_become_flags():
     assert "--chrome-profile" in ui._run_args(options(render=True, chrome_profile="/copy"), Path("urls"))
 
 
+def test_comment_updates_can_skip_recently_fetched_threads():
+    args = ui._run_args(options(refetch_comments=True, refetch_comments_days=14), Path("urls"))
+    assert args[args.index("--refetch-comments-days") + 1] == "14"
+    assert "--refetch-comments-days" not in ui._run_args(options(), Path("urls"))
+    assert "--refetch-arxiv-pdfs" in ui._run_args(options(refetch_arxiv_pdfs=True), Path("urls"))
+
+
 def test_site_limits():
     rows = [*OPTIONS["host_limits"], {"pattern": "Example.com", "at_once": 2, "seconds": 1.5}, {"pattern": "", "at_once": 1, "seconds": 0}]
     args = ui._run_args(options(host_limits=rows), Path("urls"))

@@ -8,6 +8,7 @@ at the slower pace: its HTML version, whose maths survives as LaTeX, or else its
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -35,6 +36,10 @@ FULLTEXT_SEP = "\n\n## Full text\n\n"
 MIN_FULLTEXT_CHARS = 1000  # less than this is a failed conversion, not a paper
 MAX_UNREACHABLE = 5  # papers in a row: arXiv is down or refusing us, so stop until the next run
 BUSY = {"extract_timeout", "extract_crashed"}  # this machine's trouble, which says nothing about the paper
+BUSY_ONCE = "html_busy"  # in `tried`: a run was too busy to read this paper's HTML, so the next one tries before its PDF
+HTML_CHECKED = "html_checked"  # in `tried`: we know what this paper's HTML gives, so there's no need to look again
+READING_AT_ONCE = 8  # papers between download and saved; requests still go out one at a time
+MIN_HTML_SHARE = 0.5  # HTML replaces PDF text unless it's less than this share of it, which means a partial conversion
 TRANSIENT = {"connect", "http_429", "http_500", "http_502", "http_503", "http_504"}
 
 
@@ -127,10 +132,12 @@ def tidy_html_text(text: str) -> str:
     return re.sub(r"^- (\\\[\d+\\\])[ \t]*\n+", r"- \1 ", text, flags=re.M)
 
 
-def with_full_text(body: str, text: str) -> str | None:
-    """The document with this full text after its abstract, or None if what it has is as long."""
+def with_full_text(body: str, text: str, html_over_pdf: bool = False) -> str | None:
+    """The document with this full text after its abstract, or None if what it has is as long.
+    PDF text runs long on page headers and the like, so arXiv's HTML can replace it when shorter."""
     head, _, old = body.partition(FULLTEXT_SEP)
-    return f"{head}{FULLTEXT_SEP}{text}" if len(text) > len(old) else None
+    better = len(text) > len(old) or (html_over_pdf and len(text) >= len(old) * MIN_HTML_SHARE)
+    return f"{head}{FULLTEXT_SEP}{text}" if better else None
 
 
 class FullText:
@@ -138,33 +145,46 @@ class FullText:
         self.store = store
         self.pool = pool
         self.keep_raw = keep_raw
-        self.reader = Reader(store.tmp_dir, asyncio.Semaphore(1))
+        self.reader = Reader(store.tmp_dir, asyncio.Semaphore(READING_AT_ONCE))
         self.next_call = 0.0
+        self.gate = asyncio.Lock()
 
     async def get(self, session: aiohttp.ClientSession, url: str) -> Fetched:
+        """One request at a time, FULLTEXT_DELAY apart, however many papers are being read."""
         loop = asyncio.get_running_loop()
-        for attempt in range(1, MAX_TRIES + 1):
-            await asyncio.sleep(max(0.0, self.next_call - loop.time()))
-            try:
-                async with session.get(url) as resp:
-                    f = await self.reader.read(resp.status, str(resp.url), resp.headers, resp.content.iter_chunked(65536))
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                log.warning("arxiv: %s: %s", url, e or type(e).__name__)
-                f = Fetched(error="connect")
-            finally:
-                self.next_call = loop.time() + FULLTEXT_DELAY
-            if f.error not in TRANSIENT:
-                break
-            self.next_call += f.retry_after or FULLTEXT_DELAY * attempt
+        async with self.gate:
+            for attempt in range(1, MAX_TRIES + 1):
+                await asyncio.sleep(max(0.0, self.next_call - loop.time()))
+                try:
+                    async with session.get(url) as resp:
+                        f = await self.reader.read(resp.status, str(resp.url), resp.headers, resp.content.iter_chunked(65536))
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    log.warning("arxiv: %s: %s", url, e or type(e).__name__)
+                    f = Fetched(error="connect")
+                finally:
+                    self.next_call = loop.time() + FULLTEXT_DELAY
+                if f.error not in TRANSIENT:
+                    break
+                self.next_call += f.retry_after or FULLTEXT_DELAY * attempt
         return f
 
-    async def _from_html(self, key: str, f: Fetched) -> str:
+    async def _from_html(self, key: str, f: Fetched) -> str | None:
+        """The paper's text; "" if its HTML is missing or unusable; None if it's left for the next run,
+        because this machine was too busy to read it. A second run that's too busy moves on to the PDF."""
         if f.kind != "html" or b"ltx_" not in f.body:
             log.info("arxiv: no HTML version of %s (%s)", key, f.error or f.content_type)
+            self.store.mark_tried(key, HTML_CHECKED)
             return ""
         res = await self.pool.run(extract.html_to_doc, f.body, f.final_url)
-        if res.get("error") in BUSY:
+        if res.get("error") == "extract_crashed":
             res = await self.pool.run(extract.html_to_doc, f.body, f.final_url)
+        busy = res.get("error") in BUSY
+        if busy and not self.store.has_tried(key, BUSY_ONCE):
+            log.warning("arxiv: too busy to read the HTML of %s (%s); the next run tries it again", key, res.get("error"))
+            self.store.mark_tried(key, BUSY_ONCE)
+            return None
+        if not busy:
+            self.store.mark_tried(key, HTML_CHECKED)
         text = tidy_html_text(res.get("text") or "")
         if len(text) < MIN_FULLTEXT_CHARS:
             log.warning("arxiv: couldn't read the HTML of %s (%s, %d characters)", key, res.get("error"), len(text))
@@ -181,7 +201,7 @@ class FullText:
             log.warning("arxiv: no document on disk for %s", key)
             return
         meta, body = found
-        body = with_full_text(body, text)
+        body = with_full_text(body, text, html_over_pdf=source == "html:arxiv" and meta.get("source") == "pdf:arxiv")
         if body is None:
             return
         raw_path = None
@@ -203,6 +223,9 @@ class FullText:
         if f.error in TRANSIENT:
             return False
         text = await self._from_html(key, f)
+        if text is None:
+            self.store.commit()
+            return True
         if text:
             self._write(key, text, "html:arxiv", f)
         else:
@@ -226,23 +249,46 @@ async def add_full_text(store: Store, pool: extract.WorkerPool, keep_raw: bool) 
     log.info("arxiv: full text for %d papers, one every %.0f seconds (about %.1f hours); safe to stop, the next run "
              "carries on", len(todo), FULLTEXT_DELAY, len(todo) * FULLTEXT_DELAY / 3600)
     full_text = FullText(store, pool, keep_raw)
+    queue = deque(todo)
     unreachable = 0
+
+    async def work(session: aiohttp.ClientSession) -> None:
+        nonlocal unreachable
+        while queue and unreachable < MAX_UNREACHABLE:
+            key = queue.popleft()
+            try:
+                reached = await full_text.one(session, key)
+            except Exception:
+                log.exception("arxiv: %s failed", key)
+                continue
+            unreachable = 0 if reached else unreachable + 1
+            if unreachable == MAX_UNREACHABLE:
+                log.warning("arxiv: couldn't reach arXiv for %d papers in a row, stopping until the next run", unreachable)
+
     connector = aiohttp.TCPConnector(limit=1)
     timeout = aiohttp.ClientTimeout(total=300, sock_read=60)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers={"User-Agent": UA}) as session:
-        for key in todo:
-            if await full_text.one(session, key):
-                unreachable = 0
-                continue
-            unreachable += 1
-            if unreachable >= MAX_UNREACHABLE:
-                log.warning("arxiv: couldn't reach arXiv for %d papers in a row, stopping until the next run", unreachable)
-                return
+        await asyncio.gather(*(work(session) for _ in range(READING_AT_ONCE)))
 
 
-async def run_arxiv(store: Store, pool: extract.WorkerPool, keep_raw: bool = False, full_text: bool = True) -> None:
+def requeue_pdf_papers(store: Store) -> int:
+    """Give papers whose full text came from a PDF another look at their HTML, once each: until we've
+    actually read a paper's HTML, or know there isn't any, it stays eligible."""
+    changed = store.db.execute(
+        "UPDATE urls SET tried = replace(tried, ?, '') WHERE lane = 'arxiv' AND content_type = 'application/pdf'"
+        " AND instr(tried, ?) > 0 AND instr(tried, ?) = 0",
+        (f",{FULLTEXT}", f",{FULLTEXT}", f",{HTML_CHECKED}"),
+    ).rowcount
+    store.commit()
+    return changed
+
+
+async def run_arxiv(store: Store, pool: extract.WorkerPool, keep_raw: bool = False, full_text: bool = True,
+                    refetch_pdfs: bool = False) -> None:
     await _abstracts(store)
     if full_text:
+        if refetch_pdfs:
+            log.info("arxiv: %d papers that used their PDF get another look at their HTML", requeue_pdf_papers(store))
         await add_full_text(store, pool, keep_raw)
 
 

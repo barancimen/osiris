@@ -4,7 +4,8 @@
 does it alone. OCR takes seconds per page, so a long scan must not hold up anything else. It works
 through PDFs recorded with no usable text: a local file is read where it is and never changed, and
 a web PDF is downloaded again, since only its text was kept, to a temporary file that is then
-deleted. Each PDF is tried once, unless --retry is given.
+deleted. Each PDF is tried once, unless --retry is given. The unit of work is a page, so every core
+stays busy even when only one long book is left.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import os
 import shutil
 import signal
 import subprocess
+import time
 import uuid
 from collections.abc import Iterable
 from io import BytesIO
@@ -34,12 +36,9 @@ DPI = 200
 PAGE_TIMEOUT = 180  # seconds for one page
 DOC_TIMEOUT = 3 * 3600  # a whole book; what's read by then is kept
 DOC_SECONDS_PER_PAGE = 30  # a book too long for DOC_TIMEOUT gets this long for each page
+RENDER_SECONDS = 60  # on top of PAGE_TIMEOUT, for drawing a page before tesseract sees it
 TRIED = "ocr"
 LANES = ("generic", "localfile")  # the lanes whose PDFs can come back with no text
-
-
-class _DocTimeout(Exception):
-    pass
 
 
 def _page_text(image: bytes, lang: str) -> str:
@@ -51,50 +50,62 @@ def _page_text(image: bytes, lang: str) -> str:
     return result.stdout.decode("utf-8", "replace").replace("\f", "").strip()
 
 
-def pdf_to_doc(path: str, lang: str) -> dict:
-    """Runs in an OCR worker. The PDF is only opened for reading."""
+def pdf_info(path: str) -> dict:
+    """Runs in an OCR worker: how many pages to read, and what the PDF says about itself."""
     import pypdfium2 as pdfium
 
-    def out_of_time(*_):
-        raise _DocTimeout()
-
-    def stop(*_):  # raising lets subprocess.run kill the tesseract it's waiting on
-        raise SystemExit(1)
-
-    signal.signal(signal.SIGALRM, out_of_time)
-    signal.signal(signal.SIGTERM, stop)
-    signal.alarm(DOC_TIMEOUT)
-    pages: list[str] = []
-    error = None
+    signal.alarm(PAGE_TIMEOUT)
     pdf = None
     try:
         pdf = pdfium.PdfDocument(path)
         meta = pdf.get_metadata_dict(skip_empty=True)
-        signal.alarm(max(DOC_TIMEOUT, len(pdf) * DOC_SECONDS_PER_PAGE))
-        for i in range(len(pdf)):
-            page = pdf[i]
-            buffer = BytesIO()
-            page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
-            page.close()
-            try:
-                pages.append(_page_text(buffer.getvalue(), lang))
-            except subprocess.TimeoutExpired:
-                continue  # one bad page shouldn't cost the rest of the book
-    except _DocTimeout:
-        error = "ocr_timeout"
-        meta = {}
+        return {"pages": len(pdf), "title": meta.get("Title"), "author": meta.get("Author")}
     except Exception as e:
-        return {"text": "", "error": f"ocr_error:{type(e).__name__}:{str(e)[:80]}"}
+        return {"error": f"ocr_error:{type(e).__name__}:{str(e)[:80]}"}
     finally:
         signal.alarm(0)
         if pdf is not None:
             pdf.close()
+
+
+def read_page(path: str, index: int, lang: str) -> dict:
+    """Runs in an OCR worker. The PDF is only opened for reading. The text comes back as "page", not
+    "text", because repairs that rejoin words have to see the whole document."""
+    import pypdfium2 as pdfium
+
+    def stop(*_):  # raising lets subprocess.run kill the tesseract it's waiting on
+        raise SystemExit(1)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.alarm(PAGE_TIMEOUT + RENDER_SECONDS)
+    started = time.monotonic()
+    pdf = None
+    try:
+        pdf = pdfium.PdfDocument(path)
+        page = pdf[index]
+        buffer = BytesIO()
+        page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
+        page.close()
+        text = _page_text(buffer.getvalue(), lang)
+    except subprocess.TimeoutExpired:
+        text = ""  # one bad page shouldn't cost the rest of the book
+    except Exception as e:
+        return {"error": f"ocr_error:{type(e).__name__}:{str(e)[:80]}", "seconds": time.monotonic() - started}
+    finally:
+        signal.alarm(0)
+        if pdf is not None:
+            pdf.close()
+    return {"page": text, "seconds": time.monotonic() - started}
+
+
+def pages_to_doc(pages: list[str], title: str | None, author: str | None, error: str | None) -> dict:
+    """Runs in an OCR worker, so the repairs to a whole book don't hold up the main process."""
     text = "\n\n".join(p for p in pages if p)
-    title = meta.get("Title") or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
-    return {"text": text, "title": title, "author": meta.get("Author"), "error": error}
+    title = title or next((ln.strip() for ln in text.splitlines() if ln.strip()), None)
+    return {"text": text, "title": title, "author": author, "error": error}
 
 
-pdf_to_doc.pdf_text = True  # tesseract breaks words at line ends like a typesetter: clean.py rejoins them
+pages_to_doc.pdf_text = True  # tesseract breaks words at line ends like a typesetter: clean.py rejoins them
 
 
 def unavailable(lang: str) -> str | None:
@@ -163,18 +174,42 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
     """With `forced` (doc keys), only those are read, and the result replaces the text when it scores
     better rather than when it's longer: a garbage text layer can be longer than the truth."""
     todo = forced_rows(store, forced) if forced is not None else candidates(store, retry, lanes)[:limit]
-    log.info("ocr: %d PDFs with no usable text, language %s, %d at a time", len(todo), lang, workers)
+    log.info("ocr: %d PDFs with no usable text, language %s, %d pages at a time", len(todo), lang, workers)
     if not todo:
         return
     pool = extract.WorkerPool(workers, mem_mb)
-    slots = asyncio.Semaphore(workers)
+    open_pdfs = asyncio.Semaphore(workers)  # downloaded or being read
+    page_slots = asyncio.Semaphore(workers)  # one core each; first come first served, so PDFs finish in turn
     outcome: dict[str, int] = {}
     finished = 0
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"}
 
+    async def read(path: Path) -> dict:
+        async with page_slots:
+            info = await pool.run(pdf_info, str(path))
+        if "pages" not in info:
+            return {"text": "", "error": info.get("error")}
+        spent, problem = 0.0, None  # seconds of work, which is what the limit is on: waiting for a core doesn't count
+        limit = max(DOC_TIMEOUT, info["pages"] * DOC_SECONDS_PER_PAGE)
+
+        async def page(index: int) -> str:
+            nonlocal spent, problem
+            async with page_slots:
+                if spent > limit:
+                    problem = "ocr_timeout"  # what's read by then is kept
+                    return ""
+                res = await pool.run(read_page, str(path), index, lang)
+            spent += res.get("seconds", 0.0)
+            problem = problem or res.get("error")
+            return res.get("page") or ""
+
+        pages = await asyncio.gather(*(page(i) for i in range(info["pages"])))
+        async with page_slots:
+            return await pool.run(pages_to_doc, pages, info.get("title"), info.get("author"), problem)
+
     async def one(session: aiohttp.ClientSession, doc_key: str, url: str, final_url: str | None, lane: str, chars: int) -> None:
         nonlocal finished
-        async with slots:
+        async with open_pdfs:
             temp = None
             if lane == "localfile":
                 path = next((p for p in candidate_paths(url) if p.is_file()), None)
@@ -191,7 +226,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
                         store.mark_tried(doc_key, TRIED)
                     return
             try:
-                res = await pool.run(pdf_to_doc, str(path), lang)
+                res = await read(path)
             finally:
                 if temp is not None:  # only ever a download of ours, never one of your files
                     temp.unlink(missing_ok=True)

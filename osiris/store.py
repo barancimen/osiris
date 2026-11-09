@@ -171,14 +171,19 @@ class Store:
             (lane, f",{pass_name}"),
         ).fetchall()
 
-    def archived_in(self, lane: str, route_fn: Callable[[str], Route | None]) -> dict[str, tuple[int, list[str]]]:
+    def archived_in(self, lane: str, route_fn: Callable[[str], Route | None],
+                    fetched_before: str | None = None) -> dict[str, tuple[int, list[str]]]:
         """Finished documents that belong in this lane, whether it fetched them or the generic lane
         did before it existed: {doc_key in this lane: (longest text so far, URLs)}. Pages you saved
-        yourself are left alone."""
+        yourself are left alone. With `fetched_before`, what this lane itself fetched since then
+        is left out too; what the generic lane fetched never had this lane's treatment, so it stays."""
         found: dict[str, tuple[int, list[str]]] = {}
-        for url, chars in self.db.execute(
-            "SELECT url, COALESCE(chars, 0) FROM urls WHERE status IN ('ok', 'thin') AND lane IN ('generic', ?)", (lane,)
+        for url, url_lane, chars, updated in self.db.execute(
+            "SELECT url, lane, COALESCE(chars, 0), updated_at FROM urls WHERE status IN ('ok', 'thin')"
+            " AND lane IN ('generic', ?)", (lane,)
         ).fetchall():
+            if fetched_before and url_lane == lane and updated and updated >= fetched_before:
+                continue
             r = route_fn(url)
             if r is not None and r.lane == lane:
                 longest, urls = found.get(r.doc_key, (0, []))
@@ -255,6 +260,14 @@ class Store:
     def mark_tried(self, doc_key: str, pass_name: str) -> None:
         self.db.execute("UPDATE urls SET tried = tried || ? WHERE doc_key = ? AND instr(tried, ?) = 0",
                         (f",{pass_name}", doc_key, f",{pass_name}"))
+
+    def has_tried(self, doc_key: str, pass_name: str) -> bool:
+        return self.db.execute("SELECT 1 FROM urls WHERE doc_key = ? AND instr(tried, ?) > 0 LIMIT 1",
+                               (doc_key, f",{pass_name}")).fetchone() is not None
+
+    def touch(self, doc_key: str) -> None:
+        """It was fetched just now, though nothing about it changed."""
+        self.db.execute("UPDATE urls SET updated_at = ? WHERE doc_key = ?", (now_iso(), doc_key))
 
     def record(self, doc_key: str, status: str, reason: str | None = None, **fields) -> None:
         """Set the outcome for every URL sharing doc_key. Commits at most once a second."""

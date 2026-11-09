@@ -549,8 +549,8 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                       rules: tuple[HostRule, ...] = DEFAULT_HOST_RULES, cookies: list[BrowserCookie] = (),
                       browser_ua: str | None = None, render: bool = False, render_concurrency: int = 2,
                       chrome_profile: str | None = None, challenge_wait: float = 15.0,
-                      refresh: list[tuple[str, str, int]] = ()) -> None:
-    pdf_slots = asyncio.Semaphore(3)
+                      refresh: list[tuple[str, str, int]] = (), pdf_at_once: int | None = None) -> None:
+    pdf_slots = asyncio.Semaphore(pdf_at_once or max(3, 2 * workers))  # downloaded and waiting to be read, or being read
     reader = Reader(store.tmp_dir, pdf_slots)
 
     urls = [key for key, _ in store.pending("generic")]

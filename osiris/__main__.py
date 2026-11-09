@@ -97,11 +97,12 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
     stop_on_signals()
     jobs = {
         "twitter": lambda: run_twitter(store, use_scry=not args.no_scry_tweets),
-        "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext),
+        "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext,
+                                   refetch_pdfs=args.refetch_arxiv_pdfs),
         "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
-        "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments),
-        "lesswrong": lambda: run_lesswrong(store, refetch=args.refetch_comments),
+        "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments, older_than_days=args.refetch_comments_days),
+        "lesswrong": lambda: run_lesswrong(store, refetch=args.refetch_comments, older_than_days=args.refetch_comments_days),
         "github": lambda: run_github(store),
         "youtube": lambda: run_youtube(store, args.youtube_delay),
         "localfile": lambda: run_localfile(store, pool, args.workers,
@@ -113,7 +114,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
                                        cookies=browser_cookies, browser_ua=args.user_agent, render=args.render,
                                        render_concurrency=args.render_concurrency,
                                        chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait,
-                                       refresh=refresh.get("generic", ())),
+                                       refresh=refresh.get("generic", ()), pdf_at_once=args.pdf_at_once),
     }
     tasks = {lane: asyncio.create_task(jobs[lane]()) for lane in lanes}
 
@@ -494,6 +495,9 @@ def main() -> None:
                      help="fetch every archived Hacker News and LessWrong thread again with all its comments, including "
                           "pages saved before those lanes existed. A document changes only if the new text is at least "
                           "as long. Repeat it any time to pick up new comments")
+    run.add_argument("--refetch-comments-days", type=float, default=0, metavar="DAYS",
+                     help="with --refetch-comments, leave out threads these lanes fetched in the last DAYS days. "
+                          "Pages saved before those lanes existed are always included (default 0: every thread)")
     run.add_argument("--no-ocr", action="store_true",
                      help="don't read PDFs with no text layer with tesseract once the generic and local-file lanes "
                           "are done; they wait for a later run or `osiris ocr`")
@@ -526,6 +530,11 @@ def main() -> None:
                      help="also keep originals under <out>/raw/, named after their documents: PDFs from the web "
                           "(~2 MB each), and arXiv papers' HTML, or their PDF if they have no HTML. Web pages and "
                           "your local files aren't kept")
+    run.add_argument("--refetch-arxiv-pdfs", action="store_true",
+                     help="give arXiv papers whose full text came from a PDF another look at their HTML, once each. "
+                          "The HTML replaces the PDF text unless it's less than half as long")
+    run.add_argument("--pdf-at-once", type=int, metavar="N",
+                     help="web PDFs being downloaded or read at once (default: twice --workers, at least 3)")
     run.add_argument("--no-arxiv-fulltext", action="store_true",
                      help="arXiv papers keep only their abstracts this run (the full text takes 15 seconds a paper)")
     run.add_argument("--cookies", metavar="FILE",
@@ -548,7 +557,7 @@ def main() -> None:
     ocr = sub.add_parser("ocr", help="read PDFs with no text layer (scans) with tesseract; slow, resumable")
     ocr.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     ocr.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages, e.g. eng+tur (default {OCR_LANG})")
-    ocr.add_argument("--workers", type=int, default=1, help="PDFs at a time, one CPU core each (default 1)")
+    ocr.add_argument("--workers", type=int, default=1, help="pages at a time, one CPU core each (default 1)")
     ocr.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
     ocr.add_argument("--retry", action="store_true", help="also try PDFs OCR has already tried, e.g. in a new language")
     ocr.add_argument("--limit", type=int, help="stop after this many PDFs")
@@ -567,7 +576,7 @@ def main() -> None:
     aud.add_argument("action", choices=("scan", "apply"))
     aud.add_argument("--out", default=DEFAULT_OUT)
     aud.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages for apply (default {OCR_LANG})")
-    aud.add_argument("--workers", type=int, default=1, help="PDFs at a time for apply (default 1)")
+    aud.add_argument("--workers", type=int, default=1, help="OCR pages at a time for apply (default 1)")
     aud.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per OCR process (0 = none)")
     aud.set_defaults(func=cmd_review)
 
