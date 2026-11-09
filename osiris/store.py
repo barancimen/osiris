@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS imported_files (  -- saved pages `osiris import` has 
     url         TEXT,
     imported_at TEXT
 );
+CREATE TABLE IF NOT EXISTS input_files (  -- tab backups whose URLs are all in this manifest, by content
+    key     TEXT PRIMARY KEY,
+    name    TEXT,
+    read_at TEXT
+);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
@@ -159,6 +164,11 @@ class Store:
         self.db.commit()
         added = self.db.total_changes - before
         return added, seen + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
+
+    def mark_inputs_read(self, files: Iterable[tuple[str, str]]) -> None:
+        self.db.executemany("INSERT OR REPLACE INTO input_files VALUES (?, ?, ?)",
+                            ((key, name, now_iso()) for key, name in files))
+        self.db.commit()
 
     def reroute(self, route_fn: Callable[[str], Route | None]) -> int:
         """Apply the current routing rules to URLs not yet archived: pending ones, and failed or

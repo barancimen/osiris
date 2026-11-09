@@ -30,7 +30,7 @@ Optional system and Python extras:
 
 `osiris ui` opens one page with three tabs. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
-- **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. Fallback passes, OCR and the garbage check aren't included. **Stop** saves progress, and starting again resumes.
+- **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. Fallback passes, OCR and the garbage check aren't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
 - **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them.
 - **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
@@ -431,7 +431,7 @@ Everything goes in `data/`.
 | `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
-| `ui.json`, `ui_urls.txt` | The web interface's settings and latest URL list |
+| `ui.json`, `ui_urls.txt`, `ui_inputs.txt` | The web interface's settings, latest URL list and the tab backups behind it |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw-pdfs`; the same id as the document in `md/`. `.html.zst` is arXiv's HTML. Budget about 2 MB per PDF |
 
 | Status | Meaning |

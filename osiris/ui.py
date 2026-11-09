@@ -697,16 +697,18 @@ async def start_archive(request: web.Request) -> web.Response:
     config = load_config(out)
     options = config["options"]
     url_file = out / "ui_urls.txt"
+    read_files = out / "ui_inputs.txt"  # the tab backups behind this URL list
     run_args = _run_args(options, url_file)
 
     async def flow(j: Job) -> None:
-        with open(url_file, "w", encoding="utf-8"):
-            pass
+        for empty in (url_file, read_files):
+            empty.write_text("", encoding="utf-8")
         for folder in config["backups"]:
             part = out / TMP_DIR / "ui_extract.txt"
             await j.run(f"Extracting URLs from {folder}",
                         [sys.executable, str(REPO_DIR / "extract_urls.py"), "--input-dir",
-                         str(Path(folder).expanduser()), "--output", str(part)])
+                         str(Path(folder).expanduser()), "--output", str(part),
+                         "--manifest", str(out / "manifest.sqlite"), "--hashes-out", str(read_files)])
             with open(url_file, "a", encoding="utf-8") as f:
                 f.write(part.read_text(encoding="utf-8"))
             part.unlink(missing_ok=True)
@@ -718,7 +720,7 @@ async def start_archive(request: web.Request) -> web.Response:
         if config["saved"]:
             await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
         j.plan = _plan(_chosen_lanes(options), options)
-        await j.run("Archiving", j.osiris(*run_args))
+        await j.run("Archiving", j.osiris(*run_args, "--mark-inputs", str(read_files)))
         j.plan = None
         if retried := _retry_hosts(options):  # done: later runs leave those sites alone again
             latest = load_config(out)

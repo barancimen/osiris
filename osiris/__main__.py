@@ -207,6 +207,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if r is not None:
                     routes.append(r)
     added, known = store.add(routes)
+    if args.mark_inputs:  # only now: a file marked before its URLs were saved would never be read again
+        with open(args.mark_inputs, encoding="utf-8") as f:
+            store.mark_inputs_read(line.rstrip("\n").split("\t", 1) for line in f if line.strip())
     by_lane = Counter(r.lane for r in routes)
     log.info("%d URLs read from %s (%s)", len(routes), args.urlfile,
              ", ".join(f"{lane} {n}" for lane, n in by_lane.most_common()))
@@ -482,6 +485,9 @@ def main() -> None:
     run.add_argument("urlfile", nargs="?", default=DEFAULT_URLFILE,
                      help=f"text file with one URL per line (default: {DEFAULT_URLFILE}, from extract_urls.py)")
     run.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    run.add_argument("--mark-inputs", metavar="FILE",
+                     help="once the URLs are queued, record the backup files listed here (from extract_urls.py "
+                          "--hashes-out) as read, so that later runs can skip them if they haven't changed")
     run.add_argument("--concurrency", type=int, default=tuning.FLAG_DEFAULTS["concurrency"],
                      help="max requests in flight (default: %(default)s)")
     run.add_argument("--per-host", type=int, default=tuning.FLAG_DEFAULTS["per_host"],

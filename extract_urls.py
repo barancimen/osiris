@@ -1,12 +1,16 @@
 import argparse
+import hashlib
 import json
+import pathlib
 import re
 import glob
 import os
+import sqlite3
 import sys
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_DIR)  # works under python -I and from any cwd
+import osiris.dedup  # noqa: E402
 from osiris.dedup import keep, dedup_key  # noqa: E402  (shared with the osiris manifest)
 
 # Only explicitly saved links: bookmarks + Session Buddy, web pages and local files (file://).
@@ -74,10 +78,38 @@ def refuse_to_overwrite(path, input_dir):
     if not all(re.match(r'[a-z][a-z0-9+.-]*:', line.strip(), re.I) for line in lines):
         sys.exit(f"{path} exists and isn't a list of URLs, so it won't be overwritten. Choose another path.")
 
+def rules_digest():
+    """Changes with the rules for choosing URLs, so that files read under older rules get read again."""
+    h = hashlib.sha256()
+    for path in (__file__, osiris.dedup.__file__):
+        with open(path, 'rb') as f:
+            h.update(f.read())
+    return h.digest()
+
+def file_key(path, rules):
+    h = hashlib.sha256(rules)
+    with open(path, 'rb') as f:
+        while chunk := f.read(2 ** 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+def already_read(manifest):
+    """Keys of the backup files whose URLs are all in the manifest."""
+    try:
+        db = sqlite3.connect(pathlib.Path(manifest).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+        try:
+            return {key for (key,) in db.execute('SELECT key FROM input_files')}
+        finally:
+            db.close()
+    except sqlite3.Error:  # no manifest yet, or one from before files were recorded: read everything
+        return set()
+
 def main():
     ap = argparse.ArgumentParser(description='Collect unique saved URLs from bookmark and Session Buddy backups.')
     ap.add_argument('--input-dir', default=INPUT_DIR, help=f'backup directory (default: {INPUT_DIR})')
     ap.add_argument('--output', default=OUTPUT, help=f'URL list to write (default: {OUTPUT})')
+    ap.add_argument('--manifest', help='skip backup files whose URLs this manifest already has')
+    ap.add_argument('--hashes-out', help='add the files read here, for `osiris run --mark-inputs`')
     args = ap.parse_args()
 
     d = args.input_dir
@@ -91,8 +123,19 @@ def main():
     seen = set()
     ordered = []  # first-seen original spelling of each page
     keys = {}  # dedup key of each exact URL, or None if it's filtered out: backups repeat most of their URLs
+    rules = rules_digest() if args.manifest else b''
+    known = already_read(args.manifest) if args.manifest else set()
+    unchanged = 0
+    read = []  # (key, file name)
     for path in files:
         name = os.path.basename(path)
+        if args.manifest:
+            key = file_key(path, rules)
+            if key in known:
+                unchanged += 1
+                continue
+            known.add(key)  # an identical copy further on needs no reading either
+            read.append((key, name))
         if name.startswith('bookmarks_'):
             urls = extract_bookmarks(path)
         else:
@@ -115,6 +158,11 @@ def main():
     with open(out, 'w', encoding='utf-8') as f:
         f.write('\n'.join(ordered) + '\n')
     print(f'wrote {out}: {len(ordered)} unique urls', file=sys.stderr)
+    if args.manifest:
+        print(f'skipped {unchanged} of {len(files)} files, already read and unchanged', file=sys.stderr)
+    if args.hashes_out:
+        with open(args.hashes_out, 'a', encoding='utf-8') as f:
+            f.writelines(f'{key}\t{name}\n' for key, name in read)
 
 if __name__ == '__main__':
     main()
