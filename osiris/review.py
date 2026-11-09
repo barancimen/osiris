@@ -351,8 +351,9 @@ def _put_back(db: sqlite3.Connection, store: Store, did: str, old_raw: bytes, ro
     for r in rows:
         store.db.execute(f"UPDATE urls SET {', '.join(f'{k} = ?' for k in ROW_FIELDS[1:])} WHERE url = ?",
                          (*(r[k] for k in ROW_FIELDS[1:]), r["url"]))
-    store.commit()
     meta, body = store.read_doc(did)
+    store.note_title(did, meta.get("title"))
+    store.commit()
     rescore(db, did, meta.get("title"), body, path)
 
 

@@ -202,8 +202,8 @@ class _Bookkeeping:
         self.review = review.connect(store.out) if review.exists(store.out) else None
 
     def follow(self, did: str, before: str, after: str, title: str | None) -> None:
-        self.store.db.execute("UPDATE urls SET chars = ? WHERE doc_id = ? AND status IN ('ok', 'thin')",
-                              (len(after), did))
+        self.store.db.execute("UPDATE urls SET chars = ?, title = ? WHERE doc_id = ? AND status IN ('ok', 'thin')",
+                              (len(after), title or "", did))
         if self.review is not None:
             review.carry_decision(self.review, did, review.text_hash(before), review.text_hash(after))
             review.rescore(self.review, did, title, after, self.store.md_path(did))

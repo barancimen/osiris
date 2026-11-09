@@ -283,30 +283,3 @@ def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: 
         items.append({"id": did, "url": url, "lane": lane_, "status": status_, "host": host, "title": title or None,
                       "chars": chars, "snippet": snippet(doc[1], pattern) if doc else None})
     return {"items": items, "total": total, "terms": [{"word": w, "prefix": p} for w, p in terms]}
-
-
-def titles(out: str | Path, doc_ids: list[str]) -> dict[str, str]:
-    """doc_id -> title, for the documents the index has a title for."""
-    if not doc_ids or not (Path(out) / "search.sqlite").exists():
-        return {}
-    db = connect(out, readonly=True)
-    try:
-        return dict(db.execute(f"SELECT doc_id, title FROM docs WHERE title != '' AND doc_id IN"
-                               f" ({','.join('?' * len(doc_ids))})", doc_ids))
-    except sqlite3.OperationalError:  # not created yet
-        return {}
-    finally:
-        db.close()
-
-
-def matching_titles(out: str | Path, term: str, limit: int = 2000) -> list[str]:
-    """doc_ids whose title contains this text, for the plain list's filter."""
-    if not (Path(out) / "search.sqlite").exists():
-        return []
-    db = connect(out, readonly=True)
-    try:
-        return [did for (did,) in db.execute("SELECT doc_id FROM docs WHERE title LIKE ? LIMIT ?", (f"%{term}%", limit))]
-    except sqlite3.OperationalError:
-        return []
-    finally:
-        db.close()

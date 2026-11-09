@@ -17,6 +17,7 @@ import secrets
 import signal
 import sqlite3
 import sys
+import threading
 import time
 from collections import Counter, deque
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
-from .store import TMP_DIR, Store, md_path, read_doc_file
+from .store import TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
 from .youtube import DEFAULT_DELAY
 
 log = logging.getLogger(__name__)
@@ -922,54 +923,33 @@ async def choose_version(request: web.Request) -> web.Response:
 
 # -- documents -----------------------------------------------------------------------------------
 
-def _titles(out: Path, db: sqlite3.Connection, ids: list[str], indexed: bool) -> dict[str, str]:
-    """From the search index if it's on, since it has every document, then the garbage check's scores."""
-    titles = search.titles(out, ids) if indexed else {}
-    rest = [did for did in ids if did not in titles]
-    if rest:
-        titles.update(db.execute(f"SELECT doc_id, title FROM scores WHERE title IS NOT NULL AND doc_id IN"
-                                 f" ({','.join('?' * len(rest))})", rest))
-    return titles
-
-
 async def documents(request: web.Request) -> web.Response:
     """The plain list, newest first, filtered by URL or title text: for every status, including
     documents with no text, which the search index doesn't hold."""
     q = request.query
-    out = request.app["out"]
-    indexed = request.app["index"] is not None
     where, params = ["lane != 'skip'"], []
     for column in ("lane", "status", "reason"):
         if q.get(column):
             where.append(f"{column} = ?")
             params.append(q[column])
-    term = q.get("q", "").strip()
-    db = review.connect(out)
+    if term := q.get("q", "").strip():
+        where.append("(url LIKE ? OR title LIKE ?)")
+        params += [f"%{term}%", f"%{term}%"]
+    offset = max(int(q.get("offset", 0)), 0)
+    clause = " AND ".join(where)
+    manifest = read_manifest(request.app["out"])
     try:
-        if term:
-            titled = set(search.matching_titles(out, term)) if indexed else set()
-            titled.update(did for (did,) in db.execute("SELECT doc_id FROM scores WHERE title LIKE ? LIMIT 2000",
-                                                       (f"%{term}%",)))
-            where.append(f"(url LIKE ? OR doc_id IN ({','.join('?' * len(titled))}))")
-            params += [f"%{term}%", *titled]
-        offset = max(int(q.get("offset", 0)), 0)
-        clause = " AND ".join(where)
-        manifest = read_manifest(out)
-        try:
-            rows = manifest.execute(
-                f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars) FROM urls WHERE {clause} AND doc_id IS NOT NULL"
-                " GROUP BY doc_id ORDER BY MIN(rowid) DESC LIMIT ? OFFSET ?", (*params, PAGE_SIZE, offset),
-            ).fetchall()
-            total = manifest.execute(f"SELECT COUNT(DISTINCT doc_id) FROM urls WHERE {clause}", params).fetchone()[0]
-        finally:
-            manifest.close()
-        titles = _titles(out, db, [r[0] for r in rows], indexed)
+        rows = manifest.execute(
+            f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars), MAX(title) FROM urls WHERE {clause} AND doc_id IS NOT NULL"
+            " GROUP BY doc_id ORDER BY MIN(rowid) DESC LIMIT ? OFFSET ?", (*params, PAGE_SIZE, offset),
+        ).fetchall()
+        total = manifest.execute(f"SELECT COUNT(DISTINCT doc_id) FROM urls WHERE {clause}", params).fetchone()[0]
     finally:
-        db.close()
+        manifest.close()
     return web.json_response({"total": total, "items": [
         {"id": did, "url": url, "lane": lane, "status": status, "reason": reason, "chars": chars,
-         "title": titles.get(did), "host": urlsplit(url).hostname or "local file"}
-        for did, url, lane, status, reason, chars in rows]})
+         "title": title or None, "host": urlsplit(url).hostname or "local file"}
+        for did, url, lane, status, reason, chars, title in rows]})
 
 
 async def failures_list(request: web.Request) -> web.Response:
@@ -1213,12 +1193,27 @@ async def _start_failures(app: web.Application) -> None:
     app["failures_task"] = asyncio.create_task(app["failures"].keep())
 
 
+async def _fill_titles(app: web.Application) -> None:
+    try:
+        filled = await asyncio.to_thread(fill_missing_titles, app["out"], app["titles_stop"])
+        if filled:
+            print(f"--- Added the titles of {filled:,} earlier documents to the list", flush=True)
+    except (sqlite3.Error, OSError) as e:  # what's left is filled in at the next start
+        log.warning("couldn't fill in document titles: %s", e)
+
+
+async def _start_titles(app: web.Application) -> None:
+    app["titles_task"] = asyncio.create_task(_fill_titles(app))
+
+
 async def _start_index(app: web.Application) -> None:
     app["index_task"] = asyncio.create_task(app["index"].keep(app["job"]))
 
 
 async def _stop_job_on_exit(app: web.Application) -> None:
     app["failures_task"].cancel()
+    app["titles_stop"].set()
+    await app["titles_task"]
     index = app["index"]
     if index:
         index.stopping = True  # the refresh in progress stops at its next document
@@ -1247,6 +1242,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     app["job"] = Job(out)
     app["index"] = Index(out) if search_index else None  # off unless asked for: it takes disk and CPU
     app["failures"] = Failures(out)
+    app["titles_stop"] = threading.Event()
     review.connect(out).close()
 
     def job_changed() -> None:
@@ -1258,6 +1254,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
 
     app["job"].on_change = job_changed
     app.on_startup.append(_start_failures)
+    app.on_startup.append(_start_titles)
     if search_index:
         search.connect(out).close()
         app.on_startup.append(_start_index)

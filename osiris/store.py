@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS urls (
     updated_at   TEXT,
     dedup_key    TEXT,  -- osiris.dedup.dedup_key of the URL as it appeared in the input
     raw_path     TEXT,  -- relative to the output dir, only with --keep-raw-pdfs
+    title        TEXT,  -- as in the document; '' if it has none, NULL if nobody has looked yet
     tried        TEXT NOT NULL DEFAULT ''  -- fallback passes already run on it, e.g. ",impersonate,wayback"
 );
 CREATE INDEX IF NOT EXISTS urls_lane_status ON urls(lane, status);
@@ -44,7 +46,8 @@ CREATE TABLE IF NOT EXISTS imported_files (  -- saved pages `osiris import` has 
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
-              "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''"}
+              "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''",
+              "title": "ALTER TABLE urls ADD COLUMN title TEXT"}
 
 FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at", "raw")
 DONE = ("ok", "thin")
@@ -54,6 +57,10 @@ REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't fin
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+TITLE_BATCH = 500
+TITLE_READ_CHARS = 65536
 
 
 def md_path(out: Path, did: str) -> Path:
@@ -66,6 +73,31 @@ def read_doc_file(path: Path) -> tuple[dict, str] | None:
         return parse_doc(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
+
+
+def fill_missing_titles(out: Path, stop: threading.Event) -> int:
+    """Titles of documents saved before the manifest held them, once, from their files. Returns how many."""
+    db = sqlite3.connect(out / "manifest.sqlite", timeout=30)
+    try:
+        todo = [did for (did,) in db.execute("SELECT DISTINCT doc_id FROM urls WHERE title IS NULL"
+                                             " AND status IN ('ok', 'thin') AND doc_id IS NOT NULL")]
+        for start in range(0, len(todo), TITLE_BATCH):
+            if stop.is_set():
+                return start
+            db.executemany("UPDATE urls SET title = ? WHERE doc_id = ?",
+                           [(_title_in_file(md_path(out, did)), did) for did in todo[start : start + TITLE_BATCH]])
+            db.commit()
+        return len(todo)
+    finally:
+        db.close()
+
+
+def _title_in_file(path: Path) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return parse_doc(f.read(TITLE_READ_CHARS))[0].get("title") or ""  # the front matter is at the start
+    except (OSError, ValueError):
+        return ""
 
 
 def parse_doc(raw: str) -> tuple[dict, str]:
@@ -196,8 +228,8 @@ class Store:
         new_id = doc_id(doc_key)
         marks = ",".join("?" * len(urls))
         old = {did for (did,) in self.db.execute(f"SELECT DISTINCT doc_id FROM urls WHERE url IN ({marks})", urls)} - {new_id}
-        self.db.execute(f"UPDATE urls SET lane = ?, doc_key = ?, doc_id = ?, tried = '' WHERE url IN ({marks})",
-                        (lane, doc_key, new_id, *urls))
+        self.db.execute(f"UPDATE urls SET lane = ?, doc_key = ?, doc_id = ?, tried = '', title = ? WHERE url IN ({marks})",
+                        (lane, doc_key, new_id, self.title_of(new_id), *urls))
         self.commit()  # first: a crash now leaves a spare file, not a manifest row with no file
         replaced = {did for did in old if did and not self.db.execute(
             "SELECT 1 FROM urls WHERE doc_id = ? LIMIT 1", (did,)).fetchone()}
@@ -296,9 +328,9 @@ class Store:
                         (url, status, dedup_key))
         self.db.execute(
             "UPDATE urls SET lane = 'singlefile', doc_key = ?, doc_id = ?, status = ?, reason = ?, chars = ?,"
-            " final_url = ?, http_status = NULL, tried = '', updated_at = ?, attempts = attempts + 1"
+            " final_url = ?, http_status = NULL, tried = '', updated_at = ?, attempts = attempts + 1, title = ?"
             " WHERE url = ? OR doc_key = ?",
-            (doc_key, doc_id(doc_key), status, reason, chars, final_url, now_iso(), url, doc_key),
+            (doc_key, doc_id(doc_key), status, reason, chars, final_url, now_iso(), self.title_of(doc_id(doc_key)), url, doc_key),
         )
         if time.monotonic() - self._last_commit > 1.0:
             self.commit()
@@ -347,7 +379,17 @@ class Store:
         tmp = path.with_suffix(".md.tmp")
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)
+        self.db.execute("UPDATE urls SET title = ? WHERE doc_key = ?", (str(meta.get("title") or ""), doc_key))
         return len(body)
+
+    def title_of(self, did: str) -> str | None:
+        """The title in this document's file, or None if there's no file."""
+        doc = self.read_doc(did)
+        return str(doc[0].get("title") or "") if doc else None
+
+    def note_title(self, did: str, title: str | None) -> None:
+        """For code that rewrites a document's file itself."""
+        self.db.execute("UPDATE urls SET title = ? WHERE doc_id = ?", (title or "", did))
 
     def _kept_raw(self, doc_key: str) -> str | None:
         row = self.db.execute("SELECT raw_path FROM urls WHERE doc_key = ? AND raw_path IS NOT NULL LIMIT 1",
