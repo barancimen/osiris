@@ -148,6 +148,12 @@ td.zero { color: var(--line-strong); }
 .view-switch { display: flex; gap: 4px; }
 .body { flex: 1; min-height: 0; overflow: auto; padding: 15px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55; }
 .body.mono { font: 13.5px/1.55 var(--mono); }
+.versions { flex: 1; min-height: 0; display: flex; }
+.version { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.version + .version { border-left: 1px solid var(--line); }
+.version-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 13.5px; }
+.version-head b { color: var(--text); font-size: 14.5px; }
+.version-head .btn { margin-left: auto; }
 .frame { flex: 1; border: 0; width: 100%; min-height: 0; background: #fff; }
 .notice { margin: 16px; padding: 10px 13px; background: var(--sunk); border-radius: 6px; color: var(--muted); }
 .notice.warn { background: var(--warn-soft); color: var(--warn); }
@@ -197,6 +203,8 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 15px; border-radius: 6px; display: none; z-index: 10; max-width: calc(100vw - 32px); }
 @media (max-width: 760px) {
   .tab.on.split { flex-direction: column; }
+  .versions { flex-direction: column; }
+  .version + .version { border-left: 0; border-top: 1px solid var(--line); }
   .list-pane { width: 100%; max-width: none; height: 45%; border-right: 0; border-bottom: 1px solid var(--line); }
   #jobline { display: none; }
 }
@@ -391,8 +399,6 @@ const HELP = {
   "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
   "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
   "keep-earlier": "Go back to the earlier text, exactly as it was. The new version is deleted.",
-  "show-new": "Read the text the new fetch gave.",
-  "show-earlier": "Read the text you had before fetching again.",
   "decide-unfixable": "Garbage that can't be repaired. It's left out of exports and off your to-do list.",
   "decide-undo": "Take back your decision.",
   delete: "Delete this document's saved text and osiris's copy of its original, for good. Later runs won't fetch it again. Your own files, like local files and saved pages, aren't touched.",
@@ -1432,16 +1438,7 @@ const Docs = {
     self.doc = d; self.openTerms = terms;
     setHash("documents/" + id);
     if (d.decision === "choose" && d.earlier) {
-      const paint = showEarlier => {
-        const facts = x => `${fmt(x.length)} characters, garbage score ${x.score.toFixed(2)}`;
-        const view = (label, earlier) => h("button", {class: "btn", "aria-pressed": showEarlier === earlier, title: help(earlier ? "show-earlier" : "show-new"), onclick: () => paint(earlier)}, label);
-        const keep = (key, label, which) => h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => self.keep(which))}, label, h("kbd", {}, key));
-        const actions = h("div", {class: "decide-row"},
-          h("span", {style: "flex-basis:100%"}, `Fetching again gave different text. New: ${facts(d)}. Earlier: ${facts(d.earlier)}.`),
-          view("New text", false), view("Earlier text", true), keep("1", "Keep new", "new"), keep("2", "Keep earlier", "earlier"), self.deleteButton());
-        renderDetail($("#doc-detail"), showEarlier ? {...d, ...d.earlier} : d, {terms, actions});
-      };
-      paint(false);
+      renderChoice($("#doc-detail"), d, which => self.keep(which), self.deleteButton());
       return;
     }
     renderDetail($("#doc-detail"), d, {terms, actions: self.fixRow(d)});
@@ -1499,8 +1496,44 @@ const Docs = {
   },
 };
 function decisionText(it) {
+  if (it.decision === "choose") return "Waiting for you to choose a version";
+  if (it.decision === "fixed") return (it.note || "Fixed") + ", for you to check";
   const how = it.method ? ` (${it.decision === "ocr" ? it.method : methodLabel(it.method, it.lane)})` : "";
   return `Marked ${DECISION_LABEL[it.decision] || it.decision}${how}` + (it.note ? `: ${it.note}` : "");
+}
+/* both versions side by side, scrolling together, each with a button to keep it and delete the other */
+function renderChoice(host, d, keep, extra) {
+  const side = (label, v, which, key) => {
+    const body = h("div", {class: "body", tabindex: 0, "aria-label": label + " text"}, v.body);
+    return {body, el: h("div", {class: "version"},
+      h("div", {class: "version-head"},
+        h("b", {}, label), h("span", {}, fmt(v.length) + " characters"),
+        v.score !== null && v.score !== undefined && h("span", {class: "pill" + (v.score >= FLAGGED_SCORE ? " bad" : ""), title: help("garbage-score")}, "Garbage score " + v.score.toFixed(2)),
+        v.source && h("span", {}, term(v.source, sourceHelp(v.source))),
+        h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => keep(which))}, "Keep this one", h("kbd", {}, key))),
+      v.truncated ? h("div", {class: "notice"}, `Showing the first ${fmt(v.body.length)} of ${fmt(v.length)} characters.`) : "",
+      body)};
+  };
+  const earlier = side("Earlier", d.earlier, "earlier", "1");
+  const fresh = side("New", {body: d.body, length: d.length, score: d.score, source: d.meta.source, truncated: d.truncated}, "new", "2");
+  // the same place in both: scrolling one moves the other to the same share of its length
+  let following = false;
+  const follow = (from, to) => from.addEventListener("scroll", () => {
+    if (following) return;
+    following = true;
+    const span = from.scrollHeight - from.clientHeight;
+    to.scrollTop = span > 0 ? from.scrollTop / span * (to.scrollHeight - to.clientHeight) : 0;
+    requestAnimationFrame(() => { following = false; });
+  });
+  follow(earlier.body, fresh.body);
+  follow(fresh.body, earlier.body);
+  const url = d.web_url;
+  host.replaceChildren(
+    h("div", {class: "detail-head"},
+      h("h2", {}, d.meta.title || d.original.name || d.url),
+      h("div", {class: "meta"}, url ? h("a", {href: url, target: "_blank", rel: "noreferrer noopener"}, url) : h("span", {}, d.original.path || d.url)),
+      h("div", {class: "decide-row"}, h("span", {style: "flex:1"}, "Fetching again gave different text. Keep one, and the other is deleted."), extra)),
+    h("div", {class: "versions"}, earlier.el, fresh.el));
 }
 
 /* ---- address: #review, #documents, #documents/<id> ---- */
@@ -1529,7 +1562,7 @@ document.addEventListener("keydown", e => {
   const d = Docs.doc;
   if (!d) return;
   if (d.decision === "choose") {
-    const which = {1: "new", 2: "earlier"}[e.key];
+    const which = {1: "earlier", 2: "new"}[e.key];
     if (which) { e.preventDefault(); guarded(() => Docs.keep(which))(); }
     return;
   }

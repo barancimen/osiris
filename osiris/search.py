@@ -270,13 +270,13 @@ def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: 
         where.append(decision[0].replace("d.decision", "dec.decision").replace("d.doc_id", "dec.doc_id"))
         params += decision[1]
     clause = " AND ".join(where)
-    joins = (" LEFT JOIN r.scores s ON s.doc_id = d.doc_id LEFT JOIN r.decisions dec ON dec.doc_id = d.doc_id"
-             if garbage_first or decision else "")
-    order = "COALESCE(s.score, -1) DESC, d.doc_id" if garbage_first else f"bm25(fts, {', '.join(map(str, WEIGHTS))})"
+    joins = " LEFT JOIN r.scores s ON s.doc_id = d.doc_id LEFT JOIN r.decisions dec ON dec.doc_id = d.doc_id"
+    # documents waiting for you (a version to choose, a fix to check) come first, whatever the order
+    order = "(dec.decision IN ('choose', 'fixed')) DESC, " + (
+        "COALESCE(s.score, -1) DESC, d.doc_id" if garbage_first else f"bm25(fts, {', '.join(map(str, WEIGHTS))})")
     db = connect(out, readonly=True)
     try:
-        if joins:
-            db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / 'review.sqlite'))}?mode=ro",))
+        db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / 'review.sqlite'))}?mode=ro",))
         total = db.execute(f"SELECT COUNT(*) FROM fts JOIN docs d ON d.rowid = fts.rowid{joins} WHERE {clause}",
                            params).fetchone()[0]
         rows = db.execute(

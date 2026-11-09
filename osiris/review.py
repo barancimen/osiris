@@ -398,8 +398,8 @@ def earlier_version(db: sqlite3.Connection, did: str) -> dict | None:
                      " JOIN scores s USING (doc_id) WHERE k.doc_id = ? AND d.decision = ?", (did, CHOOSE)).fetchone()
     if row is None or row[0] is None:
         return None
-    body = parse_doc(zstandard.ZstdDecompressor().decompress(row[0]).decode("utf-8"))[1]
-    return {"body": body, "length": len(body), "score": score_text(body, row[1])}
+    meta, body = parse_doc(zstandard.ZstdDecompressor().decompress(row[0]).decode("utf-8"))
+    return {"body": body, "length": len(body), "score": score_text(body, row[1]), "source": meta.get("source")}
 
 
 def choose(store: Store, db: sqlite3.Connection, did: str, keep_new: bool) -> None:
