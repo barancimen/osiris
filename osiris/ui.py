@@ -106,11 +106,13 @@ class Job:
         self.count += 1
         self.on_line(line)
 
-    def start(self, name: str, flow, env: dict[str, str | None] | None = None) -> None:
+    def start(self, name: str, flow, env: dict[str, str | None] | None = None, keep_log: bool = False) -> None:
+        """`keep_log`: carry on the log of the job before, for one that follows on from it by itself."""
         self.name, self.step, self.state = name, "", "running"
         self.plan = None
-        self.lines.clear()
-        self.count = 0
+        if not keep_log:
+            self.lines.clear()
+            self.count = 0
         self.started, self.finished = time.time(), None
         self.env_extra = env or {}
         self.task = asyncio.create_task(self._main(flow))
@@ -769,10 +771,36 @@ async def start_review(request: web.Request) -> web.Response:
 
 
 async def start_fixes(request: web.Request) -> web.Response:
-    app = request.app
-    job, out = app["job"], app["out"]
-    if job.active:
+    if request.app["job"].active:
         raise web.HTTPConflict(text="A job is already running.")
+    _start_fixes(request.app)
+    return web.json_response({"ok": True})
+
+
+def _queued_since(out: Path, since: float | None = None) -> bool:
+    """Whether a fix is waiting to be carried out (one decided after `since`, if given)."""
+    db = review.connect(out)
+    try:
+        return db.execute("SELECT 1 FROM decisions WHERE decision IN ('ocr', 'refetch') AND applied_at IS NULL"
+                          + (" AND decided_at >= ?" if since else "") + " LIMIT 1",
+                          (_iso(since),) if since else ()).fetchone() is not None
+    finally:
+        db.close()
+
+
+def _after_job(app: web.Application) -> None:
+    """Fixes asked for while a job was running start as soon as it's done, unless you stopped it. After
+    fixes, only ones asked for since they started: what that run couldn't do would only fail again."""
+    job = app["job"]
+    if job.active or job.state == "stopped":
+        return
+    if _queued_since(app["out"], job.started if job.name == "Fixes" else None):
+        job.log("--- Fixes you asked for meanwhile")
+        _start_fixes(app, keep_log=True)
+
+
+def _start_fixes(app: web.Application, keep_log: bool = False) -> None:
+    job, out = app["job"], app["out"]
     empty = out / "ui_no_urls.txt"
     empty.write_text("", encoding="utf-8")
     run_args = _run_args(load_config(out)["options"], empty, every_lane=True)  # your settings, for any source
@@ -788,8 +816,7 @@ async def start_fixes(request: web.Request) -> web.Response:
         await j.run("Checking the results", j.osiris("review", "scan"))
 
     # twitterapi.io bills per tweet, so the run only sees that key when you queued a fix that asks for it
-    job.start("Fixes", flow, env={} if billed else {BILLED_KEY: None})
-    return web.json_response({"ok": True})
+    job.start("Fixes", flow, env={} if billed else {BILLED_KEY: None}, keep_log=keep_log)
 
 
 async def start_export(request: web.Request) -> web.Response:
@@ -930,9 +957,14 @@ async def decide(request: web.Request) -> web.Response:
     try:
         review.ensure_scored(db, app["store"], ids)  # never checked, or failed: it can still be decided on
         n = review.decide(db, ids, decision, str(body.get("note") or "") or None, method)
-        return web.json_response({"changed": n, "counts": review.counts(db)})
+        counts = review.counts(db)
     finally:
         db.close()
+    started = False
+    if n and decision in ("ocr", "refetch") and not app["job"].active:  # at once; otherwise when the job ends
+        _start_fixes(app)
+        started = True
+    return web.json_response({"changed": n, "counts": counts, "started": started})
 
 
 async def choose_version(request: web.Request) -> web.Response:
@@ -1338,6 +1370,8 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
             app["failures"].note_run(job.started, job.finished)
         if app["index"]:
             app["index"].wanted.set()
+        if job.finished is not None:  # it has just ended: once its task is done, see to fixes asked for meanwhile
+            asyncio.get_running_loop().call_soon(_after_job, app)
 
     app["job"].on_change = job_changed
     app.on_startup.append(_start_failures)

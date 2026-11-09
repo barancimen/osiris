@@ -38,7 +38,7 @@ Optional system and Python extras:
 
 **Explanations:** hover over any button, option or status to see what it does or means. A word with a dotted underline, such as **thin** or a garbage signal, has an explanation too.
 
-**Keyboard in Documents:** `/` search, `j`/`k` move, `n`/`N` next or previous match in the open document (or write a note when there are no matches), `f` fine, `b` bad, `o` OCR it, `r` fetch again the way chosen next to it, `x` can't fix, `u` undo, `1`/`2` keep the earlier (left) or new (right) version.
+**Keyboard in Documents:** `/` search, `j`/`k` move, `n`/`N` next or previous match in the open document.
 
 **Links:** the address names the open tab and document, such as `#documents/<id>`, so a document can be bookmarked or opened again after a reload.
 
@@ -94,7 +94,7 @@ Any document can be decided on, including ones the check hasn't scored yet and o
 
 Fetching again the usual way picks up new comments on Hacker News, LessWrong and Stack Exchange threads.
 
-**Your documents aren't changed when you decide.** OCR and Fetch again are queued, and **Run fixes** carries them out for those documents only: nothing else waiting in the archive is fetched. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before.
+**OCR it** and **Fetch again** start at once, for that document only: nothing else waiting in the archive is fetched. osiris runs one job at a time, so if a job is already running, the fix starts by itself as soon as that job ends, carrying on in the same log. After **Stop**, waiting fixes stay put until you press **Run fixes**. After a fixes job, only fixes asked for during it start by themselves, so one that can't work, such as OCR without tesseract, doesn't loop. The other decisions don't change your documents. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before.
 
 **Choose version** lists documents that Fetch again changed. Both versions show side by side, earlier on the left and new on the right, each with its length, garbage score and where its text came from (such as `pdf:ocr`). Scrolling one scrolls the other to the same share of its length. **Keep this one** keeps that side and deletes the other, then returns the document to undecided. Documents waiting for a choice, and those under **Fixed**, come first in every list, whatever the order and filters. Until you pick, the new text is the one on disk, and the document is left out of `export`. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris run --fixes`.
 

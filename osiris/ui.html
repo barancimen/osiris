@@ -379,7 +379,7 @@ const HELP = {
   "doc-decision": "Show only documents with one decision, or those you haven't decided on.",
   "bulk-bad": "Mark everything listed here that's flagged as possible garbage and not decided yet as Bad. You can change each one later.",
   "bulk-fine": "Mark everything listed here that's flagged as possible garbage and not decided yet as Fine. You can change each one later.",
-  "run-fixes": "Carry out the OCR and fetch-again jobs you've queued, for those documents only, with your settings from the Archive tab.",
+  "run-fixes": "Carry out the fixes still waiting, for those documents only, with your settings from the Archive tab. Fixes start by themselves when nothing else is running, so these are left from a job you stopped.",
   "fix-method": "How to fetch it again. The usual way is what an archive run does, fallbacks included.",
   "ocr-lang": "The language the PDF is written in.",
   "method-again": "What an archive run does, with your settings and fallbacks.",
@@ -393,8 +393,8 @@ const HELP = {
   "method-twitterapi": "Look the tweet up on twitterapi.io, which charges for every tweet.",
   "decide-fine": "This one looks OK. It won't come up for review again unless its text changes.",
   "decide-bad": "This one is garbage. It's left out of exports.",
-  "decide-ocr": "Read this PDF again from pictures of its pages. The new text is only kept if it looks better.",
-  "decide-refetch": "Download or read this again, the way chosen next to it. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
+  "decide-ocr": "Read this PDF again from pictures of its pages, now, or as soon as the job running now is done. The new text is only kept if it looks better.",
+  "decide-refetch": "Download or read this again, the way chosen next to it, now, or as soon as the job running now is done. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
   "arxiv-full-text-row": "Counted by paper. Waiting: full text not looked for yet. Saved: it has its full text. Thin: arXiv had no full text for it, so it keeps its abstract.",
   "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
   "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
@@ -1405,7 +1405,7 @@ const Docs = {
     }
     const queued = (this.counts.ocr || 0) + (this.counts.refetch || 0);
     $("#fix-banner").replaceChildren(...(queued ? [h("div", {class: "banner"},
-      `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} queued`,
+      `${fmt(queued)} ${queued === 1 ? "fix" : "fixes"} waiting`,
       h("button", {class: "btn", title: help("run-fixes"), onclick: guarded(async () => { await api("/api/job/fixes", {}); this.fixing = true; toast("Fixes are running. Progress is on the Archive tab."); tick(); })}, "Run fixes"))] : []));
   },
   open: guarded(async function (i) {
@@ -1445,7 +1445,7 @@ const Docs = {
   }),
   fixRow(d) {
     const note = h("input", {type: "text", id: "doc-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
-    const btn = (key, label, decision, why, method) => h("button", {class: "btn", disabled: !!why, "aria-pressed": d.decision === decision, title: why || help("decide-" + decision), onclick: guarded(() => this.decide(decision, method?.()))}, label, h("kbd", {}, key));
+    const btn = (label, decision, why, method) => h("button", {class: "btn", disabled: !!why, "aria-pressed": d.decision === decision, title: why || help("decide-" + decision), onclick: guarded(() => this.decide(decision, method?.()))}, label);
     const usual = config.options.ocr_lang || "eng";
     const langs = [...new Set([usual, ...(config.ocr_langs || [])])];
     const chosenLang = d.decision === "ocr" && d.method ? d.method : usual;
@@ -1453,13 +1453,13 @@ const Docs = {
     const chosenWay = d.decision === "refetch" && d.method ? d.method : "again";
     return h("div", {class: "decide-row"},
       d.decision === "fixed" && h("span", {style: "flex-basis:100%"}, `${d.note || "A fix changed this text"}. Check it, then mark it Fine, or try another fix.`),
-      btn("f", "Fine", "fine"), btn("b", "Bad", "bad"),
-      btn("o", "OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value),
+      btn("Fine", "fine"), btn("Bad", "bad"),
+      btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value),
       d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
-      btn("r", "Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value),
+      btn("Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value),
       ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),
-      btn("x", "Can't fix", "unfixable"),
-      d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo", h("kbd", {}, "u")),
+      btn("Can't fix", "unfixable"),
+      d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo"),
       note, this.deleteButton());
   },
   deleteButton() {
@@ -1478,9 +1478,14 @@ const Docs = {
     if (!this.doc) return;
     if (decision === "refetch" && method === "twitterapi" && !confirm("twitterapi.io charges for every tweet it looks up. Queue this tweet for it?")) return;
     const note = $("#doc-note")?.value || null;
-    await api("/api/decide", {ids: [this.doc.id], decision, note, method: ["ocr", "refetch"].includes(decision) ? method || null : null});
+    const fix = ["ocr", "refetch"].includes(decision);
+    const r = await api("/api/decide", {ids: [this.doc.id], decision, note, method: fix ? method || null : null});
+    if (fix) this.fixing = true;  // reloaded when the fix is done
     await this.reload();
-    toast((decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared") + (this.detached && this.items.length ? ". Press j for the next one." : "."));
+    const said = !fix ? (decision ? `Marked ${DECISION_LABEL[decision]}` : "Decision cleared")
+      : r.started ? (decision === "ocr" ? "Reading it with OCR now" : "Fetching it again now") + ". Progress is on the Archive tab"
+      : "It starts as soon as the job running now is done";
+    toast(said + (this.detached && this.items.length ? ". Press j for the next one." : "."));
   },
   async keep(which) {
     if (this.doc?.decision !== "choose") return;
@@ -1503,19 +1508,19 @@ function decisionText(it) {
 }
 /* both versions side by side, scrolling together, each with a button to keep it and delete the other */
 function renderChoice(host, d, keep, extra) {
-  const side = (label, v, which, key) => {
+  const side = (label, v, which) => {
     const body = h("div", {class: "body", tabindex: 0, "aria-label": label + " text"}, v.body);
     return {body, el: h("div", {class: "version"},
       h("div", {class: "version-head"},
         h("b", {}, label), h("span", {}, fmt(v.length) + " characters"),
         v.score !== null && v.score !== undefined && h("span", {class: "pill" + (v.score >= FLAGGED_SCORE ? " bad" : ""), title: help("garbage-score")}, "Garbage score " + v.score.toFixed(2)),
         v.source && h("span", {}, term(v.source, sourceHelp(v.source))),
-        h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => keep(which))}, "Keep this one", h("kbd", {}, key))),
+        h("button", {class: "btn", title: help("keep-" + which), onclick: guarded(() => keep(which))}, "Keep this one")),
       v.truncated ? h("div", {class: "notice"}, `Showing the first ${fmt(v.body.length)} of ${fmt(v.length)} characters.`) : "",
       body)};
   };
-  const earlier = side("Earlier", d.earlier, "earlier", "1");
-  const fresh = side("New", {body: d.body, length: d.length, score: d.score, source: d.meta.source, truncated: d.truncated}, "new", "2");
+  const earlier = side("Earlier", d.earlier, "earlier");
+  const fresh = side("New", {body: d.body, length: d.length, score: d.score, source: d.meta.source, truncated: d.truncated}, "new");
   // the same place in both: scrolling one moves the other to the same share of its length
   let following = false;
   const follow = (from, to) => from.addEventListener("scroll", () => {
@@ -1558,20 +1563,7 @@ document.addEventListener("keydown", e => {
   if (go) { e.preventDefault(); Docs.step(go); return; }
   if (e.key === "/") { e.preventDefault(); $("#doc-q")?.focus(); $("#doc-q")?.select(); return; }
   if (e.key === "n" && Matches.go) { e.preventDefault(); Matches.go(1); return; }
-  if (e.key === "N" && Matches.go) { e.preventDefault(); Matches.go(-1); return; }
-  const d = Docs.doc;
-  if (!d) return;
-  if (d.decision === "choose") {
-    const which = {1: "earlier", 2: "new"}[e.key];
-    if (which) { e.preventDefault(); guarded(() => Docs.keep(which))(); }
-    return;
-  }
-  const decision = {f: "fine", b: "bad", o: "ocr", r: "refetch", x: "unfixable"}[e.key];
-  const blocked = (decision === "ocr" && !d.pdf) || (decision === "refetch" && !(d.methods || []).length);
-  const method = decision === "ocr" ? $("#ocr-lang")?.value : decision === "refetch" ? $("#fix-method")?.value : null;
-  if (decision && !blocked) { e.preventDefault(); guarded(() => Docs.decide(decision, method))(); return; }
-  if (e.key === "u" && d.decision) { e.preventDefault(); guarded(() => Docs.decide(null))(); return; }
-  if (e.key === "n") { e.preventDefault(); $("#doc-note")?.focus(); }
+  if (e.key === "N" && Matches.go) { e.preventDefault(); Matches.go(-1); }
 });
 
 /* ---- start ---- */
