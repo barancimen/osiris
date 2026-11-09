@@ -441,7 +441,7 @@ class GenericPass:
         while (item := await sched.get()) is not None:
             key, url = item  # key: the host, or the HostRule pattern grouping several hosts
             requeue, cooldown, drop = None, 0.0, None
-            interrupted = False
+            unfinished = False
             try:
                 fetched = await self.client.fetch(url)
                 self.attempts[url] += 1
@@ -466,13 +466,14 @@ class GenericPass:
                 else:
                     self._fail(url, reason, fetched)
             except asyncio.CancelledError:
-                interrupted = True  # not finished, so the next run must try it again
+                unfinished = True  # the next run must try it again
                 raise
             except Exception as e:
+                unfinished = True  # our failure says nothing about the page, so it keeps its turn in this pass
                 log.exception("unexpected error on %s", url)
                 self._fail(url, f"bug:{type(e).__name__}", Fetched())
             finally:
-                if requeue is None and not interrupted:
+                if requeue is None and not unfinished:
                     self._mark_tried(url)
                 for lost in sched.done(key, requeue, cooldown, drop is not None):
                     self._fail(lost, drop, Fetched())
@@ -575,6 +576,13 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
         log.info("generic: %s pass: %d %s", name, len(candidates), what)
         client = make_client()
         try:
+            if hasattr(client, "start"):  # a browser that can't open should say so once, not once per link
+                try:
+                    await client.start()
+                except Exception as e:
+                    log.error("generic: skipping the %s pass; its %d links stay for a later run. %s",
+                              name, len(candidates), e)
+                    return
             upgrade = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars=dict(candidates),
                                   pass_name=name, rules=pass_rules)
             await upgrade.run([key for key, _ in candidates], pass_concurrency, pass_per_host)

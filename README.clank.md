@@ -233,7 +233,7 @@ find ~/local_files -type f -print0 | python3 -c 'import sys,pathlib; [print(path
 
 `extract_urls.py` rewrites `all_urls.md` each time, so run it first. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`.
 
-- **Failed URLs:** each gets every fallback pass once and is then left alone until you use `--retry-failed` or `--retry-host`.
+- **Failed URLs:** each gets every fallback pass once and is then left alone until you use `--retry-failed` or `--retry-host`. A pass that couldn't run doesn't count: if the headless browser isn't installed, that pass is skipped with one error and its links wait for a later run.
 - **Routing changes:** every run applies the current routing rules to URLs that aren't archived yet.
 - **Moving to another machine:** copy `data/` with the repo, but not `.venv`, after the run has stopped.
 

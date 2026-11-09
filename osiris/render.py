@@ -27,6 +27,9 @@ NAV_ERRORS = (("ERR_NAME_NOT_RESOLVED", "dns"), ("ERR_CONNECTION", "connect"), (
               ("ERR_ABORTED", "non_text:download"))
 
 
+STOP_WAIT = 15.0  # seconds; the browser itself has already closed by then
+
+
 class RenderClient:
     def __init__(self, concurrency: int, cookies: list[BrowserCookie] = (), browser_ua: str | None = None,
                  chrome_profile: str | None = None, challenge_wait: float = 15.0):
@@ -38,11 +41,15 @@ class RenderClient:
         self.started = asyncio.Lock()
         self.pw = self.browser = self.context = None
 
-    async def _start(self) -> None:
+    async def start(self) -> None:
         async with self.started:
             if self.context is not None:
                 return
-            from playwright.async_api import async_playwright
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError:
+                raise RuntimeError("Playwright isn't installed. Run: .venv/bin/pip install -e '.[render]' "
+                                   "&& .venv/bin/playwright install chromium") from None
 
             self.pw = await async_playwright().start()
             if self.chrome_profile:
@@ -81,7 +88,7 @@ class RenderClient:
     async def fetch(self, url: str) -> Fetched:
         from playwright.async_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeout
 
-        await self._start()
+        await self.start()
         async with self.slots:
             page = await self.context.new_page()
             try:
@@ -113,4 +120,7 @@ class RenderClient:
         if self.browser is not None:
             await self.browser.close()
         if self.pw is not None:
-            await self.pw.stop()
+            try:  # an extraction worker started after the browser holds Playwright's pipe open, so this can never finish
+                await asyncio.wait_for(self.pw.stop(), STOP_WAIT)
+            except asyncio.TimeoutError:
+                pass
