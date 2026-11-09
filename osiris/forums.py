@@ -28,6 +28,7 @@ import aiohttp
 
 from . import review
 from .route import route
+from .scry import ScryClient, ScryError, load_key, sql_list
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ HN_ITEM = "https://hn.algolia.com/api/v1/items/{}"
 HN_FIREBASE_ITEM = "https://hacker-news.firebaseio.com/v0/item/{}.json"
 LW_GRAPHQL = "https://www.lesswrong.com/graphql"
 LW_COMMENT_LIMIT = 20_000  # one call, far past the largest thread
+SCRY_MAX_ROWS = 10_000  # the most Scry returns from one query
 LW_QUERY = """
 query($id: String, $terms: JSON) {
   post(input: {selector: {_id: $id}}) {
@@ -57,6 +59,10 @@ class ForumError(Exception):
     pass
 
 
+class Refused(Exception):
+    """The site won't show this item to a visitor who isn't logged in, so asking again can't help."""
+
+
 async def _call(session: aiohttp.ClientSession, method: str, url: str, **kwargs) -> dict | None:
     """The decoded response, or None if the site says there's no such item."""
     problem = ""
@@ -73,6 +79,8 @@ async def _call(session: aiohttp.ClientSession, method: str, url: str, **kwargs)
             errors = data.get("errors") if isinstance(data, dict) else None
             if errors and any("missing_document" in str(e.get("message")) for e in errors):
                 return None
+            if errors and any("operation_not_allowed" in str(e.get("message")) for e in errors):
+                raise Refused
             if status == 200 and not errors:
                 return data
             problem = f"HTTP {status} {errors or ''}"
@@ -198,10 +206,40 @@ def lw_thread(post: dict, raw_comments: list[dict]) -> Found:
     return meta, _with_comments(lines, comment_lines(comments, "karma"))
 
 
+async def _lw_from_scry(session: aiohttp.ClientSession, post_id: str) -> Found | None:
+    """A post LessWrong no longer shows to visitors, as Scry archived it while it was public."""
+    key = load_key()
+    if not key:
+        log.warning("lesswrong: %s is no longer public, and there's no Scry key to find it elsewhere", post_id)
+        return None
+    try:
+        rows = await ScryClient(session, key).query(
+            "SELECT post_key, parent_post_key, kind, title, uri, payload, original_author, original_timestamp, upvotes, is_deleted"
+            f" FROM forums.posts WHERE root_post_key = {sql_list([f'lesswrong::{post_id}'])}"
+            f" LIMIT 1 BY post_key LIMIT {SCRY_MAX_ROWS}")
+    except ScryError as e:
+        raise ForumError(f"scry: {e}") from e
+
+    def thing(row: dict) -> dict:
+        return {"_id": row["post_key"], "parentCommentId": row["parent_post_key"], "baseScore": row["upvotes"], "deleted": row["is_deleted"],
+                "user": {"displayName": row["original_author"]}, "contents": {"markdown": row["payload"]}}
+
+    post = next((r for r in rows if r["kind"] == "post"), None)
+    if post is None or not post["payload"].strip():
+        return None
+    log.info("lesswrong: %s is no longer public; using Scry's copy", post_id)
+    meta, body = lw_thread({**thing(post), "title": post["title"], "pageUrl": post["uri"], "postedAt": str(post["original_timestamp"] or "")},
+                           [thing(r) for r in rows if r["kind"] == "comment"])
+    return {**meta, "source": "lesswrong:scry"}, body
+
+
 async def _fetch_lw(session: aiohttp.ClientSession, key: str) -> Found | None:
     post_id = key.split(":", 1)[1]
     terms = {"view": "postCommentsOld", "postId": post_id, "limit": LW_COMMENT_LIMIT}
-    data = await _call(session, "POST", LW_GRAPHQL, json={"query": LW_QUERY, "variables": {"id": post_id, "terms": terms}})
+    try:
+        data = await _call(session, "POST", LW_GRAPHQL, json={"query": LW_QUERY, "variables": {"id": post_id, "terms": terms}})
+    except Refused:
+        return await _lw_from_scry(session, post_id)
     post = data and ((data.get("data") or {}).get("post") or {}).get("result")
     if not post:
         return None

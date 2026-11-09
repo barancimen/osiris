@@ -260,7 +260,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
 | `hackernews` | `news.ycombinator.com/item?id=<id>` | Algolia's item API: the story, or one comment, with every reply |
-| `lesswrong` | Posts on `lesswrong.com`, `alignmentforum.org`, `greaterwrong.com` | GraphQL API: the full post as markdown with every comment |
+| `lesswrong` | Posts on `lesswrong.com`, `alignmentforum.org`, `greaterwrong.com` | GraphQL API: the full post as markdown with every comment A post LessWrong no longer shows to visitors comes from Scry's archive instead, with the source `lesswrong:scry`. |
 | `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files with notebooks reduced to markdown and code |
 | `youtube` | Videos, playlists, channels | Transcripts, or a list's title, description and video titles |
 | `localfile` | `file://` links | Read in place, never changed |
