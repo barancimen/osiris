@@ -241,10 +241,12 @@ find ~/local_files -type f -print0 | python3 -c 'import sys,pathlib; [print(path
 
 All are optional.
 
+All keys go in one file, `.env` in the osiris folder. Copy `.env.example` to `.env` and fill in what you have. It's ignored by git, and a key in it takes priority over one set in your shell.
+
 | Variable | Used for | If unset |
 |---|---|---|
-| `SCRY_API_KEY` (or `~/.config/scry/env`, `~/.scry/.env`) | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives | Those sources are skipped |
-| `GITHUB_TOKEN` (or `~/.config/osiris/env`) | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos. Keep the file private | GitHub URLs stay pending |
+| `SCRY_API_KEY` | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives | Those sources are skipped |
+| `GITHUB_TOKEN` | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos | GitHub URLs stay pending |
 | `TWITTERAPI_IO_KEY` | Tweets Scry lacks, from twitterapi.io, billed per tweet | They're marked `not_in_scry` |
 | `STACKEXCHANGE_KEY` | 10,000 Stack Exchange API calls a day instead of 300 | The lower quota applies |
 | `OPENALEX_API_KEY` | Your own OpenAlex budget | The shared per-IP budget applies |

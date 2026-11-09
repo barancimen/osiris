@@ -1,7 +1,7 @@
 """Twitter lane: tweet text without scraping x.com (it serves an empty JS shell).
 
 1. Scry's Twitter archive (free; it also holds some tweets deleted since), when a Scry key
-   is configured (SCRY_API_KEY, ~/.config/scry/env or ~/.scry/.env)
+   is configured (SCRY_API_KEY in .env)
 2. twitterapi.io's batch lookup for the tweets Scry lacks, only when TWITTERAPI_IO_KEY is
    set (it bills per tweet). Without it those tweets are recorded as not_in_scry, ready
    for --retry-failed later.

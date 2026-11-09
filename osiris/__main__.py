@@ -25,6 +25,7 @@ from .localfile import run_localfile
 from .ocr import DEFAULT_LANG as OCR_LANG, LANES as OCR_LANES, run_ocr, unavailable as ocr_unavailable
 from .reddit import run_reddit
 from .route import route
+from .env import load_env
 from .scry import ScryClient
 from .singlefile import run_import
 from .stackexchange import run_stackexchange
@@ -473,6 +474,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    load_env()
     parser = argparse.ArgumentParser(prog="osiris", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 

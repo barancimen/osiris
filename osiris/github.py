@@ -1,7 +1,7 @@
 """GitHub lane: name, description and README of each saved repo, plus gists, from the REST API.
 
 Every link into a repo (files, issues, pull requests) shares that repo's document. The token
-comes from GITHUB_TOKEN or ~/.config/osiris/env and allows 5,000 calls an hour; without one
+comes from GITHUB_TOKEN in .env and allows 5,000 calls an hour; without one
 GitHub allows 60, so the lane leaves its URLs pending.
 """
 
@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 
 import aiohttp
 
@@ -36,17 +35,7 @@ HTML_NOISE_RE = re.compile(r"<!--.*?-->|</?(?:a|img|picture|source|p|div|span|br
 
 
 def load_token() -> str | None:
-    if os.environ.get(TOKEN_ENV):
-        return os.environ[TOKEN_ENV]
-    try:
-        lines = (Path.home() / ".config" / "osiris" / "env").read_text().splitlines()
-    except OSError:
-        return None
-    for line in lines:
-        key, _, value = line.removeprefix("export ").partition("=")
-        if key.strip() == TOKEN_ENV and value.strip():
-            return value.strip().strip("'\"")
-    return None
+    return os.environ.get(TOKEN_ENV) or None
 
 
 def clean_readme(text: str) -> str:

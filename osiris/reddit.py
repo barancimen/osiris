@@ -4,7 +4,7 @@ reddit.com refuses datacenter IPs (even old.reddit and .json), and new Data API 
 need Reddit's approval. Two archives cover nearly every post:
 
 - Scry (reddit.posts / reddit.comments), used first when a key is available
-  (SCRY_API_KEY, ~/.config/scry/env or ~/.scry/.env)
+  (SCRY_API_KEY in .env)
 - Arctic Shift (arctic-shift.photon-reddit.com), a public research archive, no key
 
 A post missing from one source is looked up in the other, and so is a comment tree

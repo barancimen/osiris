@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Iterable
 
 import aiohttp
@@ -30,19 +29,7 @@ def sql_list(values: Iterable[str]) -> str:
 
 
 def load_key() -> str | None:
-    """SCRY_API_KEY from the environment, else ~/.config/scry/env, else the legacy ~/.scry/.env."""
-    if os.environ.get("SCRY_API_KEY"):
-        return os.environ["SCRY_API_KEY"]
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    for path in (xdg / "scry" / "env", Path.home() / ".scry" / ".env"):
-        try:
-            for line in path.read_text().splitlines():
-                key, _, value = line.removeprefix("export ").partition("=")
-                if key.strip() == "SCRY_API_KEY" and value.strip():
-                    return value.strip().strip("'\"")
-        except OSError:
-            continue
-    return None
+    return os.environ.get("SCRY_API_KEY") or None
 
 
 class ScryClient:
