@@ -28,7 +28,7 @@ Optional system and Python extras:
 
 ## Web interface
 
-`osiris ui` opens one page with three tabs. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page.
+`osiris ui` opens one page with three tabs. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the rate and the time left. **Stop** saves progress, and starting again resumes.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
@@ -58,7 +58,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 - **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
 - **Tweets:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you tick **Allow twitterapi.io** under Advanced, which is billed per tweet. **Look up tweets in Scry** turns Scry off or on for tweets. With both off, tweets wait.
 - **Older imports:** pages imported before this version only recorded a file name, so they have no Original view.
-- **Quitting:** Ctrl-C in the terminal stops the page and any running job, with progress saved.
+- **Quitting:** Ctrl-C in the terminal, or closing the terminal, stops the page and any running job, with progress saved.
 
 ## Finding garbage
 

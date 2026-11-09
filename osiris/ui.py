@@ -49,6 +49,7 @@ FAILURES_EVERY = 2  # seconds between looks at whether the manifest has changed
 COOKIE_FILE_TYPES = (".txt", ".json", ".cookies")
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 HOST_PATTERN = re.compile(r"[a-z0-9.*?-]+")
+ADDRESS_EVERY = 20  # log lines in the terminal between reminders of the page's address
 STAMPED = re.compile(r"\d\d:\d\d:\d\d ")  # how `osiris` log lines start, so the page doesn't add a second time
 TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
@@ -87,6 +88,7 @@ class Job:
         self.started = self.finished = None
         self.env_extra: dict[str, str | None] = {}
         self.on_change = lambda: None  # a job started or ended
+        self.on_line = lambda line: None  # a line was written
 
     @property
     def active(self) -> bool:
@@ -94,8 +96,10 @@ class Job:
 
     def log(self, line: str) -> None:
         line = line.rstrip()
-        self.lines.append(line if not line or STAMPED.match(line) else f"{time.strftime('%H:%M:%S')} {line}")
+        line = line if not line or STAMPED.match(line) else f"{time.strftime('%H:%M:%S')} {line}"
+        self.lines.append(line)
         self.count += 1
+        self.on_line(line)
 
     def start(self, name: str, flow, env: dict[str, str | None] | None = None) -> None:
         self.name, self.step, self.state = name, "", "running"
@@ -1287,11 +1291,34 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     return app
 
 
+def terminal_log(address: str):
+    """Writes each log line to the terminal too, with the page's address every ADDRESS_EVERY lines."""
+    printed = 0
+
+    def write(line: str) -> None:
+        nonlocal printed
+        try:
+            print(line, flush=True)
+            printed += bool(line)
+            if line and printed % ADDRESS_EVERY == 0:
+                print(f"--- osiris is open at {address}", flush=True)
+        except (OSError, ValueError):  # a character it can't show, or it's closing and the job is being stopped in order
+            pass
+
+    return write
+
+
 def serve(out: str | os.PathLike, port: int, search_index: bool = False) -> None:
     app = make_app(out, search_index)
     address = f"http://127.0.0.1:{port}/?token={app['token']}"
+    app["job"].on_line = terminal_log(address)
+
+    def terminal_closed() -> None:
+        raise web.GracefulExit()
 
     async def announce(_: web.Application) -> None:
+        # the same way out as Ctrl-C: a job has its own session, so nothing else would tell it the terminal has gone
+        asyncio.get_running_loop().add_signal_handler(signal.SIGHUP, terminal_closed)
         print(f"\nosiris is open at\n\n  {address}\n\nPress Ctrl-C here to stop it.", flush=True)
         if os.environ.get("SSH_CONNECTION"):
             print(f"Over ssh, first run this on your own machine: ssh -N -L {port}:127.0.0.1:{port} <this server>",
