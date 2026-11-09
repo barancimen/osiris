@@ -31,7 +31,7 @@ from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
 from .store import TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
-from .arxiv import ABSTRACT_ONLY_CHARS, FULLTEXT
+from .arxiv import ABSTRACT_ONLY_CHARS, BATCH as ARXIV_BATCH, DELAY as ARXIV_DELAY, FULLTEXT, FULLTEXT_DELAY
 from .youtube import DEFAULT_DELAY
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,6 @@ MAX_BODY = 400_000  # characters of a document sent to the page; the raw link ha
 PAGE_SIZE = 100
 SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
 INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
-PROGRESS_JOBS = ("Archive", "Fixes")  # jobs whose progress the manifest shows
 FAILURES_EVERY = 2  # seconds between looks at whether the manifest has changed
 COOKIE_FILE_TYPES = (".txt", ".json", ".cookies")
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
@@ -88,6 +87,7 @@ class Job:
         self.state = "idle"  # idle | running | stopping | done | stopped | failed
         self.started = self.finished = None
         self.env_extra: dict[str, str | None] = {}
+        self.plan: dict | None = None  # set while fetching: what the time left is worked out from
         self.on_change = lambda: None  # a job started or ended
         self.on_line = lambda line: None  # a line was written
 
@@ -104,6 +104,7 @@ class Job:
 
     def start(self, name: str, flow, env: dict[str, str | None] | None = None) -> None:
         self.name, self.step, self.state = name, "", "running"
+        self.plan = None
         self.lines.clear()
         self.count = 0
         self.started, self.finished = time.time(), None
@@ -405,17 +406,39 @@ def _lane_table(out: Path) -> dict:
     return {"lanes": {lane: dict(c) for lane, c in lanes.items()}, "scholar": scholar, "arxiv_full_text": full_text, "documents": docs, "chars": chars}
 
 
-def _progress(out: Path, since: float) -> dict:
-    """URLs finished since the job started, and how many are still waiting."""
-    started = _iso(since)
+def _chosen_lanes(options: dict) -> list[str]:
+    return [lane for lane in options.get("lanes", LANES) if lane in LANES]
+
+
+def _plan(lanes: list[str], options: dict) -> dict:
+    """What a run will fetch, as far as its time left depends on it."""
+    low = _number(options, "youtube_delay_min", float, 0, DEFAULT_DELAY[0])
+    high = _number(options, "youtube_delay_max", float, 0, DEFAULT_DELAY[1])
+    return {"lanes": lanes, "full_text": bool(options.get("arxiv_fulltext", True)), "youtube_each": (low + high) / 2}
+
+
+def _progress(out: Path, since: float, plan: dict, full_text_left: int) -> dict:
+    """What a run has finished, and what each of its sources has left, stage by stage. `each` is the
+    fewest seconds one item can take, for the sources that work to a fixed schedule."""
     db = read_manifest(out)
     try:
-        done, waiting = db.execute(
-            "SELECT COALESCE(SUM(status NOT IN ('pending', 'skipped') AND updated_at >= ?), 0),"
-            " COALESCE(SUM(status = 'pending'), 0) FROM urls", (started,)).fetchone()
+        counts = {lane: (left, done) for lane, left, done in db.execute(
+            "SELECT lane, COUNT(DISTINCT CASE WHEN status = 'pending' THEN doc_key END),"
+            " COALESCE(SUM(status NOT IN ('pending', 'skipped') AND updated_at >= ?), 0) FROM urls GROUP BY lane",
+            (_iso(since),))}
     finally:
         db.close()
-    return {"done": done, "waiting": waiting}
+    stages = []
+    for lane in plan["lanes"]:
+        left = counts.get(lane, (0, 0))[0]
+        if lane == "arxiv":
+            stages.append({"source": lane, "stage": lane, "left": left, "each": ARXIV_DELAY / ARXIV_BATCH})
+            if plan["full_text"]:  # each abstract still to come brings a paper to read
+                stages.append({"source": lane, "stage": "full_text", "left": full_text_left + left, "each": FULLTEXT_DELAY})
+        else:
+            stages.append({"source": lane, "stage": lane, "left": left, "each": plan["youtube_each"] if lane == "youtube" else None})
+    return {"done": sum(counts.get(lane, (0, 0))[1] for lane in plan["lanes"]),
+            "waiting": sum(stage["left"] for stage in stages), "stages": stages}
 
 
 async def state(request: web.Request) -> web.Response:
@@ -429,12 +452,13 @@ async def state(request: web.Request) -> web.Response:
         counts = review.counts(db)
     finally:
         db.close()
+    table = _lane_table(out)
     return web.json_response({
-        **_lane_table(out),
+        **table,
         "review": counts,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
-                "progress": _progress(out, job.started) if job.active and job.name in PROGRESS_JOBS else None},
+                "progress": _progress(out, job.started, job.plan, table["arxiv_full_text"].get("pending", 0)) if job.active and job.plan else None},
         "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
@@ -564,7 +588,7 @@ async def scan_folder(request: web.Request) -> web.Response:
 
 def _run_args(options: dict, url_file: Path) -> list[str]:
     args = ["run", str(url_file)]
-    lanes = [lane for lane in options.get("lanes", LANES) if lane in LANES]
+    lanes = _chosen_lanes(options)
     if not lanes:
         raise web.HTTPBadRequest(text="Choose at least one kind of source.")
     if len(lanes) < len(LANES):
@@ -692,7 +716,9 @@ async def start_archive(request: web.Request) -> web.Response:
             j.log(f"--- Listed {n:,} local files")
         if config["saved"]:
             await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
+        j.plan = _plan(_chosen_lanes(options), options)
         await j.run("Archiving", j.osiris(*run_args))
+        j.plan = None
         if retried := _retry_hosts(options):  # done: later runs leave those sites alone again
             latest = load_config(out)
             latest["options"]["retry_hosts"] = [h for h in _retry_hosts(latest["options"]) if h not in retried]
@@ -734,7 +760,9 @@ async def start_fixes(request: web.Request) -> web.Response:
                       if ln.startswith("lanes to run:")), [])
         if lanes:
             only = [arg for lane in lanes for arg in ("--only", lane)]
+            j.plan = _plan(lanes, {})  # that run uses the default pacing
             await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr", *no_scry))
+            j.plan = None
         await j.run("Checking the results", j.osiris("review", "scan"))
 
     job.start("Fixes", flow, env={BILLED_KEY: None})

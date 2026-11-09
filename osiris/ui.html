@@ -735,7 +735,7 @@ function renderState(s) {
        : ix.error ? [term("The search index", help("index")), " couldn't be updated: " + ix.error]
        : ix.updating && ix.total ? ["Updating the ", term("search index", help("index")), `: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`]
        : [`${fmt(ix.documents)} documents in the `, term("search index", help("index")), "."]));
-  renderProgress(s.job, lanes);
+  renderProgress(s.job);
 
   const j = s.job;
   const newLog = j.count < logSeen || jobKey !== j.started;
@@ -764,28 +764,61 @@ function renderState(s) {
   if (renderState.wasActive && !j.active) { reloadConfig(); Cleanup.refresh(); }  // a finished run clears the sites it retried
   renderState.wasActive = j.active;
 }
-/* progress of a run, from how many URLs it has finished and how many are left */
-const Progress = {samples: [], job: null};
-function renderProgress(j, lanes) {
+/* how far a run is. Sources run side by side, each on its own schedule, so a run lasts as long as its
+   slowest source. Stages inside a source (arXiv's abstracts, then its full text) run one after the other. */
+const PACE_WINDOW = 180000;  // how much recent progress a pace is measured over
+const QUIET_AFTER = 180000;  // this long without progress: it has done what it can, or is waiting something out
+const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text"};
+const Progress = {stages: {}, job: null};
+function renderProgress(j) {
   const box = $("#run-progress");
   if (!box) return;
   const p = j.progress;
   box.hidden = !p;
-  if (!p) { Progress.samples = []; return; }
-  if (Progress.job !== j.started) { Progress.job = j.started; Progress.samples = []; }
-  const now = Date.now();
-  Progress.samples.push([now, p.done]);
-  while (Progress.samples.length > 2 && now - Progress.samples[0][0] > 180000) Progress.samples.shift();
+  if (!p) { Progress.stages = {}; return; }
+  if (Progress.job !== j.started) { Progress.job = j.started; Progress.stages = {}; }
   const all = p.done + p.waiting;
   $("#run-bar").style.width = (all ? Math.round(100 * p.done / all) : 0) + "%";
-  const [t0, d0] = Progress.samples[0], seconds = (now - t0) / 1000, rate = seconds >= 20 ? (p.done - d0) / seconds : null;
-  const youtube = lanes.youtube?.pending || 0;
   const parts = [`${fmt(p.done)} of ${fmt(all)} done`];
-  if (!p.waiting) parts.push("now trying fallbacks for what failed or came back thin, then OCR");
-  else if (youtube === p.waiting) parts.push("only YouTube is left, which goes one video at a time on purpose. Stopping is safe, and starting again resumes");
-  else if (rate > 0) parts.push(`${rate < 10 ? rate.toFixed(1) : Math.round(rate)} a second`, "about " + duration(p.waiting / rate) + " left");
-  else if (rate === 0 && seconds >= 120) parts.push("nothing finished in the last two minutes");
+  if (p.waiting) parts.push(...timeLeft(p.stages));
+  else parts.push("now trying fallbacks for what failed or came back thin, then OCR");
   $("#run-text").textContent = parts.filter(Boolean).join(" · ");
+}
+/* Seconds per item: what the stage has really been taking lately, but never quicker than its schedule allows. */
+function stagePace(st, seen, now) {
+  const [t0, left0] = seen.samples[0], seconds = (now - t0) / 1000;
+  const measured = seconds >= 20 && left0 > st.left ? seconds / (left0 - st.left) : 0;
+  return Math.max(st.each || 0, measured);
+}
+function timeLeft(stages) {
+  const now = Date.now(), seconds = {}, shown = [], measuring = [], quiet = [];
+  const current = new Set(), stopped = new Set();
+  for (const st of stages) {
+    const label = STAGE_LABEL[st.stage];
+    if (!st.left || stopped.has(st.source)) { delete Progress.stages[st.stage]; continue; }
+    let each = st.each;
+    if (current.has(st.source)) delete Progress.stages[st.stage];  // its turn hasn't come
+    else {
+      current.add(st.source);
+      const seen = Progress.stages[st.stage] ??= {samples: [], moved: now};
+      if (seen.samples.length && seen.samples.at(-1)[1] !== st.left) seen.moved = now;
+      seen.samples.push([now, st.left]);
+      while (seen.samples.length > 2 && now - seen.samples[0][0] > PACE_WINDOW) seen.samples.shift();
+      if (now - seen.moved > QUIET_AFTER) { quiet.push(label); stopped.add(st.source); continue; }
+      each = stagePace(st, seen, now);
+    }
+    if (!each) { measuring.push(label); continue; }
+    seconds[st.source] = (seconds[st.source] || 0) + st.left * each;
+    shown.push([label, st.left * each]);
+  }
+  const longest = Math.max(0, ...Object.values(seconds));
+  shown.sort((a, b) => b[1] - a[1]);
+  return [
+    longest && "about " + duration(longest) + " left",
+    shown.length > 1 && shown.map(([label, sec]) => `${label} ${duration(sec)}`).join(", "),
+    measuring.length && "still measuring " + measuring.join(", "),
+    quiet.length && "not moving: " + quiet.join(", "),
+  ];
 }
 function duration(sec) {
   if (sec < 90) return "a minute";
