@@ -12,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from osiris import __main__ as main
 from osiris import generic, tuning, twitter, ui, youtube
-from osiris.route import route
+from osiris.route import doc_id, route
 from osiris.store import Store
 
 OPTIONS = ui.DEFAULT_CONFIG["options"]
@@ -400,6 +400,105 @@ def test_only_the_bot_check_is_about_one_video(monkeypatch, error, kind):
     with pytest.raises(youtube.Blocked) as caught:
         youtube.fetch_video("aaaaaaaaaaa")
     assert type(caught.value) is kind
+
+
+class FakeScry:
+    """Answers the queries the YouTube lane sends, from a table of video -> (auto, payload)."""
+
+    def __init__(self, tracks, titles=None, census=None, cost=0, fail=False):
+        self.tracks, self.titles, self.census, self.cost, self.fail = tracks, titles or {}, census or {}, cost, fail
+        self.sql = []
+
+    async def query(self, sql, max_seconds=60):
+        self.sql.append(sql)
+        if self.fail:
+            raise youtube.ScryError("nope")
+        youtube.ScryClient.spent_nanodollars += self.cost
+        named = [v for v in re.findall(r"'([\w-]{11})'", sql)]
+        if "youtube.videos_live" in sql:
+            return [{"video_id": v, "title": self.titles[v][0], "channel": self.titles[v][1]} for v in named if v in self.titles]
+        if "youtube.videos " in sql:
+            return [{"video_id": v, "title": self.census[v][0], "channel": self.census[v][1]} for v in named if v in self.census]
+        if "length(payload)" in sql.split("FROM")[0]:
+            return [{"video_id": v, "chars": len(self.tracks[v][1])} for v in named if v in self.tracks]
+        return [{"video_id": v, "auto": self.tracks[v][0], "payload": self.tracks[v][1]} for v in named if v in self.tracks]
+
+
+def scry_lane(tmp_path: Path, monkeypatch, scry: FakeScry, fetch=None, urls: int = 2):
+    store, waits = lane(tmp_path, monkeypatch, fetch or fetched, urls=urls)
+    monkeypatch.setattr(youtube, "load_key", lambda: "a key")
+    monkeypatch.setattr(youtube.ScryClient, "query", scry.query)
+    return store, waits
+
+
+LONG = "\n".join(f"line {n} of what was said in this video" for n in range(40))
+
+
+def test_a_transcript_from_scry_never_touches_youtube(tmp_path: Path, monkeypatch):
+    a, b = "a" * 11, "b" * 11
+    scry = FakeScry({a: (1, LONG)}, titles={a: ("A title", "A channel")})
+    asked = []
+    store, _ = scry_lane(tmp_path, monkeypatch, scry, fetch=lambda key: asked.append(key) or fetched(key))
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0), 5.0))
+    assert asked == [f"youtube:video:{b}"]
+    meta, body = store.read_doc(doc_id(f"youtube:video:{a}"))
+    assert meta["source"] == "youtube:transcript:auto:scry" and meta["author"] == "A channel"
+    assert body.startswith("# A title") and "line 39 of what was said" in body
+    assert store.db.execute("SELECT status FROM urls WHERE doc_key = ?", (f"youtube:video:{a}",)).fetchone()[0] == "ok"
+    store.close()
+
+
+def test_scry_is_only_asked_when_ticked(tmp_path: Path, monkeypatch):
+    scry = FakeScry({})
+    store, _ = scry_lane(tmp_path, monkeypatch, scry)
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0)))
+    assert not scry.sql
+    store.close()
+
+
+def test_the_title_falls_back_to_the_older_census(tmp_path: Path, monkeypatch):
+    a = "a" * 11
+    scry = FakeScry({a: (0, LONG)}, census={a: ("Old title", "Old channel")})
+    store, _ = scry_lane(tmp_path, monkeypatch, scry, urls=1)
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0), 5.0))
+    assert any("youtube.videos " in sql for sql in scry.sql)
+    meta, _ = store.read_doc(doc_id(f"youtube:video:{a}"))
+    assert meta["title"] == "Old title" and meta["source"] == "youtube:transcript:human:scry"
+    store.close()
+
+
+def test_scry_failing_or_the_limit_leaves_videos_for_youtube(tmp_path: Path, monkeypatch):
+    a = "a" * 11
+    for scry in (FakeScry({a: (1, LONG)}, fail=True), FakeScry({a: (1, LONG)}, cost=int(6e9))):
+        folder = tmp_path / str(id(scry))
+        folder.mkdir()
+        asked = []
+        store, _ = scry_lane(folder, monkeypatch, scry, fetch=lambda key: asked.append(key) or fetched(key), urls=1)
+        asyncio.run(youtube.run_youtube(store, (2.0, 2.0), 5.0))
+        assert asked == [f"youtube:video:{a}"]
+        store.close()
+
+
+def test_damaged_human_captions_are_refused_and_preference_order_is_kept():
+    sql = youtube._best_track("payload", ["a" * 11])
+    assert "is_auto_caption = 0 AND position(payload, char(10)) = 0 AND length(event_starts_ms) > 1" in sql and "NOT (" in sql
+    assert sql.index("startsWith(lang") < sql.index("is_auto_caption ASC") < sql.index("LIMIT 1 BY video_id")
+
+
+def test_sound_labels_go_from_captions_stored_on_one_line():
+    assert youtube._scry_text("[Music] hello there [Applause] and goodbye") == "hello there and goodbye"
+    assert youtube._scry_text("[Music]\nhello [sic] there\n[Applause]") == "hello [sic] there"
+
+
+def test_a_big_batch_is_split_and_a_huge_transcript_left_out():
+    limit = youtube.SCRY_BATCH_CHARS
+    assert youtube._text_batches({"a": limit - 10, "b": 20, "c": limit + 1, "d": 5}) == [["a"], ["b", "d"]]
+
+
+def test_the_page_asks_for_scry_transcripts_only_when_ticked():
+    assert "--scry-youtube" not in ui._run_args(options(), Path("urls"))
+    args = ui._run_args(options(scry_youtube=True, scry_youtube_dollars=2), Path("urls"))
+    assert "--scry-youtube" in args and args[args.index("--scry-youtube-max-dollars") + 1] == "2"
 
 
 def test_a_rate_limit_on_the_title_lookup_counts_as_a_block(monkeypatch):

@@ -377,7 +377,7 @@ def test_big_papers_are_kept_out_of_scry_and_batches_stay_small():
 
 
 def test_quotes_in_ids_cannot_break_the_statement():
-    assert arxiv._sql_list(["a'b", "c\\d"]) == "'a\\'b','c\\\\d'"
+    assert arxiv.sql_list(["a'b", "c\\d"]) == "'a\\'b','c\\\\d'"
 
 
 def test_the_full_text_step_uses_scry_only_when_asked(store, scry, monkeypatch):

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Iterable
 
 import aiohttp
 
@@ -21,6 +22,11 @@ MAX_EXPOSURE_NANODOLLARS = 500_000_000  # $0.50
 
 class ScryError(Exception):
     pass
+
+
+def sql_list(values: Iterable[str]) -> str:
+    """Values for a SQL IN (...)."""
+    return ",".join("'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'" for v in values)
 
 
 def load_key() -> str | None:

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Iterable
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -19,7 +18,7 @@ import aiohttp
 from . import extract
 from .generic import Fetched, Reader
 from .route import doc_id
-from .scry import ScryClient, ScryError, load_key
+from .scry import ScryClient, ScryError, load_key, sql_list
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -279,10 +278,6 @@ async def add_full_text(store: Store, pool: extract.WorkerPool, keep_raw: bool, 
         await asyncio.gather(*(work(session) for _ in range(READING_AT_ONCE)))
 
 
-def _sql_list(values: Iterable[str]) -> str:
-    return ",".join("'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'" for v in values)
-
-
 def _text_batches(found: dict[str, tuple[str, int]]) -> list[list[str]]:
     """Ids grouped so that no response is too big. A paper too big for a batch of its own is left out."""
     batches: list[list[str]] = []
@@ -337,7 +332,7 @@ async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> l
                 batch = wanted[i : i + SCRY_LOOKUP_BATCH]
                 for row in await client.query(
                     "SELECT arxiv_id, paper_key, fulltext_tokens FROM academic.catalog"
-                    f" WHERE arxiv_id IN ({_sql_list(batch)}) AND has_fulltext = 1 LIMIT {2 * len(batch)}", max_seconds=60):
+                    f" WHERE arxiv_id IN ({sql_list(batch)}) AND has_fulltext = 1 LIMIT {2 * len(batch)}", max_seconds=60):
                     versions[row["arxiv_id"]] = (row["paper_key"], row["fulltext_tokens"])
         except ScryError as e:
             log.warning("arxiv: Scry's catalog failed (%s); those papers wait for the next run", e)
@@ -353,7 +348,7 @@ async def fill_from_scry(store: Store, todo: list[str], max_dollars: float) -> l
             by_paper = {versions[arxiv_id][0]: arxiv_id for arxiv_id in batch}
             try:
                 rows = await client.query(
-                    f"SELECT paper_key, text FROM academic.papers WHERE paper_key IN ({_sql_list(by_paper)})"
+                    f"SELECT paper_key, text FROM academic.papers WHERE paper_key IN ({sql_list(by_paper)})"
                     " AND quality_label = 'good' ORDER BY paper_key, bucket = 'arxiv' DESC"
                     f" LIMIT 1 BY paper_key LIMIT {2 * len(batch)}", max_seconds=120)
             except ScryError as e:

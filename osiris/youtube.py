@@ -26,7 +26,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import aiohttp
+
 from . import extract
+from .scry import ScryClient, ScryError, load_key, sql_list
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -48,6 +51,13 @@ ENGLISH = ("en", "en-US", "en-GB", "en-CA", "en-AU")
 BLOCK_TEXT = re.compile(r"sign in to confirm|not a bot|too many requests|http error 429|rate.?limit", re.I)
 GONE_TEXT = re.compile(r"does not exist|not available|unavailable|private|removed|terminated|http error 404", re.I)
 PARAGRAPH = 1000
+SCRY_LOOKUP_BATCH = 2000  # a lookup returns only sizes, so it's cheap to ask about many at once
+# of transcript in one response. Scry counts YouTube data 20 times over and its price rises as you take more,
+# so this keeps one query under scry.MAX_EXPOSURE_NANODOLLARS even after a run has spent several dollars
+SCRY_BATCH_CHARS = 500_000
+# Some human-made captions were stored with their line breaks removed, which joined the words on either
+# side of each break. Automatic captions stored the same way are intact.
+SCRY_DAMAGED = "(is_auto_caption = 0 AND position(payload, char(10)) = 0 AND length(event_starts_ms) > 1)"
 SOUND_LABEL = re.compile(r"\[[^\]]*\]")
 MUSIC_NOTES = re.compile(r"[♪♫♩♬]+")
 
@@ -130,9 +140,9 @@ def _choose(transcripts: list):
     return ranked[0] if ranked else None
 
 
-def _paragraphs(snippets) -> str:
+def _paragraphs(captions) -> str:
     # "[Music]" is a sound label, and music notes only decorate the lyrics they surround
-    lines = (MUSIC_NOTES.sub(" ", html.unescape(s.text)).replace("\n", " ") for s in snippets)
+    lines = (MUSIC_NOTES.sub(" ", html.unescape(text)).replace("\n", " ") for text in captions)
     words = " ".join(line for line in lines if not SOUND_LABEL.fullmatch(line.strip()))
     return "\n\n".join(textwrap.wrap(" ".join(words.split()), PARAGRAPH, break_long_words=False, break_on_hyphens=False))
 
@@ -150,7 +160,7 @@ def fetch_video(video_id: str) -> dict:
         if transcript is None:
             reason = "no_transcript"
         else:
-            text = _paragraphs(transcript.fetch())
+            text = _paragraphs(s.text for s in transcript.fetch())
     except errors.IpBlocked as e:  # a 429 or a captcha page
         raise Blocked(type(e).__name__) from e
     except errors.RequestBlocked as e:
@@ -169,13 +179,119 @@ def fetch_video(video_id: str) -> dict:
         return {"status": "failed", "reason": type(e).__name__}
 
     info = _oembed(video_id)
-    title, channel = info.get("title") or f"YouTube video {video_id}", info.get("author_name")
-    head = f"# {title}" + (f"\n\n**Channel:** {channel}" if channel else "")
     kind = "auto" if transcript is not None and transcript.is_generated else "human"
+    return _video(video_id, info.get("title"), info.get("author_name"), text, kind, reason)
+
+
+def _video(video_id: str, title: str | None, channel: str | None, text: str, kind: str, reason: str | None = None,
+           via: str = "") -> dict:
+    title = title or f"YouTube video {video_id}"
+    head = f"# {title}" + (f"\n\n**Channel:** {channel}" if channel else "")
     return {"status": "ok" if text else "thin", "reason": reason,
             "meta": {"title": title, "author": channel, "site": "youtube.com",
-                     "source": f"youtube:transcript:{kind}" if text else "youtube:metadata"},
+                     "source": f"youtube:transcript:{kind}{via}" if text else "youtube:metadata"},
             "body": f"{head}\n\n{text}" if text else head, "has_text": bool(text)}
+
+
+def _save(store: Store, doc_key: str, url: str, res: dict) -> None:
+    if res["status"] == "failed":
+        store.record(doc_key, "failed", res["reason"])
+        return
+    chars = store.write_doc(doc_key, {**res["meta"], "url": url}, res["body"])
+    short = res["has_text"] and chars < extract.MIN_CHARS
+    status = "thin" if short or res["status"] == "thin" else "ok"
+    store.record(doc_key, status, res["reason"] or ("short" if short else None), chars=chars)
+
+
+def _best_track(columns: str, videos: list[str]) -> str:
+    """A query for the track to use for each video, in the order _choose prefers them."""
+    return (f"SELECT video_id, {columns} FROM youtube.transcripts WHERE video_id IN ({sql_list(videos)})"
+            f" AND NOT {SCRY_DAMAGED} ORDER BY video_id, (lang = 'en' OR startsWith(lang, 'en-')) DESC,"
+            f" is_auto_caption ASC, word_count DESC LIMIT 1 BY video_id LIMIT {len(videos)}")
+
+
+async def _scry_titles(client: ScryClient, videos: list[str]) -> dict[str, tuple[str, str | None]]:
+    """Title and channel, from what Scry has seen lately or else its census of YouTube in 2021."""
+    rows = await client.query(
+        "SELECT video_id, argMax(title, observed_hour) AS title, argMax(channel_name, observed_hour) AS channel"
+        f" FROM youtube.videos_live WHERE video_id IN ({sql_list(videos)}) AND title IS NOT NULL"
+        f" GROUP BY video_id LIMIT {len(videos)}", max_seconds=90)
+    found = {r["video_id"]: (r["title"], r["channel"]) for r in rows if r["title"]}
+    missing = [v for v in videos if v not in found]
+    if missing:
+        rows = await client.query(
+            f"SELECT video_id, any(title) AS title, any(uploader) AS channel FROM youtube.videos"
+            f" WHERE video_id IN ({sql_list(missing)}) GROUP BY video_id LIMIT {len(missing)}", max_seconds=90)
+        found.update({r["video_id"]: (r["title"], r["channel"]) for r in rows if r["title"]})
+    return found
+
+
+def _text_batches(sizes: dict[str, int]) -> list[list[str]]:
+    """Videos grouped so that no response is too big. A transcript too big for a batch of its own is left out."""
+    batches: list[list[str]] = []
+    chars = 0
+    for video, size in sizes.items():
+        if size > SCRY_BATCH_CHARS:
+            continue
+        if not batches or chars + size > SCRY_BATCH_CHARS:
+            batches.append([])
+            chars = 0
+        batches[-1].append(video)
+        chars += size
+    return batches
+
+
+def _scry_text(payload: str) -> str:
+    """Normally one caption per line; automatic captions stored on one line keep their sound labels inside it."""
+    return _paragraphs(payload.split("\n") if "\n" in payload else SOUND_LABEL.split(payload))
+
+
+async def fill_from_scry(store: Store, pending: list[tuple[str, str]], max_dollars: float) -> None:
+    """Transcripts from Scry, so that those videos never touch YouTube. Whatever isn't saved here, because
+    Scry doesn't have it, Scry failed or the spending limit was reached, comes from YouTube as usual."""
+    key = load_key()
+    if not key:
+        log.warning("youtube: no Scry key, so every video comes from YouTube")
+        return
+    videos = {doc_key.split(":", 2)[2]: (doc_key, url) for doc_key, url in pending if doc_key.startswith("youtube:video:")}
+    wanted = list(videos)
+    stop_at = ScryClient.spent_nanodollars + int(max_dollars * 1e9)
+    saved = 0
+
+    def out_of_money() -> bool:
+        if ScryClient.spent_nanodollars < stop_at:
+            return False
+        log.warning("youtube: reached the $%.2f limit for Scry; the rest come from YouTube", max_dollars)
+        return True
+
+    async def take_all(client: ScryClient) -> None:
+        nonlocal saved
+        for i in range(0, len(wanted), SCRY_LOOKUP_BATCH):
+            if out_of_money():
+                return
+            batch = wanted[i : i + SCRY_LOOKUP_BATCH]
+            rows = await client.query(_best_track("length(payload) AS chars", batch), max_seconds=120)
+            sizes = {r["video_id"]: r["chars"] for r in rows if r["chars"]}
+            titles = await _scry_titles(client, list(sizes)) if sizes else {}
+            for part in _text_batches(sizes):
+                if out_of_money():
+                    return
+                for row in await client.query(_best_track("is_auto_caption AS auto, payload", part), max_seconds=120):
+                    video = row["video_id"]
+                    text = _scry_text(row["payload"])
+                    if text:
+                        title, channel = titles.get(video, (None, None))
+                        _save(store, *videos[video], _video(video, title, channel, text, "auto" if row["auto"] else "human", via=":scry"))
+                        saved += 1
+                store.commit()
+                log.info("youtube: %d transcripts read from Scry so far", saved)
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            await take_all(ScryClient(session, key))
+        except ScryError as e:
+            log.warning("youtube: Scry failed (%s); the rest come from YouTube", e)
+    log.info("youtube: %d of %d videos came from Scry; the rest come from YouTube", saved, len(wanted))
 
 
 def list_urls(doc_key: str) -> list[str]:
@@ -234,8 +350,11 @@ def fetch(doc_key: str) -> dict:
     return fetch_video(name) if kind == "video" else fetch_list(doc_key)
 
 
-async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY) -> None:
+async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY, scry_dollars: float | None = None) -> None:
     pending = store.pending("youtube")
+    if pending and scry_dollars is not None:  # before any pause: it doesn't touch YouTube
+        await fill_from_scry(store, pending, scry_dollars)
+        pending = store.pending("youtube")
     if not pending:
         return
     log.info("youtube: %d videos, playlists and channels, one every %g to %g s", len(pending), *delay)
@@ -303,14 +422,7 @@ async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY) 
                 blocks = 0
                 _write_block(store.out, last_block, blocks)
             done += 1
-            if res["status"] == "failed":
-                store.record(doc_key, "failed", res["reason"])
-            else:
-                meta = {**res["meta"], "url": url}
-                chars = store.write_doc(doc_key, meta, res["body"])
-                short = res["has_text"] and chars < extract.MIN_CHARS
-                status = "thin" if short or res["status"] == "thin" else "ok"
-                store.record(doc_key, status, res["reason"] or ("short" if short else None), chars=chars)
+            _save(store, doc_key, url, res)
             if done % 25 == 0:
                 log.info("youtube: %d of %d", done, len(pending))
             if i + 1 < len(pending):

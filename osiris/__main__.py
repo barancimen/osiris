@@ -105,7 +105,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
         "hackernews": lambda: run_hackernews(store, refetch=args.refetch_comments, older_than_days=args.refetch_comments_days),
         "lesswrong": lambda: run_lesswrong(store, refetch=args.refetch_comments, older_than_days=args.refetch_comments_days),
         "github": lambda: run_github(store),
-        "youtube": lambda: run_youtube(store, args.youtube_delay),
+        "youtube": lambda: run_youtube(store, args.youtube_delay, args.scry_youtube_max_dollars if args.scry_youtube else None),
         "localfile": lambda: run_localfile(store, pool, args.workers,
                                            refresh=refresh.get("localfile", ())),
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
@@ -539,6 +539,11 @@ def main() -> None:
                           "Much faster, but Scry's copy drops formulas. Sends your paper ids to Scry")
     run.add_argument("--scry-arxiv-max-dollars", type=float, default=5.0, metavar="N",
                      help="stop taking papers from Scry after spending this much in a run; the rest wait (default 5)")
+    run.add_argument("--scry-youtube", action="store_true",
+                     help="take a video's transcript from Scry when it has one, so that video never touches YouTube. "
+                          "Sends your video ids to Scry")
+    run.add_argument("--scry-youtube-max-dollars", type=float, default=1.0, metavar="N",
+                     help="stop taking transcripts from Scry after spending this much in a run; the rest come from YouTube (default 1)")
     run.add_argument("--pdf-at-once", type=int, metavar="N",
                      help="web PDFs being downloaded or read at once (default: twice --workers, at least 3)")
     run.add_argument("--no-arxiv-fulltext", action="store_true",
