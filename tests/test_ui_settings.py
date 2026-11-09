@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import logging
+import re
 from pathlib import Path
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from osiris import __main__ as main
 from osiris import generic, tuning, twitter, ui, youtube
 from osiris.route import route
 from osiris.store import Store
@@ -188,6 +191,37 @@ def test_the_page_only_gets_failures_when_they_change(tmp_path: Path):
 
     first, again = with_page(tmp_path, check)
     assert first["ready"] and first["total"] == 0 and again is None
+
+
+def test_every_log_line_gets_one_timestamp(tmp_path: Path):
+    job = ui.Job(tmp_path)
+    for line in ("--- Archiving", "12:48:25 INFO already has one", ""):
+        job.log(line)
+    assert re.fullmatch(r"\d\d:\d\d:\d\d --- Archiving", job.lines[0])
+    assert job.lines[1] == "12:48:25 INFO already has one" and job.lines[2] == "" and job.count == 3
+
+
+def test_the_progress_line_counts_what_this_run_saved_by_source(tmp_path: Path, monkeypatch, caplog):
+    store, r = archive(tmp_path, ["https://a.example/1", "https://a.example/2", "https://a.example/3", "https://x.com/a/status/1234567"])
+    store.record(r[0].doc_key, "ok", chars=500)
+    store.record(r[1].doc_key, "thin", "short", chars=5)
+    store.record(r[2].doc_key, "failed", "dns")
+    store.record(r[3].doc_key, "ok", chars=500)
+    store.db.execute("UPDATE urls SET updated_at = '2020-01-01T00:00:00Z' WHERE url = ?", (r[3].url,))  # an earlier run's
+    store.commit()
+    assert main.downloaded_since(store, "2024-01-01T00:00:00Z") == {"generic": 2}
+
+    monkeypatch.setattr(main, "REPORT_EVERY", 0.01)
+    monkeypatch.setattr(main, "now_iso", lambda: "2024-01-01T00:00:00Z")
+
+    async def report_briefly():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(main._report(store), 0.05)
+
+    with caplog.at_level(logging.INFO, logger="osiris"):
+        asyncio.run(report_briefly())
+    assert "downloaded this run: generic 2 | " in caplog.text and "failed" not in caplog.text
+    store.close()
 
 
 def test_a_knob_sets_its_constant(monkeypatch):

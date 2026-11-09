@@ -27,7 +27,7 @@ from .route import route
 from .scry import ScryClient
 from .singlefile import run_import
 from .stackexchange import run_stackexchange
-from .store import Store
+from .store import Store, now_iso
 from .twitter import run_twitter
 from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, parse_delay, run_youtube
 
@@ -51,25 +51,23 @@ def lane_counts(store: Store) -> dict[str, Counter]:
     return counts
 
 
+def downloaded_since(store: Store, since: str) -> Counter:
+    """Documents saved since a moment, by source, each counted once however many links lead to it."""
+    return Counter(dict(store.db.execute("SELECT lane, COUNT(DISTINCT doc_key) FROM urls WHERE status IN ('ok', 'thin')"
+                                         " AND updated_at >= ? GROUP BY lane", (since,))))
+
+
 async def _report(store: Store) -> None:
     loop = asyncio.get_running_loop()
-    start, last_done = loop.time(), None
+    since, start, last_total = now_iso(), loop.time(), 0
     while True:
         await asyncio.sleep(REPORT_EVERY)
-        counts = lane_counts(store)
-        parts = []
-        for lane in LANES:
-            c = counts.get(lane)
-            if c and c["pending"]:
-                total = sum(c.values())
-                parts.append(f"{lane} {total - c['pending']}/{total} (ok {c['ok']}, thin {c['thin']}, failed {c['failed']})")
-        done = sum(c[s] for c in counts.values() for s in ("ok", "thin", "failed"))
-        if last_done is not None:
-            rate = (done - last_done) / REPORT_EVERY
-            parts.append(f"{rate:.1f} URL/s, {loop.time() - start:.0f}s elapsed")
-        last_done = done
-        if parts:
-            log.info(" | ".join(parts))
+        got = downloaded_since(store, since)
+        total = sum(got.values())
+        so_far = ", ".join(f"{lane} {got[lane]}" for lane in LANES if got[lane]) or "nothing yet"
+        log.info("downloaded this run: %s | %.1f/s, %.0fs elapsed", so_far, (total - last_total) / REPORT_EVERY,
+                 loop.time() - start)
+        last_total = total
 
 
 def stop_on_signals() -> None:

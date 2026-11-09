@@ -50,6 +50,7 @@ FAILURES_EVERY = 2  # seconds between looks at whether the manifest has changed
 COOKIE_FILE_TYPES = (".txt", ".json", ".cookies")
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 HOST_PATTERN = re.compile(r"[a-z0-9.*?-]+")
+STAMPED = re.compile(r"\d\d:\d\d:\d\d ")  # how `osiris` log lines start, so the page doesn't add a second time
 TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
 # run options that are numbers: (name, flag, kind, smallest allowed)
@@ -91,7 +92,8 @@ class Job:
         return self.task is not None and not self.task.done()
 
     def log(self, line: str) -> None:
-        self.lines.append(line.rstrip())
+        line = line.rstrip()
+        self.lines.append(line if not line or STAMPED.match(line) else f"{time.strftime('%H:%M:%S')} {line}")
         self.count += 1
 
     def start(self, name: str, flow, env: dict[str, str | None] | None = None) -> None:
