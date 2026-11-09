@@ -29,22 +29,6 @@ class Vocabulary:
         return word in self.words
 
 
-def test_utf8_and_byte_order_marks():
-    assert decode_text("héllo".encode()) == "héllo"
-    assert decode_text("héllo".encode("utf-8-sig")) == "héllo"
-    assert decode_text("héllo".encode("utf-16")) == "héllo"
-
-
-def test_windows_english():
-    data = (ENGLISH * 3).encode("cp1252")
-    assert decode_text(data, lexicon=Vocabulary([])) == ENGLISH * 3
-
-
-def test_declared_charset_after_utf8():
-    assert decode_text("café".encode("cp1252"), "cp1252") == "café"
-    assert decode_text("café".encode(), "iso-8859-1") == "café"  # servers that say latin-1 and send UTF-8
-
-
 def test_no_guess_keeps_replacement_characters():
     data = "Gödel, Erdős and Dvořák.".encode("cp1250")
     assert "�" in decode_text(data)

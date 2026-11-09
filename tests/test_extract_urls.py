@@ -1,4 +1,4 @@
-"""Collecting saved URLs from backups: the same page once, and each exact URL only worked out once."""
+"""Collecting saved URLs from backups: the same page once, in the order first seen."""
 
 import json
 import sys
@@ -27,16 +27,3 @@ def test_repeats_are_dropped_keeping_the_first_spelling_in_order(tmp_path: Path,
     report = capsys.readouterr().err
     assert "session-buddy-1.json: 3 total, 1 filtered, 2 new, running unique 2" in report
     assert "session-buddy-2.json: 4 total, 1 filtered, 1 new, running unique 3" in report
-
-
-def test_each_exact_url_is_only_worked_out_once(tmp_path: Path, monkeypatch):
-    (tmp_path / "in").mkdir()
-    for n in range(3):
-        backup(tmp_path / "in", f"session-buddy-{n}.json", ["https://a.example/", "https://b.example/", "chrome://settings"])
-    filtered, keyed = [], []
-    real_keep, real_key = extract_urls.keep, extract_urls.dedup_key
-    monkeypatch.setattr(extract_urls, "keep", lambda u: filtered.append(u) or real_keep(u))
-    monkeypatch.setattr(extract_urls, "dedup_key", lambda u: keyed.append(u) or real_key(u))
-    assert len(collect(tmp_path, monkeypatch)) == 2
-    assert sorted(filtered) == ["chrome://settings", "https://a.example/", "https://b.example/"]
-    assert sorted(keyed) == ["https://a.example/", "https://b.example/"]

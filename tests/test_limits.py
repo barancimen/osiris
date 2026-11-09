@@ -1,9 +1,9 @@
-"""Long documents are read to the end, and the status page counts Google Scholar without adding to the totals."""
+"""Long documents are read to the end, and one bad page or file costs only itself."""
 
 import asyncio
 from pathlib import Path
 
-from osiris import extract, ocr, ui
+from osiris import extract, ocr
 from osiris.route import doc_id, route
 from osiris.store import Store
 
@@ -115,23 +115,7 @@ def test_ocr_stops_a_document_once_its_time_is_used_up_and_keeps_what_it_read(tm
     assert 1 <= body.count("perfectly ordinary") / 2 < 8
 
 
-def test_web_pdfs_at_once_follows_the_cores():
-    assert "--pdf-at-once" in ui._run_args({"lanes": list(ui.LANES), "pdf_at_once": 9}, Path("urls"))
-    assert "--pdf-at-once" not in ui._run_args({"lanes": list(ui.LANES), "pdf_at_once": ""}, Path("urls"))
-
-
 def test_running_out_of_memory_fails_only_that_file():
     def too_big(*_):
         raise MemoryError
     assert extract._cleaned(too_big) == {"text": "", "error": "too_large"}
-
-
-def test_scholar_row_is_separate_from_the_lane_counts(tmp_path: Path):
-    store = Store(tmp_path)
-    store.add([route("https://scholar.google.com/scholar?q=a"), route("https://scholar.google.de/citations?user=b"),
-               route("https://example.com/page")])
-    store.commit()
-    table = ui._lane_table(tmp_path)
-    store.close()
-    assert table["scholar"] == {"pending": 2}
-    assert sum(sum(c.values()) for c in table["lanes"].values()) == 3

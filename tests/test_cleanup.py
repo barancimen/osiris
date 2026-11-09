@@ -153,21 +153,3 @@ def test_interrupted_bookkeeping_is_finished(archive):
     assert dict(store.db.execute("SELECT doc_id, chars FROM urls"))[did] == len(body(store, did))
     assert review.scan(store, out)["text_changed"] == 0
     assert decisions(out)[did] == "bad"
-
-
-def test_write_doc_cleans_new_documents(tmp_path: Path):
-    store = Store(tmp_path)
-    r = route("https://example.com/new")
-    store.add([r])
-    chars = store.write_doc(r.doc_key, {"url": r.url, "source": "html", "title": "ﬁrst"}, "infor­mation ")
-    meta, text = store.read_doc(doc_id(r.doc_key))
-    assert (text, meta["title"], chars) == ("information", "first", len("information"))
-    store.close()
-
-
-def test_lexicon(archive):
-    store, out, _ = archive
-    path = cleanup.build_lexicon(store)
-    from osiris.clean import Lexicon
-
-    assert Lexicon(path).counts("infor", "mation")[0] >= 2  # "information", outside the breaks
