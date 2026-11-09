@@ -10,7 +10,7 @@ import signal
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-from . import clean, safety
+from . import clean, safety, tuning
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +40,9 @@ def _on_alarm(signum, frame):
     raise ExtractionTimeout()
 
 
-def init_worker(mem_mb: int = 0) -> None:
+def init_worker(mem_mb: int = 0, constants: dict | None = None) -> None:
     safety.install_from_env()
+    tuning.set_constants(constants or {})  # what this run was told to use
     # the parent handles Ctrl-C and shuts the pool down
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     if mem_mb:
@@ -184,7 +185,7 @@ class WorkerPool:
         self.submitted = 0
 
     def _new(self, workers: int) -> ProcessPoolExecutor:
-        return ProcessPoolExecutor(max_workers=workers, initializer=init_worker, initargs=(self.mem_mb,))
+        return ProcessPoolExecutor(max_workers=workers, initializer=init_worker, initargs=(self.mem_mb, tuning.chosen()))
 
     def _replace(self, old: ProcessPoolExecutor, cancel: bool) -> None:
         if old is self.executor:  # several failing tasks race to replace the same executor

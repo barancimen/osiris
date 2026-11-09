@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import clean, cookies, extract, review, safety
+from . import clean, cookies, extract, review, safety, tuning
 from .arxiv import run_arxiv
 from .forums import run_hackernews, run_lesswrong
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
@@ -29,7 +29,7 @@ from .singlefile import run_import
 from .stackexchange import run_stackexchange
 from .store import Store
 from .twitter import run_twitter
-from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, run_youtube
+from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, parse_delay, run_youtube
 
 log = logging.getLogger("osiris")
 
@@ -98,7 +98,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
     reporter = asyncio.create_task(_report(store))
     stop_on_signals()
     jobs = {
-        "twitter": lambda: run_twitter(store),
+        "twitter": lambda: run_twitter(store, use_scry=not args.no_scry_tweets),
         "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext),
         "stackexchange": lambda: run_stackexchange(store, refetch=args.refetch_stackexchange),
         "reddit": lambda: run_reddit(store),
@@ -179,6 +179,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     if args.chrome_profile:
         refuse_real_chrome_profile(args.chrome_profile)
+    tuning.apply_arguments(args)
     lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
     refresh_lanes = [lane for lane in REFRESH_LANES.get(args.refresh_pdfs, ()) if lane in lanes]
     if args.refresh_pdfs and not refresh_lanes:
@@ -474,18 +475,20 @@ def main() -> None:
     run.add_argument("urlfile", nargs="?", default=DEFAULT_URLFILE,
                      help=f"text file with one URL per line (default: {DEFAULT_URLFILE}, from extract_urls.py)")
     run.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
-    run.add_argument("--concurrency", type=int, default=64, help="max requests in flight (default: 64)")
-    run.add_argument("--per-host", type=int, default=4, help="max requests in flight per host (default: 4)")
+    run.add_argument("--concurrency", type=int, default=tuning.FLAG_DEFAULTS["concurrency"],
+                     help="max requests in flight (default: %(default)s)")
+    run.add_argument("--per-host", type=int, default=tuning.FLAG_DEFAULTS["per_host"],
+                     help="max requests in flight per host (default: %(default)s)")
     run.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
-    run.add_argument("--worker-mem-mb", type=int, default=1536,
+    run.add_argument("--worker-mem-mb", type=int, default=tuning.FLAG_DEFAULTS["worker_mem_mb"],
                      help="memory cap per extraction process; a document past it fails instead of swapping "
-                          "the machine (default 1536, 0 = none)")
+                          "the machine (default %(default)s, 0 = none)")
     run.add_argument("--only", choices=LANES, action="append", help="run only this lane (repeatable)")
     run.add_argument("--skip", choices=LANES, action="append", default=[],
                      help="don't run this lane; its URLs stay pending (repeatable), e.g. --skip twitter")
-    run.add_argument("--youtube-delay", type=float, default=YOUTUBE_DELAY, metavar="SECONDS",
-                     help=f"seconds between YouTube requests (default {YOUTUBE_DELAY:.0f}); it's the lane most "
-                          "likely to get your IP blocked")
+    run.add_argument("--youtube-delay", type=parse_delay, default=YOUTUBE_DELAY, metavar="MIN-MAX",
+                     help=f"seconds between YouTube requests, at random in this range (default {YOUTUBE_DELAY[0]:g}-"
+                          f"{YOUTUBE_DELAY[1]:g}); it's the lane most likely to get your IP blocked")
     run.add_argument("--refetch-stackexchange", action="store_true",
                      help="update archived Stack Exchange threads to include comments; resumable, and a question "
                           "deleted since keeps its document")
@@ -511,12 +514,13 @@ def main() -> None:
     run.add_argument("--render", action="store_true",
                      help="headless-browser fallback pass for blocked/thin pages (needs: pip install -e .[render] "
                           "&& playwright install chromium; a few hundred MB of RAM per page)")
-    run.add_argument("--render-concurrency", type=int, default=2, help="pages open at once in --render (default 2)")
+    run.add_argument("--render-concurrency", type=int, default=tuning.FLAG_DEFAULTS["render_concurrency"],
+                     help="pages open at once in --render (default %(default)s)")
     run.add_argument("--chrome-profile", metavar="DIR",
                      help="--render with a COPY of your Chrome profile directory (uses installed Chrome) so its "
                           "logged-in sessions apply; Chrome must not have that copy open")
-    run.add_argument("--challenge-wait", type=float, default=15.0,
-                     help="seconds --render waits for bot-challenge pages to clear (default 15)")
+    run.add_argument("--challenge-wait", type=float, default=tuning.FLAG_DEFAULTS["challenge_wait"],
+                     help="seconds --render waits for bot-challenge pages to clear (default %(default)s)")
     run.add_argument("--host-limit", action="append", default=[], metavar="PATTERN=N[:SECONDS]",
                      help="hosts matching the glob share one queue: N requests in flight, SECONDS between "
                           "starts (repeatable; default scholar.google.*=1:8)")
@@ -531,6 +535,9 @@ def main() -> None:
                           "own site: for Scholar, Medium, logged-in and bot-walled pages")
     run.add_argument("--user-agent", help="browser User-Agent to send; match the browser the cookies came from")
     run.add_argument("--contact", help="email/URL appended to the User-Agent sent to Wikimedia sites")
+    run.add_argument("--no-scry-tweets", action="store_true",
+                     help="don't look tweets up in Scry: only twitterapi.io, if keyed, and otherwise they stay pending")
+    tuning.add_arguments(run)
     run.set_defaults(func=cmd_run)
 
     imp = sub.add_parser("import", help="store HTML pages saved with SingleFile as markdown (resumable)")

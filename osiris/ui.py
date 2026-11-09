@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -25,13 +26,15 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import cleanup, review, search
+from . import cleanup, cookies, review, search, tuning
 from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
 from .store import TMP_DIR, Store, md_path, read_doc_file
+from .youtube import DEFAULT_DELAY
 
+log = logging.getLogger(__name__)
 REPO_DIR = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).with_name("ui.html")
 LANES = ("twitter", "arxiv", "stackexchange", "reddit", "hackernews", "lesswrong", "github", "localfile", "generic", "youtube")
@@ -43,14 +46,27 @@ PAGE_SIZE = 100
 SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
 INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
 PROGRESS_JOBS = ("Archive", "Fixes")  # jobs whose progress the manifest shows
+FAILURES_EVERY = 2  # seconds between looks at whether the manifest has changed
+COOKIE_FILE_TYPES = (".txt", ".json", ".cookies")
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
+HOST_PATTERN = re.compile(r"[a-z0-9.*?-]+")
 TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
+# run options that are numbers: (name, flag, kind, smallest allowed)
+NUMBER_FLAGS = (("concurrency", "--concurrency", int, 1), ("per_host", "--per-host", int, 1),
+                ("worker_mem_mb", "--worker-mem-mb", int, 0), ("render_concurrency", "--render-concurrency", int, 1),
+                ("challenge_wait", "--challenge-wait", float, 0))
+BUILT_IN_HOST_LIMIT = "scholar.google.*"  # `osiris run` always has a rule for this one, so it's edited rather than removed
 DEFAULT_CONFIG = {
-    "backups": [], "local": [], "saved": [],
+    "backups": [], "local": [], "saved": [], "last_run": None,  # when the latest archive run started and ended
     "options": {"lanes": list(LANES), "forum_lanes_offered": True, "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
-                "review_after": True, "cookies": "", "user_agent": "", "render": False, "keep_raw_pdfs": False, "arxiv_fulltext": True,
-                "workers": "", "youtube_delay": "", "billed_twitter": False,
+                "review_after": True, "cookies": "", "user_agent": "", "user_agent_edit": False, "render": False,
+                "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
+                "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
+                "contact": "", "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
+                "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
+                "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
+                **tuning.FLAG_DEFAULTS, **{knob.option: knob.default for knob in tuning.KNOBS},
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
 }
 
@@ -194,6 +210,100 @@ class Index:
                 "error": self.error}
 
 
+class Failures:
+    """What failed and why, kept ready in memory so the page never waits for it. A background task reads
+    the manifest again whenever it has changed, which during a run is about once a second."""
+
+    def __init__(self, out: Path):
+        self.out = out
+        last = load_config(out)["last_run"] or {}
+        self.run: tuple[float, float | None] | None = (last["started"], last.get("finished")) if last.get("started") else None
+        self.version = 0  # differs whenever anything below does
+        self.summary: dict | None = None
+        self.by_reason: dict[str, list[dict]] = {}
+        self._seen = None
+
+    def note_run(self, started: float, finished: float | None) -> None:
+        self.run = (started, finished)
+        config = load_config(self.out)
+        config["last_run"] = {"started": started, "finished": finished}
+        _save_config(self.out, config)
+
+    def _signature(self) -> tuple:
+        stamps = []
+        for name in ("manifest.sqlite", "manifest.sqlite-wal"):
+            try:
+                found = os.stat(self.out / name)
+                stamps.append((found.st_mtime_ns, found.st_size))
+            except OSError:
+                stamps.append(None)
+        return (*stamps, self.run)
+
+    def read(self) -> None:
+        run = self.run
+        first, last = (_iso(run[0]), _iso(run[1]) if run[1] else "9999") if run else ("", "")  # "9999": still going
+        finished_sql = "SELECT COUNT(DISTINCT doc_id) FROM urls WHERE status IN ('ok', 'thin', 'failed') AND lane != 'skip'"
+        db = read_manifest(self.out)
+        try:
+            rows = db.execute("SELECT doc_id, url, lane, reason, updated_at FROM urls WHERE status = 'failed' AND lane != 'skip'"
+                              " AND doc_id IS NOT NULL ORDER BY updated_at DESC, rowid DESC").fetchall()
+            finished = db.execute(finished_sql).fetchone()[0]
+            run_finished = db.execute(finished_sql + " AND updated_at >= ? AND updated_at <= ?", (first, last)).fetchone()[0] if run else 0
+        finally:
+            db.close()
+        by_reason: dict[str, list[dict]] = {}
+        seen = set()
+        for did, url, lane, reason, at in rows:
+            if did not in seen:  # several links to one document are one failure
+                seen.add(did)
+                reason = reason or "unknown"
+                by_reason.setdefault(reason, []).append({
+                    "id": did, "url": url, "lane": lane, "host": _host(url), "reason": reason, "at": at,
+                    "in_run": bool(run and at and first <= at <= last)})
+        reasons = [{"reason": reason, "count": len(items), "run": sum(it["in_run"] for it in items),
+                    "hosts": Counter(it["host"] for it in items).most_common(5)}
+                   for reason, items in sorted(by_reason.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
+        summary = {"total": len(seen), "finished": finished, "reasons": reasons,
+                   "run": {"started": run[0], "finished": run[1], "done": run_finished,
+                           "failed": sum(r["run"] for r in reasons)} if run else None}
+        if summary != self.summary or by_reason != self.by_reason:
+            self.summary, self.by_reason = summary, by_reason
+            self.version = time.time_ns()  # never repeats, even across restarts of this page's server
+
+    async def keep(self) -> None:
+        while True:
+            signature = self._signature()
+            if signature != self._seen:
+                try:
+                    await asyncio.to_thread(self.read)
+                    self._seen = signature
+                except sqlite3.Error as e:  # a busy moment: the next look tries again
+                    log.debug("failures: %s", e)
+            await asyncio.sleep(FAILURES_EVERY)
+
+    def page(self, reasons: list[str], run_only: bool, host: str, offset: int, limit: int) -> dict:
+        """Failed documents, reason by reason in the order asked for, newest first within each."""
+        by_reason = self.by_reason  # one read: a refresh swaps in a whole new one
+        items = [it for reason in (reasons or by_reason) for it in by_reason.get(reason, ()) if it["in_run"] or not run_only]
+        hosts = Counter(it["host"] for it in items)
+        if host:
+            items = [it for it in items if it["host"] == host]
+        return {"version": self.version, "total": len(items), "items": items[offset:offset + limit],
+                "counts": Counter(it["reason"] for it in items), "hosts": hosts.most_common(300),
+                "run": sum(it["in_run"] for reason in (reasons or by_reason) for it in by_reason.get(reason, ()))}
+
+
+def _iso(moment: float) -> str:
+    return datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _host(url: str) -> str:
+    try:
+        return urlsplit(url).hostname or "local file"
+    except ValueError:  # a malformed address in a bookmark
+        return "unknown"
+
+
 def read_manifest(out: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{quote(str(out / 'manifest.sqlite'))}?mode=ro", uri=True, timeout=5)
 
@@ -211,7 +321,17 @@ def load_config(out: Path) -> dict:
     for key in ("backups", "local", "saved"):
         if isinstance(saved.get(key), list):
             config[key] = [str(p) for p in saved[key]]
+    if isinstance(saved.get("last_run"), dict):
+        config["last_run"] = saved["last_run"]
     options = saved.get("options", {})
+    if options.get("youtube_delay") not in ("", None) and "youtube_delay_min" not in options:  # one number, before the range
+        try:
+            options.update(youtube_delay_min=round(float(options["youtube_delay"]) * 0.7, 2),
+                           youtube_delay_max=round(float(options["youtube_delay"]) * 1.3, 2))
+        except (TypeError, ValueError):
+            pass
+    if options.get("user_agent") and "user_agent_edit" not in options:  # typed by hand, before it was filled in for you
+        options["user_agent_edit"] = True
     if "keep_raw" in options:  # its name before web pages stopped being kept
         options.setdefault("keep_raw_pdfs", options.pop("keep_raw"))
     if "audit_after" in options:  # its name before review was called review everywhere
@@ -293,7 +413,7 @@ def _lane_table(out: Path) -> dict:
 
 def _progress(out: Path, since: float) -> dict:
     """URLs finished since the job started, and how many are still waiting."""
-    started = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started = _iso(since)
     db = read_manifest(out)
     try:
         done, waiting = db.execute(
@@ -306,7 +426,7 @@ def _progress(out: Path, since: float) -> dict:
 
 async def state(request: web.Request) -> web.Response:
     app = request.app
-    out, job = app["out"], app["job"]
+    out, job, failures = app["out"], app["job"], app["failures"]
     since = int(request.query.get("since", 0))
     new = max(job.count - since, 0)
     lines = list(job.lines)[-new:] if new else []
@@ -321,6 +441,7 @@ async def state(request: web.Request) -> web.Response:
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
                 "progress": _progress(out, job.started) if job.active and job.name in PROGRESS_JOBS else None},
+        "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
                  "Stack Exchange": bool(os.environ.get("STACKEXCHANGE_KEY"))},
@@ -331,7 +452,8 @@ async def state(request: web.Request) -> web.Response:
 # -- folders -------------------------------------------------------------------------------------
 
 def _config_for_page(app: web.Application, config: dict) -> dict:
-    return {**config, "search_index": app["index"] is not None}  # not a setting: `osiris ui --search-index`
+    return {**config, "search_index": app["index"] is not None,  # not a setting: `osiris ui --search-index`
+            "defaults": {**DEFAULT_CONFIG["options"], "workers": os.cpu_count() or 1}}
 
 
 async def get_config(request: web.Request) -> web.Response:
@@ -363,14 +485,18 @@ def _save_config(out: Path, config: dict) -> None:
 
 
 async def browse(request: web.Request) -> web.Response:
-    """Folder names for the picker. Files are only counted, never listed or read."""
+    """Folder names for the picker. Files are only counted, unless it's choosing a cookies file (files=1):
+    then the names of files that could be one are listed too. Files are never read."""
     path = Path(request.query.get("path") or Path.home()).expanduser()
+    want_files = request.query.get("files") == "1"
     try:
         path = path.resolve()
+        if want_files and path.is_file():  # typed in full
+            return web.json_response({"file": str(path), "folder": str(path.parent)})
         entries = list(os.scandir(path))
     except OSError as e:
         raise web.HTTPBadRequest(text=f"Can't open {path}: {e.strerror}")
-    folders, files = [], 0
+    folders, files, names = [], 0, []
     for entry in entries:
         try:
             if entry.is_dir():
@@ -378,17 +504,35 @@ async def browse(request: web.Request) -> web.Response:
                     folders.append(entry.name)
             else:
                 files += 1
+                lower = entry.name.lower()
+                if want_files and not lower.startswith(".") and (lower.endswith(COOKIE_FILE_TYPES) or "cookie" in lower):
+                    names.append(entry.name)
         except OSError:
             continue
     return web.json_response({"path": str(path), "parent": str(path.parent) if path.parent != path else None,
-                              "folders": sorted(folders, key=str.lower), "files": files})
+                              "folders": sorted(folders, key=str.lower), "files": files, "file_names": sorted(names, key=str.lower)})
 
 
 def _files(n: int, kind: str) -> str:
     return f"{n:,} {kind} file{'' if n == 1 else 's'}"
 
 
+def _scan_cookies(path: Path) -> dict:
+    """How many cookies a file holds, without their values leaving this function."""
+    if not path.is_file():
+        return {"ok": False, "summary": "File not found"}
+    try:
+        found = cookies.load(path)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"ok": False, "summary": "This doesn't look like a cookies file"}
+    if not found:
+        return {"ok": False, "summary": "No cookies in this file, or they've all expired"}
+    return {"ok": True, "summary": f"{len(found):,} cookies for {len({c.domain.lstrip('.') for c in found}):,} sites"}
+
+
 def _scan_folder(path: Path, kind: str) -> dict:
+    if kind == "cookies":
+        return _scan_cookies(path)
     if not path.is_dir():
         return {"ok": False, "summary": "Folder not found"}
     if kind == "backups":
@@ -443,24 +587,66 @@ def _run_args(options: dict, url_file: Path) -> list[str]:
     if not options.get("retry_failed"):  # which already covers every site
         for host in _retry_hosts(options):
             args += ["--retry-host", host]
-    for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"),
-                         ("keep_raw_pdfs", "--keep-raw-pdfs")):
+    for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw_pdfs", "--keep-raw-pdfs"),
+                         ("refetch_comments", "--refetch-comments"), ("refetch_stackexchange", "--refetch-stackexchange")):
         if options.get(option):
             args.append(flag)
-    if not options.get("arxiv_fulltext", True):
-        args.append("--no-arxiv-fulltext")
+    for option, flag in (("arxiv_fulltext", "--no-arxiv-fulltext"), ("impersonate", "--no-impersonate"), ("doi", "--no-doi"),
+                         ("wayback", "--no-wayback"), ("scry_twitter", "--no-scry-tweets")):
+        if not options.get(option, True):
+            args.append(flag)
     if options.get("cookies"):
-        args += ["--cookies", str(Path(options["cookies"]).expanduser())]
+        cookie_file = Path(options["cookies"]).expanduser()
+        if not cookie_file.is_file():
+            raise web.HTTPBadRequest(text=f"The cookies file isn't at {cookie_file} any more. Choose it again, or empty that box.")
+        args += ["--cookies", str(cookie_file)]
     if options.get("user_agent"):
         args += ["--user-agent", str(options["user_agent"])]
-    if str(options.get("workers") or "").isdigit() and int(options["workers"]) > 0:
-        args += ["--workers", str(int(options["workers"]))]
-    try:
-        if options.get("youtube_delay") not in ("", None):
-            args += ["--youtube-delay", str(float(options["youtube_delay"]))]
-    except ValueError:
-        raise web.HTTPBadRequest(text="The YouTube delay should be a number of seconds.")
+    if options.get("render") and options.get("chrome_profile"):
+        args += ["--chrome-profile", str(Path(options["chrome_profile"]).expanduser())]
+    if str(options.get("contact") or "").strip():
+        args += ["--contact", str(options["contact"]).strip()]
+    if options.get("workers") not in ("", None):
+        args += ["--workers", str(_number(options, "workers", int, 1, 1))]
+    for name, flag, kind, smallest in NUMBER_FLAGS:
+        if (value := _number(options, name, kind, smallest, tuning.FLAG_DEFAULTS[name])) != tuning.FLAG_DEFAULTS[name]:
+            args += [flag, f"{value:g}"]
+    for knob in tuning.KNOBS:
+        if (value := _number(options, knob.option, knob.kind, knob.minimum, knob.default)) != knob.default:
+            args += [knob.flag, f"{value:g}"]
+    low, high = sorted((_number(options, "youtube_delay_min", float, 0, DEFAULT_DELAY[0]),
+                        _number(options, "youtube_delay_max", float, 0, DEFAULT_DELAY[1])))
+    args += ["--youtube-delay", f"{low:g}-{high:g}"]
+    for rule in _host_limits(options):
+        args += ["--host-limit", rule]
     return args
+
+
+def _number(options: dict, name: str, kind: type, smallest: float, default):
+    """An option that should be a number. Empty means the default."""
+    value = options.get(name)
+    if value in ("", None):
+        return default
+    try:
+        number = kind(float(value))
+    except (TypeError, ValueError, OverflowError):
+        number = None
+    if number is None or not smallest <= number < float("inf"):
+        raise web.HTTPBadRequest(text=f"{name.replace('_', ' ').capitalize()} should be a number, {smallest:g} or more.")
+    return number
+
+
+def _host_limits(options: dict) -> list[str]:
+    """The per-site rules as `osiris run` takes them. A row with no site in it is one still being filled in."""
+    rules = []
+    for row in options.get("host_limits") or []:
+        pattern = str(row.get("pattern") or "").strip().lower()
+        if not pattern:
+            continue
+        if not HOST_PATTERN.fullmatch(pattern):
+            raise web.HTTPBadRequest(text=f"{pattern} doesn't look like a site. Use something like example.com or *.example.com")
+        rules.append(f"{pattern}={_number(row, 'at_once', int, 1, 1)}:{_number(row, 'seconds', float, 0, 0):g}")
+    return rules
 
 
 def _write_local_urls(folders: list[str], out_file) -> int:
@@ -532,7 +718,9 @@ async def start_fixes(request: web.Request) -> web.Response:
     job, out = app["job"], app["out"]
     if job.active:
         raise web.HTTPConflict(text="A job is already running.")
-    lang = str(load_config(out)["options"].get("ocr_lang") or "eng")
+    options = load_config(out)["options"]
+    lang = str(options.get("ocr_lang") or "eng")
+    no_scry = [] if options.get("scry_twitter", True) else ["--no-scry-tweets"]
     empty = out / "ui_no_urls.txt"
     empty.write_text("", encoding="utf-8")
 
@@ -542,7 +730,7 @@ async def start_fixes(request: web.Request) -> web.Response:
                       if ln.startswith("lanes to run:")), [])
         if lanes:
             only = [arg for lane in lanes for arg in ("--only", lane)]
-            await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr"))
+            await j.run("Fetching again", j.osiris("run", str(empty), *only, "--no-ocr", *no_scry))
         await j.run("Checking the results", j.osiris("review", "scan"))
 
     job.start("Fixes", flow, env={BILLED_KEY: None})
@@ -565,6 +753,7 @@ CLEAN_MODES = {"preview": ("Cleanup preview", "Previewing the cleanup", ["--dry-
                "clean": ("Text cleanup", "Cleaning up text", []),
                "undo": ("Undoing the cleanup", "Putting the originals back", ["--undo"])}
 REPORT_PAGE = 200
+MAX_FAILURE_ROWS = 20_000
 
 
 async def start_clean(request: web.Request) -> web.Response:
@@ -759,6 +948,14 @@ async def documents(request: web.Request) -> web.Response:
         {"id": did, "url": url, "lane": lane, "status": status, "reason": reason, "chars": chars,
          "title": titles.get(did), "host": urlsplit(url).hostname or "local file"}
         for did, url, lane, status, reason, chars in rows]})
+
+
+async def failures_list(request: web.Request) -> web.Response:
+    """A page of failed documents for the reasons asked for, from the list kept ready."""
+    q = request.query
+    return web.json_response(request.app["failures"].page(
+        q.getall("reason", []), q.get("scope") == "run", q.get("host", ""),
+        max(int(q.get("offset", 0)), 0), min(max(int(q.get("limit", REPORT_PAGE)), 1), MAX_FAILURE_ROWS)))
 
 
 async def reasons(request: web.Request) -> web.Response:
@@ -990,11 +1187,16 @@ async def raw_text(request: web.Request) -> web.StreamResponse:
 
 # -- app -----------------------------------------------------------------------------------------
 
+async def _start_failures(app: web.Application) -> None:
+    app["failures_task"] = asyncio.create_task(app["failures"].keep())
+
+
 async def _start_index(app: web.Application) -> None:
     app["index_task"] = asyncio.create_task(app["index"].keep(app["job"]))
 
 
 async def _stop_job_on_exit(app: web.Application) -> None:
+    app["failures_task"].cancel()
     index = app["index"]
     if index:
         index.stopping = True  # the refresh in progress stops at its next document
@@ -1022,9 +1224,19 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     app["token"] = load_ui_token(out)
     app["job"] = Job(out)
     app["index"] = Index(out) if search_index else None  # off unless asked for: it takes disk and CPU
+    app["failures"] = Failures(out)
     review.connect(out).close()
+
+    def job_changed() -> None:
+        job = app["job"]
+        if job.name in PROGRESS_JOBS:
+            app["failures"].note_run(job.started, job.finished)
+        if app["index"]:
+            app["index"].wanted.set()
+
+    app["job"].on_change = job_changed
+    app.on_startup.append(_start_failures)
     if search_index:
-        app["job"].on_change = app["index"].wanted.set
         search.connect(out).close()
         app.on_startup.append(_start_index)
     app.on_shutdown.append(_stop_job_on_exit)
@@ -1049,6 +1261,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.get("/api/documents", documents),
         web.get("/api/search", search_documents),
         web.get("/api/reasons", reasons),
+        web.get("/api/failures", failures_list),
         web.get("/api/document/{id}", document),
         web.get("/original/{id}", original),
         web.get("/saved/{id}", raw_text),

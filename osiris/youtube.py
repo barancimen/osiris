@@ -25,9 +25,9 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DELAY = 5.0
-BLOCK_WAITS = (300.0, 600.0, 1200.0, 2400.0)  # seconds to wait after each block in a row
-BLOCK_LIMIT = len(BLOCK_WAITS) + 1
+DEFAULT_DELAY = (3.5, 6.5)  # seconds between requests, at random within this range
+BLOCK_WAIT_MINUTES = 5.0  # after a block, doubling with each block in a row
+BLOCK_LIMIT = 5
 TIMEOUT = 30
 LIST_CAP = 2000  # videos listed for one playlist or channel; a channel can have tens of thousands
 ENGLISH = ("en", "en-US", "en-GB", "en-CA", "en-AU")
@@ -36,6 +36,16 @@ GONE_TEXT = re.compile(r"does not exist|not available|unavailable|private|remove
 PARAGRAPH = 1000
 SOUND_LABEL = re.compile(r"\[[^\]]*\]")
 MUSIC_NOTES = re.compile(r"[♪♫♩♬]+")
+
+
+def parse_delay(text: str) -> tuple[float, float]:
+    """`3.5-6.5` waits between 3.5 and 6.5 seconds; one number means that, give or take 30%."""
+    low, dash, high = text.partition("-")
+    if not dash:
+        return float(low) * 0.7, float(low) * 1.3
+    if float(low) > float(high):
+        raise ValueError(text)
+    return float(low), float(high)
 
 
 class Blocked(Exception):
@@ -172,11 +182,11 @@ def fetch(doc_key: str) -> dict:
     return fetch_video(name) if kind == "video" else fetch_list(doc_key)
 
 
-async def run_youtube(store: Store, delay: float = DEFAULT_DELAY) -> None:
+async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY) -> None:
     pending = store.pending("youtube")
     if not pending:
         return
-    log.info("youtube: %d videos, playlists and channels, about one every %.0f s", len(pending), delay)
+    log.info("youtube: %d videos, playlists and channels, one every %g to %g s", len(pending), *delay)
     loop = asyncio.get_running_loop()
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="youtube")
     blocks = done = 0
@@ -192,7 +202,7 @@ async def run_youtube(store: Store, delay: float = DEFAULT_DELAY) -> None:
                                     "Re-run later, from a home connection if this is a server",
                                     blocks, e, len(pending) - i)
                         return
-                    wait = BLOCK_WAITS[blocks - 1]
+                    wait = BLOCK_WAIT_MINUTES * 60 * 2 ** (blocks - 1)
                     log.warning("youtube: blocked (%s); pausing this lane for %.0f min. Other lanes carry on",
                                 e, wait / 60)
                     await asyncio.sleep(wait)
@@ -211,7 +221,7 @@ async def run_youtube(store: Store, delay: float = DEFAULT_DELAY) -> None:
             if done % 25 == 0:
                 log.info("youtube: %d of %d", done, len(pending))
             if i + 1 < len(pending):
-                await asyncio.sleep(delay * random.uniform(0.7, 1.3))
+                await asyncio.sleep(random.uniform(*delay))
     finally:
         worker.shutdown(wait=False, cancel_futures=True)
         store.commit()

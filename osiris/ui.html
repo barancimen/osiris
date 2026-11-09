@@ -66,7 +66,6 @@ main { flex: 1; min-height: 0; overflow: hidden; }
 .btn kbd { font: 12px var(--mono); color: var(--muted); margin-left: 4px; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, .row:focus-visible, .body:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 8px 20px; }
 label.opt { display: flex; align-items: center; gap: 7px; }
 label.opt input[type=text], label.opt input[type=number], label.opt select { flex: 1; min-width: 0; }
 input[type=text], input[type=number], input[type=search], select { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 7px; }
@@ -74,8 +73,31 @@ input[type=text], input[type=number], input[type=search], select { background: v
 .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 15px; padding: 2px 10px 2px 7px; cursor: pointer; font-size: 14px; }
 .chip:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
 .chip input { margin: 0; }
-details summary { cursor: pointer; color: var(--muted); margin-top: 13px; font-size: 14px; }
-details .opts { margin-top: 10px; }
+.group { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
+.group:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.group > h3 { font-size: 13.5px; font-weight: 650; color: var(--muted); margin-bottom: 8px; }
+.group .chips { margin-bottom: 0; }
+.ticks { display: flex; flex-wrap: wrap; gap: 5px 26px; }
+.ticks + .numbers, .ticks + .fields, .numbers + .fields, .fields + .numbers, .numbers + .limits, .fields + .limits { margin-top: 9px; }
+.numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 6px 30px; }
+.number { display: flex; align-items: center; gap: 8px; }
+.number > span:first-child { flex: 1; min-width: 0; }
+.unit { color: var(--muted); font-size: 13.5px; width: 2.7em; flex: none; }
+input.short { width: 5.6em; flex: none; }
+.fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 14px; align-items: start; }
+.field-name { padding-top: 3px; }
+.field-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.field-controls input[type=text] { flex: 1; min-width: 160px; }
+.field-controls .note { flex-basis: 100%; color: var(--muted); font-size: 13.5px; }
+.field-controls .note.bad { color: var(--bad); }
+input[readonly] { background: var(--sunk); }
+.limits > p { margin-bottom: 5px; }
+.limit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 5px; }
+.limit input[type=text] { flex: 1; min-width: 160px; }
+.reset-row { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
+details { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
+details summary { cursor: pointer; color: var(--text); font-size: 14.5px; font-weight: 650; }
+details > .group:first-of-type { margin-top: 11px; padding-top: 0; border-top: 0; }
 .hint { color: var(--muted); font-size: 13.5px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th { text-align: right; font-weight: 500; color: var(--muted); font-size: 13.5px; padding: 2px 0 6px 13px; }
@@ -154,6 +176,14 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 .retry-list .chip { cursor: default; padding-right: 4px; }
 .retry-list .chip button { background: none; border: 0; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 15px; line-height: 1; }
 #report { width: min(960px, calc(100vw - 32px)); }
+#fail-list { width: min(860px, calc(100vw - 32px)); }
+.fail-row { cursor: pointer; }
+.fail-row:hover { background: var(--sunk); }
+.fail-group td { font-weight: 650; }
+.fail-name { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
+.fail-row .hint { font-weight: 400; margin-left: 6px; }
+.fail-section { position: sticky; top: 0; background: var(--sunk); padding: 4px 15px; font-size: 13.5px; font-weight: 650; border-bottom: 1px solid var(--line); }
+.fail-url { overflow-wrap: anywhere; }
 .report-list { height: min(60vh, 560px); overflow-y: auto; }
 .report-row { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 8px 15px; cursor: pointer; color: var(--text); }
 .report-row:hover { background: var(--sunk); }
@@ -169,6 +199,11 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
   .tab.on.split { flex-direction: column; }
   .list-pane { width: 100%; max-width: none; height: 45%; border-right: 0; border-bottom: 1px solid var(--line); }
   #jobline { display: none; }
+}
+@media (max-width: 560px) {
+  .numbers { grid-template-columns: minmax(0, 1fr); }
+  .fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .field-controls { margin-bottom: 7px; }
 }
 </style>
 </head>
@@ -188,6 +223,7 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 </main>
 <dialog id="picker"></dialog>
 <dialog id="report" aria-label="Cleanup report"></dialog>
+<dialog id="fail-list" aria-label="Failed documents"></dialog>
 <div id="toast" role="status"></div>
 <script>
 "use strict";
@@ -247,25 +283,59 @@ const HELP = {
   refresh: "Read PDFs you've already saved once more, in case they come out better now. A document is only replaced if the new copy has more text.",
   retry_failed: "Give every link that failed before another try. Without this, failed links are left alone.",
   review_after: "When archiving is done, check for garbled text right away.",
-  advanced: "Settings most people never need to touch.",
+  advanced: "Finer control over how a run behaves. The numbers already filled in are the defaults.",
   cookies: "A file with your browser's cookies. With it, osiris can open pages as you see them when you're logged in. Keep this file private.",
-  user_agent: "How your browser introduces itself to websites. Copy it from the same browser the cookies came from, or some sites won't accept them.",
+  user_agent: "How your browser introduces itself to websites. Choosing a cookies file fills this in from the browser you have this page open in. If the cookies came from a different browser, tick Edit and paste that browser's here, or some sites won't accept them.",
+  user_agent_edit: "Type your own instead of the one filled in. Untick to go back to it.",
+  chrome_profile: "A copy of a Chrome profile folder, so the invisible browser is logged in wherever you are. Only used with the headless browser. Never choose your real profile.",
+  render_concurrency: "How many pages the invisible browser keeps open at once. Each one takes a few hundred MB of memory.",
+  challenge_wait: "How long to wait for a \"checking your browser\" page to clear before giving up on it.",
+  impersonate: "If a page is refused, ask again looking exactly like Chrome. Fast, and it gets past many bot walls.",
+  doi: "If a page is a paper with a DOI, get its title, authors and summary from a paper database.",
+  wayback: "If everything else fails, use the Internet Archive's copy of the page.",
+  tries: "How many times to try one page when the connection fails or the site has a temporary problem.",
+  max_retry_wait: "The wait before each new try grows. It never goes past this, even if the site asks for longer.",
+  site_down_after: "After this many connection failures in a row, the rest of that site is skipped for this run, so a dead site doesn't hold things up.",
+  site_refused_after: "After this many refusals in a row (403, or 429 after its retries), the rest of that site is skipped. The fallbacks above still get to try those pages.",
+  wayback_delay: "The Internet Archive is a nonprofit and rate-limits quickly. Lower numbers often get refused.",
+  thin_under: "A document with fewer characters than this is marked Thin, and the fallbacks try to find a better copy.",
+  concurrency: "How many downloads can run at the same time, across all sites.",
+  per_host: "How many downloads can run at the same time on any one site. Higher is faster, and more likely to get you blocked.",
+  worker_mem_mb: "How much memory one document may use while being read. Past it, that document fails instead of slowing your computer down. 0 means no limit.",
+  "host-limits": "Sites matching a pattern share one queue, so you can slow down one that blocks you. * matches anything, as in scholar.google.*",
+  page_timeout: "The longest one download may take, PDFs included. Raise it if large PDFs fail with a timeout on a slow connection.",
+  stall_timeout: "A download that sends nothing for this long is dropped, however much time it has left.",
+  read_timeout: "The longest to spend pulling the text out of one page or PDF. Long PDFs get extra time per page on top.",
+  book_timeout: "The longest to spend reading one ebook or Word document.",
+  ocr_page_timeout: "The longest OCR may spend on a single page. That page is skipped after this, and the rest are still read.",
+  ocr_document_timeout: "The longest OCR may spend on one document. What's been read by then is kept. Very long books get more time automatically.",
+  ocr_dpi: "How sharply each page is rendered for OCR. 200 suits most books. 300 can help with small print, and is slower.",
+  youtube_block_wait: "When YouTube blocks you, the lane stops for this long, and twice as long each time it happens again in a row. Other sources carry on.",
+  youtube_block_limit: "After this many blocks in a row, YouTube stops until the next run.",
+  scry_twitter: "Look posts up in Scry's archive first. Turned off, they only come from twitterapi.io if you've allowed it, and otherwise they wait.",
+  refetch_comments: "Fetch every Hacker News and LessWrong thread you've saved again, to pick up new comments. A document only changes if the new text is at least as long. Stays on until you untick it, and redoes all of them each run.",
+  refetch_stackexchange: "Fetch your saved Stack Exchange threads again so they include comments. A question deleted since keeps its document.",
+  arxiv_delay: "arXiv asks for 15 seconds between requests. Going faster can get you blocked.",
+  stackexchange_delay: "Stack Exchange's own limits are always obeyed on top of this.",
+  contact: "An email or web address that's sent to Wikimedia and paper databases with each request, which some of them ask for. Leave it empty to send none.",
+  "reset-numbers": "Put every number on this panel back to its default. Your ticks, files and sites stay as they are.",
+  "choose-file": "Look through the folders on this computer.",
   render: "For pages that block plain downloads or need JavaScript, open them in an invisible Chrome window instead. Slower, and it uses a lot more memory.",
   keep_raw_pdfs: "Also keep the PDFs downloaded from the web, about 2 MB each, and arXiv papers' web version, or their PDF if they don't have one. Ordinary web pages only keep their text, and files on your own computer are never copied.",
   arxiv_fulltext: "Add the whole paper after its summary, from arXiv's web version or else its PDF. arXiv asks for 15 seconds between requests, so the first run takes hours. You can stop it safely, and the next run carries on.",
-  workers: "How many documents to work on at once. Leave it empty to use every processor core.",
-  youtube_delay: "How long to wait between videos. Going faster makes it more likely YouTube blocks you for a while.",
+  workers: "How many documents to read at once. It starts at the number of processor cores this computer has.",
+  youtube_delay: "How long to wait between videos, picked at random within this range so the requests don't look automated. Going faster makes it more likely YouTube blocks you for a while.",
   billed_twitter: "Get posts the free archives don't have from twitterapi.io, which charges for each post.",
   "retry-sites": "Sites whose failed links the next archive run will try again. Add one from a failed document on the Documents tab.",
   // numbers
   documents: "Pages and files saved as text so far.",
   chars: "How much text that adds up to.",
   waiting: "Links and files that haven't been processed yet.",
-  failed: "Links and files where no text could be saved. The Documents tab shows why for each one.",
+  failed: "Documents where no text could be saved. Why things failed, below, shows the reasons.",
   "to-review": "Documents that might be garbled, waiting for you on the Review tab.",
   "status-pending": "Not processed yet.",
   "status-ok": "Saved, with a good amount of text.",
-  "status-thin": "Saved, but with very little text, under 200 characters. Often a login wall, a cookie banner, or a page that needs JavaScript.",
+  "status-thin": "Saved, but with very little text. Often a login wall, a cookie banner, or a page that needs JavaScript.",
   "status-failed": "No text could be saved.",
   "status-skipped": "Left alone on purpose, like chat links, social media profiles and image files.",
   keys: "API keys are like passwords for outside services. Each one lets osiris get more, or get it faster, from that service.",
@@ -405,8 +475,15 @@ const SOURCES = [
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
 
-const saveConfig = guarded(async () => { config = await api("/api/config", config); });
-const reloadConfig = guarded(async () => { config = await api("/api/config"); $("#options")?.replaceWith(renderOptions()); });
+// Saves go out one at a time, each with only what changed. `config` stays the one copy the page edits.
+let saving = Promise.resolve();
+function saveConfig(patch) { saving = saving.then(() => api("/api/config", patch)).catch(e => toast(e.message)); return saving; }
+function setOption(name, value) { config.options[name] = value; saveConfig({options: {[name]: value}}); }
+const redrawOptions = () => { $("#options")?.replaceWith(renderOptions()); checkCookies(); };
+const reloadConfig = guarded(async () => {  // a finished run clears the sites it retried
+  const hosts = (await api("/api/config")).options.retry_hosts;
+  if (JSON.stringify(hosts) !== JSON.stringify(config.options.retry_hosts)) { config.options.retry_hosts = hosts; redrawOptions(); }
+});
 
 function renderArchive() {
   const col = $("#archive-column");
@@ -426,10 +503,12 @@ function renderArchive() {
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
       h("div", {id: "log", tabindex: 0, "aria-label": "Job output"})),
     Cleanup.card(),
+    Failures.card(),
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
   for (const key of ["backups", "local", "saved"]) for (const p of config[key]) scanFolder(key, p);
+  checkCookies();
 }
 
 function renderSources() {
@@ -437,12 +516,18 @@ function renderSources() {
     SOURCES.map(s => h("div", {class: "source"},
       h("div", {class: "source-head"},
         h("div", {}, h("h3", {}, s.title), h("p", {}, s.text)),
-        h("button", {class: "btn", title: help("add-folder"), onclick: () => Picker.open(s)}, "Add folder")),
+        h("button", {class: "btn", title: help("add-folder"), onclick: () => Picker.open({title: "Add a folder to " + s.title, kind: s.key, start: config.options.picker_dirs[s.key] || "", onPick: path => addFolder(s.key, path)})}, "Add folder")),
       config[s.key].map(p => h("div", {class: "folder"},
         h("code", {}, p),
         h("span", {class: "note", id: scanId(s.key, p)}, scans[s.key + p]?.summary ?? "Checking…"),
-        h("button", {class: "btn link", "aria-label": `Remove ${p}`, title: help("remove-folder"), onclick: () => { config[s.key] = config[s.key].filter(x => x !== p); saveConfig(); $("#sources").replaceWith(renderSources()); }}, "Remove"))),
+        h("button", {class: "btn link", "aria-label": `Remove ${p}`, title: help("remove-folder"), onclick: () => { config[s.key] = config[s.key].filter(x => x !== p); saveConfig({[s.key]: config[s.key]}); $("#sources").replaceWith(renderSources()); }}, "Remove"))),
     )));
+}
+function addFolder(key, path) {
+  if (!config[key].includes(path)) config[key].push(path);
+  saveConfig({[key]: config[key]});
+  $("#sources").replaceWith(renderSources());
+  scanFolder(key, path);
 }
 const scanId = (key, path) => "scan-" + key + "-" + btoa(unescape(encodeURIComponent(path))).replace(/[^a-zA-Z0-9]/g, "");
 async function scanFolder(key, path) {
@@ -454,50 +539,143 @@ async function scanFolder(key, path) {
   } catch (e) { /* the folder row just stays as it is */ }
 }
 
+function useCookies(path) {
+  setOption("cookies", path);
+  if (!config.options.user_agent_edit) fillUserAgent();
+  redrawOptions();
+}
+// the cookies are nearly always from the browser this page is open in; cookies.txt doesn't say
+function fillUserAgent() { setOption("user_agent", config.options.cookies ? navigator.userAgent : ""); }
+async function checkCookies() {
+  const el = $("#cookies-note"), path = config.options.cookies;
+  if (!el) return;
+  el.textContent = ""; el.classList.remove("bad");
+  if (!path) return;
+  try {
+    const r = await api(`/api/scan?kind=cookies&path=${encodeURIComponent(path)}`);
+    if (config.options.cookies === path) { el.textContent = r.summary; el.classList.toggle("bad", !r.ok); }
+  } catch (e) { /* the box just stays as it is */ }
+}
 function renderOptions() {
-  const o = config.options;
-  const set = (name, value) => { o[name] = value; saveConfig(); };
-  const check = (name, label) => h("label", {class: "opt", title: help(name)}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => set(name, e.target.checked)}), label);
-  const text = (name, label, placeholder, type = "text") => h("label", {class: "opt", title: help(name)}, label, h("input", {type, value: o[name] ?? "", placeholder, onchange: e => set(name, e.target.value.trim())}));
+  const o = config.options, defaults = config.defaults;
+  const numberNames = [];
+  const shown = name => o[name] === "" || o[name] === null || o[name] === undefined ? defaults[name] : o[name];
+  const check = (name, label) => h("label", {class: "opt", title: help(name)}, h("input", {type: "checkbox", checked: !!o[name], onchange: e => setOption(name, e.target.checked)}), label);
+  const group = (title, ...kids) => h("section", {class: "group"}, h("h3", {}, title), ...kids);
+  const ticks = (...kids) => h("div", {class: "ticks"}, ...kids);
+  const numbers = (...kids) => h("div", {class: "numbers"}, ...kids);
+  const fields = (...kids) => h("div", {class: "fields"}, ...kids);
+  const field = (label, tip, ...controls) => [h("span", {class: "field-name", title: tip}, label), h("div", {class: "field-controls", title: tip}, ...controls)];
+  const row = (label, tip, unit, ...controls) => h("div", {class: "number", title: tip}, h("span", {}, label), ...controls, h("span", {class: "unit"}, unit));
+  // a number box always shows real text: empty it and the default comes back
+  const box = (name, label) => { numberNames.push(name); return h("input", {class: "short", type: "number", min: 0, step: "any", "aria-label": label, value: shown(name), onchange: e => {
+    const v = e.target.value.trim();
+    setOption(name, v === "" ? "" : Number(v));
+    if (v === "") e.target.value = defaults[name];
+  }}); };
+  const number = (name, label, unit = "") => row(label, help(name), unit, box(name, label));
+  const words = (name, label) => row(label, help(name), "", h("input", {class: "short", type: "text", value: shown(name), "aria-label": label, onchange: e => {
+    const v = e.target.value.trim();
+    e.target.value = v || defaults[name];
+    setOption(name, v || defaults[name]);
+  }}));
+  // the shortest and longest wait: if one passes the other, the other moves with it
+  const delay = (name, other, label) => { numberNames.push(name); return h("input", {class: "short", id: "box-" + name, type: "number", min: 0, step: 0.5, "aria-label": label, value: shown(name), onchange: e => {
+    const v = e.target.value.trim() === "" ? defaults[name] : Math.max(0, Number(e.target.value));
+    e.target.value = v;
+    setOption(name, v);
+    const them = Number(shown(other));
+    if (name.endsWith("min") ? v > them : v < them) { setOption(other, v); $("#box-" + other).value = v; }
+  }}); };
+  const changeLimit = (i, key, value) => setOption("host_limits", o.host_limits.map((r, n) => n === i ? {...r, [key]: value} : r));
+  const limits = h("div", {class: "limits", title: help("host-limits")},
+    h("p", {}, "Slower rules for particular sites"),
+    o.host_limits.map((r, i) => {
+      const builtIn = r.pattern === defaults.host_limits[0].pattern;
+      return h("div", {class: "limit"},
+        h("input", {type: "text", value: r.pattern, readonly: builtIn, placeholder: "example.com or *.example.com", "aria-label": "Site", onchange: e => changeLimit(i, "pattern", e.target.value.trim())}),
+        h("input", {class: "short", type: "number", min: 1, step: 1, value: r.at_once, "aria-label": "Requests at once", onchange: e => changeLimit(i, "at_once", Number(e.target.value) || 1)}), "at once,",
+        h("input", {class: "short", type: "number", min: 0, step: "any", value: r.seconds, "aria-label": "Seconds between requests", onchange: e => changeLimit(i, "seconds", Number(e.target.value) || 0)}), "sec apart",
+        !builtIn && h("button", {class: "btn link", "aria-label": `Remove ${r.pattern || "this rule"}`, onclick: () => { setOption("host_limits", o.host_limits.filter((_, n) => n !== i)); redrawOptions(); }}, "Remove"));
+    }),
+    h("button", {class: "btn", onclick: () => { setOption("host_limits", [...o.host_limits, {pattern: "", at_once: 1, seconds: 0}]); redrawOptions(); }}, "Add a site"));
+  const folderStart = (path, kind) => path.includes("/") ? path.replace(/\/[^/]*$/, "") || "/" : o.picker_dirs[kind] || "";
   return h("div", {class: "card", id: "options"}, h("h2", {}, "2. How to archive it"),
-    h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip", title: LANE_HELP[lane]},
-      h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => {
-        o.lanes = e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane); saveConfig();
-      }}), LANE_LABEL[lane]))),
-    h("div", {class: "opts"},
-      check("ocr", "Read scanned PDFs with OCR"),
-      text("ocr_lang", "OCR languages", "eng+tur"),
-      h("label", {class: "opt", title: help("refresh")}, "Refresh PDFs", h("select", {onchange: e => set("refresh", e.target.value)},
-        [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))),
-      check("retry_failed", "Try failed URLs again"),
-      check("review_after", "Check for garbage afterwards"),
-    ),
-    h("details", {}, h("summary", {title: help("advanced")}, "Advanced"),
-      h("div", {class: "opts"},
-        text("cookies", "Cookies file", "~/cookies.txt"),
-        text("user_agent", "Browser user agent", "Matches the cookies"),
-        check("render", "Use a headless browser for blocked pages"),
-        check("keep_raw_pdfs", "Keep raw copies of PDFs"),
-        check("arxiv_fulltext", "Get the full text of arXiv papers"),
-        text("workers", "Worker processes", "All cores", "number"),
-        text("youtube_delay", "Seconds between YouTube requests", "5", "number"),
-        check("billed_twitter", "Allow twitterapi.io (billed per tweet)"),
-      ),
-    ),
+    group("Sources",
+      h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip", title: LANE_HELP[lane]},
+        h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => setOption("lanes", e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane))}), LANE_LABEL[lane])))),
+    group("Retries and checks",
+      ticks(check("retry_failed", "Try failed URLs again"), check("review_after", "Check for garbage afterwards")),
+      numbers(row("Refresh PDFs", help("refresh"), "", h("select", {"aria-label": "Refresh PDFs", onchange: e => setOption("refresh", e.target.value)},
+        [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))))),
+    group("Scanned PDFs",
+      ticks(check("ocr", "Read scanned PDFs with OCR")),
+      numbers(words("ocr_lang", "OCR languages"), number("ocr_dpi", "Page sharpness for OCR", "DPI"))),
     o.retry_hosts.length > 0 && h("div", {class: "retry-list", title: help("retry-sites")},
       h("span", {class: "hint"}, o.retry_failed ? "Every failed URL is tried again, including on" : "Next run tries failed URLs again on"),
       o.retry_hosts.map(host => h("span", {class: "chip"}, host,
         h("button", {"aria-label": `Don't retry ${host}`, title: "Don't retry this site", onclick: () => setRetry(host, false)}, "×")))),
+    h("details", {open: o.advanced_open, ontoggle: e => { if (e.target.open !== o.advanced_open) setOption("advanced_open", e.target.open); }},
+      h("summary", {title: help("advanced")}, "Advanced"),
+      group("Blocked or logged-in pages",
+        ticks(check("render", "Use a headless browser for blocked pages")),
+        fields(
+          field("Cookies file", help("cookies"),
+            h("input", {type: "text", value: o.cookies, placeholder: "No file chosen", "aria-label": "Cookies file", onchange: e => useCookies(e.target.value.trim())}),
+            h("button", {class: "btn", title: help("choose-file"), onclick: () => Picker.open({title: "Choose your cookies file", kind: "cookies", file: true, start: folderStart(o.cookies, "cookies"), onPick: useCookies})}, "Choose…"),
+            h("span", {class: "note", id: "cookies-note"})),
+          field("Browser user agent", help("user_agent"),
+            h("input", {type: "text", id: "ua", value: o.user_agent, readonly: !o.user_agent_edit, placeholder: "Filled in when you choose a cookies file", "aria-label": "Browser user agent", onchange: e => setOption("user_agent", e.target.value.trim())}),
+            h("label", {class: "opt", title: help("user_agent_edit")}, h("input", {type: "checkbox", checked: !!o.user_agent_edit, onchange: e => {
+              setOption("user_agent_edit", e.target.checked);
+              if (!e.target.checked) fillUserAgent();
+              redrawOptions();
+              if (config.options.user_agent_edit) $("#ua")?.focus();
+            }}), "Edit")),
+          field("Copy of a Chrome profile", help("chrome_profile"),
+            h("input", {type: "text", value: o.chrome_profile, placeholder: "None", "aria-label": "Copy of a Chrome profile", onchange: e => setOption("chrome_profile", e.target.value.trim())}),
+            h("button", {class: "btn", title: help("choose-file"), onclick: () => Picker.open({title: "Choose a copy of a Chrome profile", kind: "chrome", start: o.chrome_profile || o.picker_dirs.chrome || "", onPick: path => { setOption("chrome_profile", path); redrawOptions(); }})}, "Choose…"))),
+        numbers(number("render_concurrency", "Pages open at once in that browser"), number("challenge_wait", "Wait for a bot check to clear", "sec"))),
+      group("When a page fails",
+        ticks(check("impersonate", "Try again looking like Chrome"), check("doi", "Look papers up by DOI"), check("wayback", "Use the Wayback Machine")),
+        numbers(number("tries", "Tries per page"), number("max_retry_wait", "Longest wait before trying again", "sec"),
+          number("site_down_after", "Skip a site after this many dropped connections in a row"), number("site_refused_after", "Skip a site after this many refusals in a row"),
+          number("wayback_delay", "Wait between Wayback Machine requests", "sec"), number("thin_under", "Call a page thin below", "chars"))),
+      group("Speed",
+        numbers(number("concurrency", "Downloads at once, overall"), number("per_host", "Downloads at once, per site"),
+          number("workers", "Documents read at once"), number("worker_mem_mb", "Memory limit for each one", "MB")),
+        limits),
+      group("Time limits: give up on…",
+        numbers(number("page_timeout", "Downloading a page or PDF", "sec"), number("stall_timeout", "A download that goes silent", "sec"),
+          number("read_timeout", "Getting the text out of a page or PDF", "sec"), number("book_timeout", "Reading an ebook or Word file", "sec"),
+          number("ocr_page_timeout", "OCR on one page", "sec"), number("ocr_document_timeout", "OCR on one document", "sec"))),
+      group("YouTube",
+        numbers(row("Seconds between YouTube requests", help("youtube_delay"), "sec", delay("youtube_delay_min", "youtube_delay_max", "Shortest wait"), "to", delay("youtube_delay_max", "youtube_delay_min", "Longest wait")),
+          number("youtube_block_wait", "Pause after a block, doubling each time", "min"), number("youtube_block_limit", "Stop after this many blocks in a row"))),
+      group("Tweets",
+        ticks(check("scry_twitter", "Look up tweets in Scry"), check("billed_twitter", "Allow twitterapi.io"))),
+      group("Papers and forums",
+        ticks(check("arxiv_fulltext", "Get the full text of arXiv papers"), check("keep_raw_pdfs", "Keep raw copies of PDFs"),
+          check("refetch_comments", "Update Hacker News and LessWrong threads"), check("refetch_stackexchange", "Update Stack Exchange threads")),
+        numbers(number("arxiv_delay", "Wait between arXiv papers", "sec"), number("stackexchange_delay", "Wait between Stack Exchange requests", "sec")),
+        fields(field("Contact for APIs", help("contact"), h("input", {type: "text", value: o.contact, placeholder: "None sent", "aria-label": "Contact for APIs", onchange: e => setOption("contact", e.target.value.trim())})))),
+      h("div", {class: "reset-row"}, h("button", {class: "btn", title: help("reset-numbers"), onclick: () => {
+        const patch = Object.fromEntries(numberNames.map(n => [n, ""]));
+        Object.assign(config.options, patch);
+        saveConfig({options: patch});
+        redrawOptions();
+      }}, "Put the numbers back to their defaults")),
+    ),
   );
 }
 function setRetry(host, on) {
   const hosts = config.options.retry_hosts.filter(x => x !== host);
-  config.options.retry_hosts = on ? [...hosts, host] : hosts;
-  saveConfig();
-  $("#options")?.replaceWith(renderOptions());
+  setOption("retry_hosts", on ? [...hosts, host] : hosts);
+  redrawOptions();
 }
 
 async function startJob(kind, body = {}) {
+  await saving;  // the run reads the settings from disk, so what you just changed has to be there first
   await api("/api/job/" + kind, body);
   logSeen = 0; $("#log").textContent = "";
   await tick();
@@ -506,11 +684,12 @@ async function startJob(kind, body = {}) {
 const JOB_PILL = {running: ["Running", "accent"], stopping: ["Stopping", "warn"], done: ["Finished", "good"], stopped: ["Stopped", "warn"], failed: ["Failed", "bad"]};
 function renderState(s) {
   lastState = s;
+  Failures.update(s.failures, !!s.job.progress);
   const lanes = s.lanes, sum = st => Object.values(lanes).reduce((a, c) => a + (c[st] || 0), 0);
   const stats = $("#stats");
   if (stats) stats.replaceChildren(...[
     [fmt(s.documents), "documents", "documents"], [shortChars(s.chars), "characters of text", "chars"],
-    [fmt(sum("pending")), "waiting", "waiting"], [fmt(sum("failed")), "failed", "failed"],
+    [fmt(sum("pending")), "waiting", "waiting"], [fmt(Failures.data?.ready ? Failures.data.total : sum("failed")), "failed", "failed"],
     [fmt(s.review.to_review), "to review", "to-review"],
   ].map(([n, l, key]) => h("div", {class: "stat"}, h("b", {}, n), h("span", {}, term(l, help(key))))));
 
@@ -599,37 +778,44 @@ function duration(sec) {
 
 async function tick() {
   if (document.hidden) return;  // nobody's looking; the log catches up on the next tick
-  try { renderState(await api("/api/state?since=" + logSeen)); } catch (e) { /* the next tick retries */ }
+  try { renderState(await api(`/api/state?since=${logSeen}&failures=${Failures.version}`)); } catch (e) { /* the next tick retries */ }
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 
-/* ---- folder picker ---- */
+/* ---- folder and file picker ---- */
+// opts: {title, kind (where it opened last is remembered per kind), file (choosing a file, not a folder), start, onPick}
 const Picker = {
-  source: null,
-  open(source) { this.source = source; $("#picker").showModal(); this.go(""); },
-  async go(path) {
-    const dlg = $("#picker");
+  opts: null,
+  open(opts) { this.opts = opts; $("#picker").showModal(); this.go(opts.start || "", true); },
+  pick(value, folder) {
+    const {kind, onPick} = this.opts;
+    setOption("picker_dirs", {...config.options.picker_dirs, [kind]: folder});
+    $("#picker").close();
+    onPick(value);
+  },
+  async go(path, opening) {
+    const dlg = $("#picker"), o = this.opts;
     let d;
-    try { d = await api("/api/browse?path=" + encodeURIComponent(path)); }
-    catch (e) { toast(e.message); if (!path) dlg.close(); return; }
+    try { d = await api(`/api/browse?path=${encodeURIComponent(path)}${o.file ? "&files=1" : ""}`); }
+    catch (e) {
+      if (opening && path) return this.go("", true);  // that folder has gone: start from home instead
+      toast(e.message); if (!path) dlg.close(); return;
+    }
+    if (d.file) return this.pick(d.file, d.folder);  // a whole path, typed in
+    const inside = name => d.path.replace(/\/$/, "") + "/" + name;
     dlg.replaceChildren(
       h("div", {class: "picker-head"},
-        h("h3", {}, "Add a folder to " + this.source.title),
-        h("input", {type: "text", value: d.path, "aria-label": "Folder path", onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); this.go(e.target.value); } }})),
+        h("h3", {}, o.title),
+        h("input", {type: "text", value: d.path, "aria-label": "Path", onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); this.go(e.target.value); } }})),
       h("div", {class: "picker-list"},
         d.parent && h("button", {onclick: () => this.go(d.parent)}, "↑ Up one level"),
-        d.folders.map(f => h("button", {onclick: () => this.go(d.path.replace(/\/$/, "") + "/" + f)}, f)),
-        !d.folders.length && h("p", {class: "hint", style: "padding:10px 14px"}, "No folders inside this one.")),
+        d.folders.map(f => h("button", {onclick: () => this.go(inside(f))}, o.file ? f + "/" : f)),
+        (d.file_names || []).map(f => h("button", {style: "font-weight:650", onclick: () => this.pick(inside(f), d.path)}, f)),
+        !d.folders.length && !(d.file_names || []).length && h("p", {class: "hint", style: "padding:10px 14px"}, o.file ? "Nothing to choose in this folder." : "No folders inside this one.")),
       h("div", {class: "picker-foot"},
-        h("span", {class: "hint"}, `${fmt(d.files)} files in this folder`),
+        h("span", {class: "hint"}, o.file ? "Text and JSON files are listed. For anything else, type its path above and press Enter." : `${fmt(d.files)} files in this folder`),
         h("button", {class: "btn", onclick: () => dlg.close()}, "Cancel"),
-        h("button", {class: "btn primary", onclick: () => {
-          const key = this.source.key;
-          if (!config[key].includes(d.path)) config[key].push(d.path);
-          saveConfig(); dlg.close();
-          $("#sources").replaceWith(renderSources());
-          scanFolder(key, d.path);
-        }}, "Use this folder")),
+        !o.file && h("button", {class: "btn primary", onclick: () => this.pick(d.path, d.parent || d.path)}, "Use this folder")),
     );
   },
 };
@@ -745,6 +931,8 @@ const REASONS = [
   [/^file_unreadable$/, "The file couldn't be opened."],
   [/^(extract_crashed|extract_timeout|huge_tree|ocr_timeout)$/, "Reading it crashed or took too long, which usually means a huge or broken file."],
   [/^no_transcript$/, "The video has no captions."],
+  [/^unavailable$/, "The video or list is private, removed or otherwise unavailable."],
+  [/^[A-Z]\w+$/, "YouTube wouldn't give the captions for this video, for example because it's age-restricted."],
   [/^(api_error|youtube_request_failed|list_error)$/, "The source's API returned an error. Trying again later may work."],
   [/^bad_url$/, "The URL isn't valid."],
   [/^(bug:|error:)/, "Something went wrong in osiris itself. The run's log has the details."],
@@ -752,6 +940,144 @@ const REASONS = [
 const PASS_LABEL = {impersonate: "a browser's TLS fingerprint", render: "the headless browser", doi: "the DOI lookup", wayback: "the Wayback Machine", refresh: "a PDF refresh"};
 const explainReason = reason => REASONS.find(([re]) => re.test(reason || ""))?.[1] ?? "";
 const reasonLabel = reason => (reason || "unknown").replace(/^http_(\d+)$/, "HTTP $1").replace(/^non_text:/, "not text: ").replaceAll("_", " ");
+
+// reasons fall into the first group that matches
+const REASON_GROUPS = [
+  ["Gone, or in no archive", "The page, file or post no longer exists, or the archives that keep copies don't have it.", /^(http_(404|410)|dns|not_found|not_in_scry|unavailable|file_missing)$/],
+  ["Connection or server trouble", "The site was slow, down or overloaded. These often work when tried again later.", /^(http_(429|5\d\d)|host_down|timeout|connect|payload|socket_timeout|no_network|ssl|api_error|youtube_request_failed|list_error)$/],
+  ["Refused, or needs a login", "The site turned osiris away. Cookies, the headless browser or a page saved with SingleFile can often get these.", /^(http_\d+|challenge|redirects)$/],
+  ["Nothing readable came out", "It was fetched, but no text could be taken from it.", /^(no_text|non_text:.*|pdf_error.*|not_a_pdf.*|drm_protected|no_transcript|too_large|extract_crashed|extract_timeout|huge_tree|ocr_timeout|file_unreadable|[A-Z]\w+)$/],
+  ["Something else", "Anything that doesn't fit the other groups.", /^/],
+];
+const REASON_NAMES = {dns: "Domain name not found", ssl: "Secure connection failed", not_in_scry: "Not in Scry", host_down: "Site stopped answering", timeout: "Timed out", connect: "Couldn't connect", payload: "Download broke off", redirects: "Too many redirects"};
+const reasonName = reason => {
+  const label = reasonLabel(reason).replace(/^pdf error:?/, "PDF error: ");
+  return REASON_NAMES[reason] ?? label[0].toUpperCase() + label.slice(1);
+};
+const percent = (n, of) => of ? ` (${(100 * n / of).toFixed(n / of < 0.1 ? 1 : 0)}%)` : "";
+// the card on the Archive tab. The server works the numbers out ahead of time and only sends them when they change
+const Failures = {
+  data: null, live: false, structure: "", cells: new Map(),
+  get version() { return this.data?.version ?? ""; },
+  get runLabel() { return this.live ? "This run" : "Last run"; },
+  card() { return h("div", {class: "card", id: "failures"}, h("h2", {}, "Why things failed"), h("p", {class: "hint", id: "fail-summary", style: "margin-bottom:8px"}, "Working it out…"), h("div", {id: "fail-table"})); },
+  entries() {  // the groups, biggest first, each followed by its reasons
+    const groups = new Map();
+    for (const r of this.data.reasons) {
+      const [name, tip] = REASON_GROUPS.find(([, , re]) => re.test(r.reason));
+      if (!groups.has(name)) groups.set(name, {name, tip, reasons: [], count: 0, run: 0});
+      const g = groups.get(name); g.reasons.push(r); g.count += r.count; g.run += r.run;
+    }
+    return [...groups.values()].sort((a, b) => b.count - a.count).flatMap(g => [
+      {key: "group:" + g.name, name: g.name, tip: g.tip, count: g.count, run: g.run, sub: "", reasons: g.reasons.map(r => r.reason), indent: false},
+      ...g.reasons.map(r => {
+        const [host, n] = r.hosts[0] ?? [];
+        const top = r.hosts.map(([x, c]) => `${x} (${fmt(c)})`).join(", ");
+        return {key: r.reason, name: reasonName(r.reason), tip: [explainReason(r.reason), top && "Most from: " + top].filter(Boolean).join("\n\n"), count: r.count, run: r.run,
+                sub: r.count >= 3 && n / r.count >= 0.3 ? "mostly " + host : "", reasons: [r.reason], indent: true};
+      }),
+    ]);
+  },
+  update(fresh, live) {
+    if (!fresh && live === this.live) return;
+    if (fresh) this.data = fresh;
+    this.live = live;
+    const d = this.data, table = $("#fail-table");
+    if (!d?.ready || !table) return;
+    const run = d.run;
+    $("#fail-summary").textContent = [
+      `${fmt(d.total)} of ${fmt(d.finished)} documents have failed${percent(d.total, d.finished)}.`,
+      run && `${this.live ? "This run so far" : "Last run"}: ${fmt(run.failed)} of ${fmt(run.done)} failed${percent(run.failed, run.done)}.`,
+      d.total ? "Choose a row to see the documents." : "",
+    ].filter(Boolean).join(" ");
+    const entries = this.entries();
+    const structure = JSON.stringify([!!run, this.runLabel, entries.map(e => e.key)]);
+    if (structure === this.structure) {  // same rows: only the numbers change, so a tooltip or focus isn't disturbed
+      for (const e of entries) {
+        const c = this.cells.get(e.key);
+        c.all.textContent = fmt(e.count); c.run.textContent = fmt(e.run); c.run.classList.toggle("zero", !e.run);
+        c.sub.textContent = e.sub; c.name.title = e.tip;
+      }
+    } else {
+      const focused = document.activeElement?.dataset?.fail;
+      this.structure = structure;
+      this.cells.clear();
+      table.replaceChildren(!entries.length ? h("p", {class: "hint"}, "Nothing has failed.") : h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Reason"), run && h("th", {scope: "col"}, this.runLabel), h("th", {scope: "col"}, "All"))),
+        h("tbody", {}, entries.map(e => {
+          const c = {all: h("td", {}, fmt(e.count)), run: h("td", {class: e.run ? "" : "zero"}, fmt(e.run)), sub: h("span", {class: "hint"}, e.sub),
+                     name: h("button", {class: "fail-name", "data-fail": e.key, title: e.tip}, e.name)};
+          this.cells.set(e.key, c);
+          return h("tr", {class: "fail-row" + (e.indent ? "" : " fail-group"), onclick: () => FailList.open(e.name, e.indent ? explainReason(e.key) : e.tip, e.reasons)},
+            h("td", {style: e.indent ? "padding-left:22px" : ""}, c.name, c.sub), run && c.run, c.all);
+        }))));
+      if (focused) [...table.querySelectorAll("[data-fail]")].find(el => el.dataset.fail === focused)?.focus();
+    }
+    if (fresh && $("#fail-list").open) FailList.load();
+  },
+};
+// the documents behind one row of that card, kept up to date while it's open
+const FailList = {
+  reasons: [], scope: "all", host: "", items: [], total: 0, seq: 0, painted: "",
+  open(title, tip, reasons) {
+    const run = Failures.data.reasons.filter(r => reasons.includes(r.reason)).reduce((a, r) => a + r.run, 0);
+    Object.assign(this, {reasons, scope: Failures.live && run ? "run" : "all", host: "", items: [], total: 0, painted: ""});
+    const dlg = $("#fail-list");
+    dlg.replaceChildren(
+      h("div", {class: "picker-head"}, h("h3", {}, title), tip && h("p", {class: "hint"}, tip),
+        h("div", {class: "tool-row"},
+          h("div", {class: "segments", id: "fail-scope", role: "group", "aria-label": "Which failures"}),
+          h("select", {id: "fail-host", "aria-label": "Filter by site", onchange: e => { this.host = e.target.value; this.reset(); }}))),
+      h("div", {class: "report-list", id: "fail-rows"}),
+      h("div", {class: "picker-foot"}, h("span", {class: "hint", id: "fail-count"}), h("button", {class: "btn", onclick: () => dlg.close()}, "Close")));
+    dlg.showModal();
+    this.load();
+  },
+  reset() { this.items = []; this.painted = ""; $("#fail-rows").scrollTop = 0; this.load(); },
+  load: guarded(async function (more) {
+    const self = FailList, seq = ++self.seq, loaded = self.items.length;
+    const query = new URLSearchParams({scope: self.scope, host: self.host, offset: more ? loaded : 0, limit: more ? 200 : Math.max(loaded, 200)});
+    for (const reason of self.reasons) query.append("reason", reason);
+    const r = await api("/api/failures?" + query);
+    if (seq !== self.seq || !$("#fail-list").open) return;
+    self.items = more ? [...self.items, ...r.items] : r.items;
+    self.total = r.total;
+    self.paint(r);
+  }),
+  paint(r) {
+    const allCount = r.hosts.reduce((a, [, n]) => a + n, 0);
+    if (Failures.data.run) $("#fail-scope").replaceChildren(...[["all", "All"], ["run", Failures.runLabel + ` (${fmt(r.run)})`]].map(([v, l]) =>
+      h("button", {"aria-pressed": this.scope === v, onclick: () => { this.scope = v; this.host = ""; this.reset(); }}, l)));
+    const sel = $("#fail-host");
+    // not while it's under your cursor, unless it's still empty (it gets the focus when the list opens)
+    if (document.activeElement !== sel || !sel.options.length) sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(allCount)})`),
+      ...r.hosts.map(([x, n]) => h("option", {value: x, selected: x === this.host}, `${x} (${fmt(n)})`)));
+    $("#fail-count").textContent = `${fmt(this.items.length)} of ${fmt(this.total)} documents`;
+    const painted = JSON.stringify([this.items, this.total, r.counts]);
+    if (painted === this.painted) return;  // nothing new, so what you're pointing at stays put
+    this.painted = painted;
+    const list = $("#fail-rows"), top = list.scrollTop;
+    const readable = url => { try { return decodeURI(url); } catch { return url; } };
+    const when = at => at ? new Date(at).toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"}) : "";
+    let section = null;
+    list.replaceChildren(...this.items.flatMap(it => {
+      const head = this.reasons.length > 1 && it.reason !== section ? h("div", {class: "fail-section", title: explainReason(it.reason)}, `${reasonName(it.reason)} · ${fmt(r.counts[it.reason])}`) : null;
+      section = it.reason;
+      const row = h("button", {class: "report-row", onclick: () => this.show(it.id)},
+        h("div", {class: "fail-url"}, readable(it.url)),
+        h("div", {class: "where"}, [it.host, LANE_LABEL[it.lane] || it.lane, when(it.at), it.in_run && Failures.runLabel.toLowerCase()].filter(Boolean).join(" · ")));
+      return head ? [head, row] : [row];
+    }));
+    if (!this.items.length) list.append(h("p", {class: "hint", style: "padding:10px 14px"}, "None of these."));
+    if (this.total > this.items.length) list.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
+    list.scrollTop = top;
+  },
+  show(id) {
+    $("#fail-list").close();
+    showTab("documents");
+    guarded(() => Docs.show(id))();
+  },
+};
 
 function failureBox(d) {
   if (d.status !== "failed") return null;
@@ -1126,7 +1452,7 @@ window.addEventListener("hashchange", followHash);
 
 /* ---- keys ---- */
 document.addEventListener("keydown", e => {
-  if (e.ctrlKey || e.metaKey || e.altKey || $("#picker").open || $("#report").open) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
   const typing = e.target.matches("input, select, textarea");
   if (typing) { if (e.key === "Escape") e.target.blur(); return; }
   const go = {j: 1, ArrowDown: 1, k: -1, ArrowUp: -1}[e.key];

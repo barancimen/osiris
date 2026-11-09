@@ -148,14 +148,15 @@ async def _from_twitterapi(api_key: str, ids: list[str]) -> tuple[dict[str, dict
     return found, unresolved
 
 
-async def run_twitter(store: Store) -> None:
+async def run_twitter(store: Store, use_scry: bool = True) -> None:
     pending = store.pending("twitter")
     if not pending:
         return
     ids = [key.split(":", 1)[1] for key, _ in pending]
-    scry_key, api_key = load_key(), os.environ.get(KEY_ENV)
+    scry_key, api_key = load_key() if use_scry else None, os.environ.get(KEY_ENV)
     if not scry_key and not api_key:
-        log.warning("twitter: no Scry key and %s not set; leaving %d tweets pending", KEY_ENV, len(ids))
+        log.warning("twitter: %s and %s not set; leaving %d tweets pending",
+                    "Scry has no key" if use_scry else "Scry is turned off", KEY_ENV, len(ids))
         return
 
     found: dict[str, tuple[dict, str]] = {}

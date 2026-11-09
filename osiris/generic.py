@@ -48,6 +48,8 @@ BASE_HEADERS = {
 CHUNK = 1 << 16
 MAX_ATTEMPTS = 3
 MAX_COOLDOWN = 60.0
+PAGE_TIMEOUT = 30.0  # seconds for one download, PDFs included
+STALL_TIMEOUT = 15.0  # seconds a download may send nothing
 HOST_DOWN_AFTER = 3  # consecutive connection-level failures before skipping the rest of a host
 # consecutive refusals (403, or 429 after its retries) before skipping the rest of a host
 # (Scholar, Reddit, Cloudflare walls); the skipped URLs keep that reason, so the fallback
@@ -209,7 +211,7 @@ class AiohttpClient:
                 ttl_dns_cache=600,
                 resolver=aiohttp.AsyncResolver(),
             ),
-            timeout=aiohttp.ClientTimeout(total=30, connect=10, sock_read=15),
+            timeout=aiohttp.ClientTimeout(total=PAGE_TIMEOUT, connect=10, sock_read=STALL_TIMEOUT),
             headers=BASE_HEADERS,
             max_line_size=32768,  # some sites send huge Set-Cookie/CSP headers
             max_field_size=32768,
@@ -319,7 +321,7 @@ class CurlClient:
         from curl_cffi.requests import AsyncSession, Cookies
 
         self.reader = reader
-        self.session = AsyncSession(impersonate="chrome", max_clients=concurrency, timeout=30)
+        self.session = AsyncSession(impersonate="chrome", max_clients=concurrency, timeout=PAGE_TIMEOUT)
         if cookies:
             self.session.cookies = Cookies(to_cookiejar(list(cookies)))
 

@@ -28,9 +28,11 @@ Optional system and Python extras:
 
 ## Web interface
 
-`osiris ui` opens one page with three tabs. Choices are saved in `data/ui.json`, and a job keeps running if you close or reload the page.
+`osiris ui` opens one page with three tabs. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page.
 
 - **Archive:** add folders of tab backups, local files and saved pages with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages, archives everything and checks for garbage, showing a live log and a progress bar with the rate and the time left. **Stop** saves progress, and starting again resumes.
+- **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
+- **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them.
 - **Review:** documents that look like garbage, worst first. See [Finding garbage](#finding-garbage).
 - **Documents:** search titles and URLs, or the text inside documents, and filter by source and status. With `--search-index`, one box searches all three, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
 - **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
@@ -54,7 +56,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 - **Access:** every request needs the token in the printed address, stored in `data/ui-token`. Don't share that address, since the page can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
 - **One job at a time:** don't run `osiris run` in a terminal while the page is running a job.
 - **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
-- **twitterapi.io:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you turn on the billed option under Advanced. Tweets still come from Scry.
+- **Tweets:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you tick **Allow twitterapi.io** under Advanced, which is billed per tweet. **Look up tweets in Scry** turns Scry off or on for tweets. With both off, tweets wait.
 - **Older imports:** pages imported before this version only recorded a file name, so they have no Original view.
 - **Quitting:** Ctrl-C in the terminal stops the page and any running job, with progress saved.
 
@@ -205,6 +207,11 @@ Common `osiris run` options:
 | `--render` | Add the headless browser pass |
 | `--no-impersonate`, `--no-doi`, `--no-wayback` | Skip a fallback pass |
 | `--workers N`, `--worker-mem-mb N` | Extraction and OCR processes, and the memory cap for each |
+| `--no-scry-tweets` | Don't look tweets up in Scry. They then come from twitterapi.io if keyed, and otherwise stay pending |
+| `--tries N`, `--max-retry-wait N`, `--site-down-after N`, `--site-refused-after N` | How hard to retry a web page, and when to give up on a site |
+| `--page-timeout N`, `--stall-timeout N`, `--read-timeout N`, `--book-timeout N`, `--ocr-page-timeout N`, `--ocr-document-timeout N` | Time limits in seconds. Raise `--page-timeout` (30) if large PDFs time out |
+| `--arxiv-delay N`, `--wayback-delay N`, `--stackexchange-delay N` | Seconds between requests to those services |
+| `--ocr-dpi N`, `--thin-under N` | How sharply OCR renders pages, and the character count below which a document is thin |
 
 `osiris run --help` lists the rest.
 
@@ -286,8 +293,8 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 
 - **Transcripts:** these come from `youtube_transcript_api`, English first and then the video's own language, with human captions ahead of automatic ones. A video with no captions is stored as `thin`, with its title and channel.
 - **Playlists and channels:** these are read with `yt-dlp`, up to 2,000 video titles without their transcripts.
-- **Rate limits:** requests go out one at a time, `--youtube-delay` (5) seconds apart. The lane has its own worker thread, so a block here can't hold up other documents.
-- **Blocks:** a blocked item stays `pending`. The lane pauses for 5, 10, 20, then 40 minutes, and after 5 blocks in a row stops until the next run.
+- **Rate limits:** requests go out one at a time, a random `--youtube-delay MIN-MAX` (3.5-6.5) seconds apart. The lane has its own worker thread, so a block here can't hold up other documents.
+- **Blocks:** a blocked item stays `pending`. The lane pauses for 5, 10, 20, then 40 minutes (`--youtube-block-wait`), and after 5 blocks in a row (`--youtube-block-limit`) stops until the next run.
 - **Finishing early:** once only YouTube is left, the log says so. Ctrl-C is safe, and the next run resumes.
 
 ### Local files
