@@ -64,7 +64,7 @@ DEFAULT_CONFIG = {
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
                 "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
                 "refetch_comments_days": 30, "refetch_arxiv_pdfs": False, "pdf_at_once": "",
-                "scry_arxiv": False, "scry_arxiv_dollars": 5, "log_font_px": 7,
+                "scry_arxiv": False, "scry_arxiv_dollars": 5, "log_font_px": 10,
                 "contact": "", "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],

@@ -104,7 +104,7 @@ th { text-align: right; font-weight: 500; color: var(--muted); font-size: 13.5px
 td { text-align: right; padding: 3px 0 3px 13px; border-top: 1px solid var(--line); }
 th:first-child, td:first-child { text-align: left; padding-left: 0; }
 td.zero { color: var(--line-strong); }
-#log { background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 7px/1.5 var(--mono); padding: 8px 10px; height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#log { background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 10px/1.5 var(--mono); padding: 8px 10px; height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .pill { font-size: 13px; padding: 1px 8px; border-radius: 10px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
 .pill.good { background: var(--good-soft); color: var(--good); }
@@ -504,16 +504,16 @@ function renderArchive() {
         h("button", {class: "btn", id: "stop", title: help("stop"), onclick: guarded(() => api("/api/job/stop", {}).then(tick))}, "Stop"),
         h("button", {class: "btn", id: "review-scan", title: help("review-scan"), onclick: guarded(() => startJob("review"))}, "Check for garbage"),
         h("button", {class: "btn", id: "export", title: help("export"), onclick: guarded(() => startJob("export"))}, "Export corpus"),
+        h("label", {class: "opt", style: "margin-left:auto", title: help("log_font_px")}, "Log text size",
+          h("input", {class: "short", style: "flex:none", type: "number", min: 4, max: 48, step: 1, value: config.options.log_font_px, "aria-label": "Log text size", onchange: e => {
+            const px = Math.min(48, Math.max(4, Math.round(Number(e.target.value)) || config.defaults.log_font_px));
+            e.target.value = px;
+            setOption("log_font_px", px);
+            $("#log").style.fontSize = px + "px";
+          }}), "px"),
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:10px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
-      h("label", {class: "opt", style: "justify-content:flex-end;margin-bottom:6px", title: help("log_font_px")}, "Log text size",
-        h("input", {class: "short", style: "flex:none", type: "number", min: 4, max: 48, step: 1, value: config.options.log_font_px, "aria-label": "Log text size", onchange: e => {
-          const px = Math.min(48, Math.max(4, Math.round(Number(e.target.value)) || config.defaults.log_font_px));
-          e.target.value = px;
-          setOption("log_font_px", px);
-          $("#log").style.fontSize = px + "px";
-        }}), "px"),
       h("div", {id: "log", tabindex: 0, "aria-label": "Job output", style: `font-size:${config.options.log_font_px}px`})),
     Cleanup.card(),
     Failures.card(),
