@@ -4,30 +4,44 @@ YouTube blocks datacenter IPs and throttles bursts from any IP, so this lane is 
 slow and isolated: one worker thread of its own, paced requests, and nothing shared with the
 other lanes, so a block here can't hold up another document. A blocked item stays pending;
 after BLOCK_LIMIT blocks in a row the lane stops and the next run carries on from there.
+
+A block is remembered in the archive folder, so restarting doesn't knock on YouTube's door again
+before the pause is over, and for a day afterwards the lane goes at half speed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import html
 import json
 import logging
 import random
 import re
 import textwrap
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from . import extract
 from .store import Store
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DELAY = (3.5, 6.5)  # seconds between requests, at random within this range
-BLOCK_WAIT_MINUTES = 5.0  # after a block, doubling with each block in a row
+# seconds between videos, at random within this range. A video takes about 2 s more and four requests, so
+# this is about 240 videos an hour, under the roughly 300 yt-dlp's documentation gives for a visitor not signed in
+DEFAULT_DELAY = (10.0, 16.0)
+BLOCK_WAIT_MINUTES = 30.0  # after a block, doubling with each block in a row
 BLOCK_LIMIT = 5
+BLOCK_MEMORY_HOURS = 24.0  # how long a block keeps the lane at BLOCK_SLOWDOWN; also the longest pause
+BLOCK_SLOWDOWN = 2.0
+BLOCK_CLEAR_AFTER = 25  # videos in a row that must go through before a block stops counting towards the next pause
+BLOCK_FILE = "youtube_block.json"
+NETWORK_WAIT_MINUTES = 5.0  # when YouTube can't be reached at all, doubling with each failure in a row
+LIST_PAGE_DELAY = 3.0  # seconds between the pages of one playlist or channel: a long one takes dozens
 TIMEOUT = 30
 LIST_CAP = 2000  # videos listed for one playlist or channel; a channel can have tens of thousands
 ENGLISH = ("en", "en-US", "en-GB", "en-CA", "en-AU")
@@ -52,7 +66,38 @@ class Blocked(Exception):
     """YouTube refused this IP. Nothing is known about the item itself."""
 
 
+class OneRefused(Blocked):
+    """YouTube's bot check refused this video, which can be about the video alone: others go through
+    a second later. It only counts as a block if the next video is refused too."""
+
+
+class Offline(Exception):
+    """YouTube couldn't be reached, which says nothing about whether it would have refused us."""
+
+
+def _read_block(out: Path) -> tuple[float, int]:
+    """When YouTube last blocked this archive and the blocks in a row by then; (0, 0) once that's old news."""
+    try:
+        state = json.loads((out / BLOCK_FILE).read_text(encoding="utf-8"))
+        at, blocks = float(state["at"]), int(state["blocks"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0, 0
+    return (at, blocks) if time.time() - at < BLOCK_MEMORY_HOURS * 3600 else (0.0, 0)
+
+
+def _write_block(out: Path, at: float, blocks: int) -> None:
+    (out / BLOCK_FILE).write_text(json.dumps({"at": at, "blocks": blocks}), encoding="utf-8")
+
+
+def _pause(blocks: int) -> float:
+    """Seconds to leave YouTube alone after this many blocks in a row."""
+    return min(BLOCK_WAIT_MINUTES * 60 * 2 ** (blocks - 1), BLOCK_MEMORY_HOURS * 3600)
+
+
+@functools.lru_cache(maxsize=1)
 def _session():
+    """One session for the whole lane, as a browser would have: a new one per video would fetch each
+    watch page twice where YouTube first asks for cookie consent."""
     import requests
 
     class TimeoutSession(requests.Session):
@@ -68,6 +113,10 @@ def _oembed(video_id: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
             return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:  # the first sign of a block can be here
+            raise Blocked("http_429") from e
+        return {}
     except (OSError, ValueError):  # title and channel are a nicety: a transcript alone is still worth keeping
         return {}
 
@@ -102,14 +151,16 @@ def fetch_video(video_id: str) -> dict:
             reason = "no_transcript"
         else:
             text = _paragraphs(transcript.fetch())
-    except errors.RequestBlocked as e:
+    except errors.IpBlocked as e:  # a 429 or a captcha page
         raise Blocked(type(e).__name__) from e
+    except errors.RequestBlocked as e:
+        raise OneRefused(type(e).__name__) from e
     except errors.YouTubeRequestFailed as e:
         if "429" in str(e):
             raise Blocked("http_429") from e
         return {"status": "failed", "reason": "youtube_request_failed"}
     except requests.RequestException as e:
-        raise Blocked(f"network:{type(e).__name__}") from e
+        raise Offline(type(e).__name__) from e
     except (errors.TranscriptsDisabled, errors.NoTranscriptFound):
         reason = "no_transcript"
     except (errors.VideoUnavailable, errors.InvalidVideoId):
@@ -144,7 +195,8 @@ def fetch_list(doc_key: str) -> dict:
     import yt_dlp
 
     options = {"extract_flat": True, "skip_download": True, "quiet": True, "no_warnings": True, "noprogress": True,
-               "playlistend": LIST_CAP, "socket_timeout": TIMEOUT, "logger": logging.getLogger("yt_dlp.quiet")}
+               "playlistend": LIST_CAP, "socket_timeout": TIMEOUT,
+               "sleep_interval_requests": LIST_PAGE_DELAY, "logger": logging.getLogger("yt_dlp.quiet")}
     logging.getLogger("yt_dlp.quiet").setLevel(logging.CRITICAL)
     info = message = None
     for url in list_urls(doc_key):
@@ -187,28 +239,69 @@ async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY) 
     if not pending:
         return
     log.info("youtube: %d videos, playlists and channels, one every %g to %g s", len(pending), *delay)
+    last_block, blocks = _read_block(store.out)
+    left = last_block + _pause(blocks) - time.time() if blocks else 0
+    if left > 0:
+        log.warning("youtube: blocked earlier and still pausing; trying again in %.0f min. Other lanes carry on. "
+                    "Stopping is safe, and setting the pause to 0 skips this wait", left / 60)
+        await asyncio.sleep(left)
     loop = asyncio.get_running_loop()
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="youtube")
-    blocks = done = 0
+    done = fine = 0
+    suspect = None  # the video the bot check has just refused, until the next one shows if that was only about it
+
+    async def pace() -> None:
+        slowed = time.time() - last_block < BLOCK_MEMORY_HOURS * 3600
+        await asyncio.sleep(random.uniform(*delay) * (BLOCK_SLOWDOWN if slowed else 1))
+
     try:
         for i, (doc_key, url) in enumerate(pending):
+            unreachable = 0
+            res = None
             while True:
                 try:
                     res = await loop.run_in_executor(worker, fetch, doc_key)
+                except Offline as e:
+                    unreachable += 1
+                    if unreachable >= BLOCK_LIMIT:
+                        log.warning("youtube: can't reach YouTube (%s); stopping with %d left pending", e, len(pending) - i)
+                        return
+                    wait = NETWORK_WAIT_MINUTES * 60 * 2 ** (unreachable - 1)
+                    log.warning("youtube: can't reach YouTube (%s); trying again in %.0f min", e, wait / 60)
+                    await asyncio.sleep(wait)
+                    continue
                 except Blocked as e:
+                    if isinstance(e, OneRefused) and suspect is None:
+                        suspect = doc_key
+                        break
+                    suspect = None  # it's the connection, so that video stays pending with the rest
                     blocks += 1
+                    fine = 0
+                    last_block = time.time()
+                    _write_block(store.out, last_block, blocks)
                     if blocks >= BLOCK_LIMIT:
                         log.warning("youtube: blocked %d times in a row (%s); stopping with %d left pending. "
                                     "Re-run later, from a home connection if this is a server",
                                     blocks, e, len(pending) - i)
                         return
-                    wait = BLOCK_WAIT_MINUTES * 60 * 2 ** (blocks - 1)
-                    log.warning("youtube: blocked (%s); pausing this lane for %.0f min. Other lanes carry on",
-                                e, wait / 60)
+                    wait = _pause(blocks)
+                    log.warning("youtube: blocked (%s); pausing this lane for %.0f min, then going at half speed. "
+                                "Other lanes carry on", e, wait / 60)
                     await asyncio.sleep(wait)
                     continue
                 break
-            blocks = 0
+            if res is None:
+                await pace()
+                continue
+            if suspect:
+                log.info("youtube: the bot check refused %s while other videos go through; "
+                         "marked as failed, and retrying failed items tries it again", suspect)
+                store.record(suspect, "failed", "bot_check")
+                suspect = None
+            fine += 1
+            if blocks and fine >= BLOCK_CLEAR_AFTER:
+                blocks = 0
+                _write_block(store.out, last_block, blocks)
             done += 1
             if res["status"] == "failed":
                 store.record(doc_key, "failed", res["reason"])
@@ -221,7 +314,7 @@ async def run_youtube(store: Store, delay: tuple[float, float] = DEFAULT_DELAY) 
             if done % 25 == 0:
                 log.info("youtube: %d of %d", done, len(pending))
             if i + 1 < len(pending):
-                await asyncio.sleep(random.uniform(*delay))
+                await pace()
     finally:
         worker.shutdown(wait=False, cancel_futures=True)
         store.commit()

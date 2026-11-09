@@ -310,7 +310,7 @@ const HELP = {
   ocr_page_timeout: "The longest OCR may spend on a single page. That page is skipped after this, and the rest are still read.",
   ocr_document_timeout: "The longest OCR may spend on one document. What's been read by then is kept. Very long books get more time automatically.",
   ocr_dpi: "How sharply each page is rendered for OCR. 200 suits most books. 300 can help with small print, and is slower.",
-  youtube_block_wait: "When YouTube blocks you, the lane stops for this long, and twice as long each time it happens again in a row. Other sources carry on.",
+  youtube_block_wait: "When YouTube blocks you, the lane stops for this long, and twice as long each time it happens again in a row. The pause survives a restart, and for a day after a block YouTube goes at half speed. Other sources carry on. Set it to 0 to skip a pause, for example after changing network.",
   youtube_block_limit: "After this many blocks in a row, YouTube stops until the next run.",
   scry_twitter: "Look posts up in Scry's archive first. Turned off, they only come from twitterapi.io if you've allowed it, and otherwise they wait.",
   refetch_comments: "Fetch your saved Hacker News and LessWrong threads again, to pick up new comments. A document only changes if the new text is at least as long. Stays on until you untick it.",
@@ -944,6 +944,7 @@ const REASONS = [
   [/^file_unreadable$/, "The file couldn't be opened."],
   [/^(extract_crashed|extract_timeout|huge_tree|ocr_timeout)$/, "Reading it crashed or took too long, which usually means a huge or broken file."],
   [/^no_transcript$/, "The video has no captions."],
+  [/^bot_check$/, "YouTube asked to confirm you're not a bot for this video, while other videos went through. Retrying failed items later may work."],
   [/^unavailable$/, "The video or list is private, removed or otherwise unavailable."],
   [/^[A-Z]\w+$/, "YouTube wouldn't give the captions for this video, for example because it's age-restricted."],
   [/^(api_error|youtube_request_failed|list_error)$/, "The source's API returned an error. Trying again later may work."],
@@ -958,11 +959,11 @@ const reasonLabel = reason => (reason || "unknown").replace(/^http_(\d+)$/, "HTT
 const REASON_GROUPS = [
   ["Gone, or in no archive", "The page, file or post no longer exists, or the archives that keep copies don't have it.", /^(http_(404|410)|dns|not_found|not_in_scry|unavailable|file_missing)$/],
   ["Connection or server trouble", "The site was slow, down or overloaded. These often work when tried again later.", /^(http_(429|5\d\d)|host_down|timeout|connect|payload|socket_timeout|no_network|ssl|api_error|youtube_request_failed|list_error)$/],
-  ["Refused, or needs a login", "The site turned osiris away. Cookies, the headless browser or a page saved with SingleFile can often get these.", /^(http_\d+|challenge|redirects)$/],
+  ["Refused, or needs a login", "The site turned osiris away. Cookies, the headless browser or a page saved with SingleFile can often get these.", /^(http_\d+|challenge|redirects|bot_check)$/],
   ["Nothing readable came out", "It was fetched, but no text could be taken from it.", /^(no_text|non_text:.*|pdf_error.*|not_a_pdf.*|drm_protected|no_transcript|too_large|extract_crashed|extract_timeout|huge_tree|ocr_timeout|file_unreadable|[A-Z]\w+)$/],
   ["Something else", "Anything that doesn't fit the other groups.", /^/],
 ];
-const REASON_NAMES = {dns: "Domain name not found", ssl: "Secure connection failed", not_in_scry: "Not in Scry", host_down: "Site stopped answering", timeout: "Timed out", connect: "Couldn't connect", payload: "Download broke off", redirects: "Too many redirects"};
+const REASON_NAMES = {bot_check: "YouTube's bot check", dns: "Domain name not found", ssl: "Secure connection failed", not_in_scry: "Not in Scry", host_down: "Site stopped answering", timeout: "Timed out", connect: "Couldn't connect", payload: "Download broke off", redirects: "Too many redirects"};
 const reasonName = reason => {
   const label = reasonLabel(reason).replace(/^pdf error:?/, "PDF error: ");
   return REASON_NAMES[reason] ?? label[0].toUpperCase() + label.slice(1);

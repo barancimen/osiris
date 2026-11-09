@@ -65,7 +65,7 @@ DEFAULT_CONFIG = {
                 "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
                 "refetch_comments_days": 30, "refetch_arxiv_pdfs": False, "pdf_at_once": "",
                 "scry_arxiv": False, "scry_arxiv_dollars": 5, "log_font_px": 10,
-                "contact": "", "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
+                "contact": "", "youtube_pace_updated": True, "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
                 **tuning.FLAG_DEFAULTS, **{knob.option: knob.default for knob in tuning.KNOBS},
@@ -333,6 +333,11 @@ def load_config(out: Path) -> dict:
                            youtube_delay_max=round(float(options["youtube_delay"]) * 1.3, 2))
         except (TypeError, ValueError):
             pass
+    if "youtube_pace_updated" not in options:  # saved with the earlier defaults, which got people blocked
+        if (options.get("youtube_delay_min"), options.get("youtube_delay_max")) == (3.5, 6.5):
+            del options["youtube_delay_min"], options["youtube_delay_max"]
+        if options.get("youtube_block_wait") == 5:
+            del options["youtube_block_wait"]
     if options.get("user_agent") and "user_agent_edit" not in options:  # typed by hand, before it was filled in for you
         options["user_agent_edit"] = True
     if "keep_raw" in options:  # its name before web pages stopped being kept

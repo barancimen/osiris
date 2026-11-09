@@ -52,7 +52,7 @@ def test_older_settings_are_carried_over(tmp_path: Path):
 def test_defaults_add_no_tuning_flags():
     args = ui._run_args(options(), Path("urls"))
     assert not any(knob.flag in args for knob in tuning.KNOBS) and "--concurrency" not in args
-    assert args[args.index("--youtube-delay") + 1] == "3.5-6.5"
+    assert args[args.index("--youtube-delay") + 1] == "10-16"
 
 
 def test_changed_numbers_become_flags():
@@ -275,9 +275,146 @@ def test_youtube_waits_within_the_range_and_doubles_its_pause_after_blocks(tmp_p
     monkeypatch.setattr(youtube.asyncio, "sleep", no_wait)
     monkeypatch.setattr(youtube.random, "uniform", lambda a, b: ranges.append((a, b)) or a)
     asyncio.run(youtube.run_youtube(store, (2.0, 9.0)))
-    assert waits == [300.0, 600.0, 2.0]
+    assert waits == [1800.0, 3600.0, 4.0]  # at half speed now that it has been blocked
     assert ranges == [(2.0, 9.0)]
     store.close()
+
+
+def lane(tmp_path: Path, monkeypatch, fetch, urls: int = 1) -> tuple[Store, list[float]]:
+    store, _ = archive(tmp_path, [f"https://www.youtube.com/watch?v={chr(97 + n) * 11}" for n in range(urls)])
+    waits = []
+
+    async def no_wait(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(youtube, "fetch", fetch)
+    monkeypatch.setattr(youtube.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(youtube.random, "uniform", lambda a, b: a)
+    return store, waits
+
+
+def fetched(_key):
+    return {"status": "failed", "reason": "no_transcript"}
+
+
+def test_a_new_run_waits_out_a_block_from_the_last_run_and_goes_slower(tmp_path: Path, monkeypatch):
+    store, waits = lane(tmp_path, monkeypatch, fetched, urls=2)
+    youtube._write_block(tmp_path, youtube.time.time() - 600, 1)  # blocked 10 minutes into a 30-minute pause
+    asyncio.run(youtube.run_youtube(store, (2.0, 9.0)))
+    assert waits[0] == pytest.approx(1200, abs=5) and waits[1:] == [4.0]
+    store.close()
+
+
+def test_a_block_from_days_ago_is_forgotten(tmp_path: Path, monkeypatch):
+    store, waits = lane(tmp_path, monkeypatch, fetched, urls=2)
+    youtube._write_block(tmp_path, youtube.time.time() - 3 * 86400, 3)
+    asyncio.run(youtube.run_youtube(store, (2.0, 9.0)))
+    assert waits == [2.0]
+    store.close()
+
+
+def test_a_block_keeps_counting_until_enough_videos_go_through(tmp_path: Path, monkeypatch):
+    calls = {"n": 0}
+
+    def fetch(_key):  # one success between two blocks is no reason to think it's over
+        calls["n"] += 1
+        if calls["n"] in (1, 3):
+            raise youtube.Blocked("test")
+        return fetched(_key)
+
+    store, waits = lane(tmp_path, monkeypatch, fetch, urls=2)
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0)))
+    assert [w for w in waits if w > 60] == [1800.0, 3600.0]
+    store.close()
+
+
+def test_losing_the_connection_is_not_a_block(tmp_path: Path, monkeypatch):
+    calls = {"n": 0}
+
+    def fetch(_key):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise youtube.Offline("ConnectionError")
+        return fetched(_key)
+
+    store, waits = lane(tmp_path, monkeypatch, fetch, urls=2)
+    asyncio.run(youtube.run_youtube(store, (2.0, 9.0)))
+    assert waits == [300.0, 2.0]  # back to its normal pace
+    assert not (tmp_path / youtube.BLOCK_FILE).exists()
+    store.close()
+
+
+def test_the_earlier_pace_is_replaced_once_but_a_chosen_one_stays(tmp_path: Path):
+    (tmp_path / "ui.json").write_text(json.dumps({"options": {"youtube_delay_min": 3.5, "youtube_delay_max": 6.5, "youtube_block_wait": 5.0}}))
+    loaded = ui.load_config(tmp_path)["options"]
+    assert (loaded["youtube_delay_min"], loaded["youtube_delay_max"], loaded["youtube_block_wait"]) == (10.0, 16.0, 30.0)
+    (tmp_path / "ui.json").write_text(json.dumps({"options": {"youtube_delay_min": 2, "youtube_delay_max": 3}}))
+    loaded = ui.load_config(tmp_path)["options"]
+    assert (loaded["youtube_delay_min"], loaded["youtube_delay_max"]) == (2, 3)
+    (tmp_path / "ui.json").write_text(json.dumps({"options": {"youtube_pace_updated": True, "youtube_delay_min": 3.5, "youtube_delay_max": 6.5}}))
+    assert ui.load_config(tmp_path)["options"]["youtube_delay_min"] == 3.5
+
+
+def test_one_video_refused_by_the_bot_check_does_not_stop_the_lane(tmp_path: Path, monkeypatch):
+    seen = []
+
+    def fetch(key):
+        seen.append(key)
+        if len(seen) == 1:
+            raise youtube.OneRefused("RequestBlocked")
+        return fetched(key)
+
+    store, waits = lane(tmp_path, monkeypatch, fetch, urls=3)
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0)))
+    assert len(set(seen)) == len(seen) == 3 and waits == [2.0, 2.0]  # no pause, and no second try
+    assert store.db.execute("SELECT count(*) FROM urls WHERE reason = 'bot_check' AND status = 'failed'").fetchone()[0] == 1
+    assert not (tmp_path / youtube.BLOCK_FILE).exists()
+    store.close()
+
+
+def test_two_videos_refused_in_a_row_are_a_block(tmp_path: Path, monkeypatch):
+    seen = []
+
+    def fetch(key):
+        seen.append(key)
+        if len(seen) <= 2:
+            raise youtube.OneRefused("RequestBlocked")
+        return fetched(key)
+
+    store, waits = lane(tmp_path, monkeypatch, fetch, urls=2)
+    asyncio.run(youtube.run_youtube(store, (2.0, 2.0)))
+    assert waits[:2] == [2.0, 1800.0] and (tmp_path / youtube.BLOCK_FILE).exists()
+    assert store.db.execute("SELECT count(*) FROM urls WHERE reason = 'bot_check'").fetchone()[0] == 0
+    assert store.db.execute("SELECT count(*) FROM urls WHERE status = 'pending'").fetchone()[0] == 1  # the first still to do
+    store.close()
+
+
+@pytest.mark.parametrize("error, kind", [("IpBlocked", youtube.Blocked), ("RequestBlocked", youtube.OneRefused)])
+def test_only_the_bot_check_is_about_one_video(monkeypatch, error, kind):
+    from youtube_transcript_api import YouTubeTranscriptApi, _errors
+
+    def refuse(_self, video_id):
+        raise getattr(_errors, error)(video_id)
+
+    monkeypatch.setattr(YouTubeTranscriptApi, "list", refuse)
+    with pytest.raises(youtube.Blocked) as caught:
+        youtube.fetch_video("aaaaaaaaaaa")
+    assert type(caught.value) is kind
+
+
+def test_a_rate_limit_on_the_title_lookup_counts_as_a_block(monkeypatch):
+    def refused(*_a, **_k):
+        raise youtube.urllib.error.HTTPError("https://www.youtube.com/oembed", 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(youtube.urllib.request, "urlopen", refused)
+    with pytest.raises(youtube.Blocked):
+        youtube._oembed("aaaaaaaaaaa")
+
+
+def test_one_session_serves_every_video():
+    youtube._session.cache_clear()
+    assert youtube._session() is youtube._session()
+    youtube._session.cache_clear()
 
 
 def test_tweets_skip_scry_when_told_to(tmp_path: Path, monkeypatch):

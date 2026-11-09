@@ -298,8 +298,10 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 
 - **Transcripts:** these come from `youtube_transcript_api`, English first and then the video's own language, with human captions ahead of automatic ones. A video with no captions is stored as `thin`, with its title and channel.
 - **Playlists and channels:** these are read with `yt-dlp`, up to 2,000 video titles without their transcripts.
-- **Rate limits:** requests go out one at a time, a random `--youtube-delay MIN-MAX` (3.5-6.5) seconds apart. The lane has its own worker thread, so a block here can't hold up other documents.
-- **Blocks:** a blocked item stays `pending`. The lane pauses for 5, 10, 20, then 40 minutes (`--youtube-block-wait`), and after 5 blocks in a row (`--youtube-block-limit`) stops until the next run.
+- **Rate limits:** videos go one at a time, a random `--youtube-delay MIN-MAX` (10-16) seconds apart, which is about 240 an hour. YouTube publishes no limit. The figure usually quoted is yt-dlp's, about 300 videos an hour without signing in. The lane has its own worker thread, so a block here can't hold up other documents.
+- **Blocks:** a blocked item stays `pending`. The lane pauses for 30, 60, 120, then 240 minutes (`--youtube-block-wait`), and after 5 blocks in a row (`--youtube-block-limit`) stops until the next run. A block only stops counting towards the next pause after 25 videos in a row go through.
+- **One video refused:** YouTube's bot check can refuse one video while others go through. That counts as a block only if the next video is refused too. Otherwise the video is `failed` with reason `bot_check`, and `--retry-failed` tries it again. A 429 or a captcha page is always a block.
+- **After a block:** the block is remembered in `youtube_block.json` in the archive folder. A new run waits out what's left of the pause, and for 24 hours the lane goes at half speed. `--youtube-block-wait 0` skips the wait, which helps after changing network. Failing to reach YouTube at all isn't counted as a block.
 - **Finishing early:** once only YouTube is left, the log says so. Ctrl-C is safe, and the next run resumes.
 
 ### Local files
