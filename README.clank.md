@@ -359,6 +359,7 @@ These run over what's still failed or thin, cheapest first. Each keeps a result 
 2. **render** (`--render`, opt-in): headless Chromium, for pages that need JavaScript and for bot-challenge pages, which it waits out for `--challenge-wait` seconds. It costs a few hundred MB of RAM per page, so `--render-concurrency` defaults to 2.
 3. **doi:** failed paper links are matched by DOI, covering dead sci-hub mirrors, publisher `/doi/` pages, and nature.com and JSTOR IDs. Title, authors and abstract come from Scry's OpenAlex snapshot, then the OpenAlex API.
 4. **wayback:** the newest successful Wayback Machine capture, 4 requests at a time.
+5. **crawl** (`--scry-crawl`, opt-in, **Use Scry's copy of the page** under Advanced): the text Scry's web crawler last read from the page, under any of its http/https and www spellings, looked up 50 pages per query. It needs a Scry key, sends those pages' addresses to Scry, and stops once the run has spent `--scry-crawl-max-dollars` (1) on it. In one test, three pages found cost $0.006.
 
 ### Browser session
 

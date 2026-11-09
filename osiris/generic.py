@@ -6,6 +6,7 @@ keeping a result only when it beats what came before:
 - render (--render): blocked/thin pages in headless Chromium (osiris/render.py)
 - doi: title/authors/abstract for paper links, via OpenAlex (osiris/doi.py)
 - wayback: the newest 200 capture in the Wayback Machine for anything still failed or thin
+- crawl (--scry-crawl): Scry's crawl copy of what's still failed or thin (osiris/fixes.py)
 Each URL gets each fallback pass once (manifest column `tried`); --retry-failed resets that.
 """
 
@@ -551,7 +552,7 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                       browser_ua: str | None = None, render: bool = False, render_concurrency: int = 2,
                       chrome_profile: str | None = None, challenge_wait: float = 15.0,
                       refresh: list[tuple[str, str, int]] = (), pdf_at_once: int | None = None,
-                      via: str = "plain") -> None:
+                      via: str = "plain", crawl: bool = False, crawl_dollars: float = 1.0) -> None:
     """`via` fetches with one fallback's client from the start (impersonate, render or wayback),
     for a fix that asks for that method."""
     pdf_slots = asyncio.Semaphore(pdf_at_once or max(3, 2 * workers))  # downloaded and waiting to be read, or being read
@@ -627,3 +628,7 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
         # requests go to archive.org, so the per-site rules don't apply
         await fallback("wayback", lambda: WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, (),
                        lambda reason: not reason.startswith(NOT_FOR_WAYBACK), "failed/thin URLs from the Wayback Machine")
+    if crawl:  # opt-in: it sends these pages' addresses to Scry, and costs a little
+        from .fixes import run_crawl_pass
+
+        await run_crawl_pass(store, crawl_dollars)

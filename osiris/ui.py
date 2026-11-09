@@ -68,7 +68,8 @@ DEFAULT_CONFIG = {
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
                 "impersonate": True, "doi": True, "wayback": True, "refetch_comments": False, "refetch_stackexchange": False,
                 "refetch_comments_days": 30, "refetch_arxiv_pdfs": False, "pdf_at_once": "",
-                "scry_arxiv": False, "scry_arxiv_dollars": 5, "scry_youtube": False, "scry_youtube_dollars": 1, "log_font_px": 10,
+                "scry_arxiv": False, "scry_arxiv_dollars": 5, "scry_youtube": False, "scry_youtube_dollars": 1,
+                "scry_crawl": False, "scry_crawl_dollars": 1, "log_font_px": 10,
                 "contact": "", "youtube_pace_updated": True, "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
@@ -628,13 +629,15 @@ def _run_args(options: dict, url_file: Path, every_lane: bool = False) -> list[s
     for option, flag in (("retry_failed", "--retry-failed"), ("render", "--render"), ("keep_raw_pdfs", "--keep-raw-pdfs"),
                          ("refetch_comments", "--refetch-comments"), ("refetch_stackexchange", "--refetch-stackexchange"),
                          ("refetch_arxiv_pdfs", "--refetch-arxiv-pdfs"), ("scry_arxiv", "--scry-arxiv"),
-                         ("scry_youtube", "--scry-youtube")):
+                         ("scry_youtube", "--scry-youtube"), ("scry_crawl", "--scry-crawl")):
         if options.get(option):
             args.append(flag)
     if options.get("scry_arxiv"):
         args += ["--scry-arxiv-max-dollars", f"{_number(options, 'scry_arxiv_dollars', float, 0, 5):g}"]
     if options.get("scry_youtube"):
         args += ["--scry-youtube-max-dollars", f"{_number(options, 'scry_youtube_dollars', float, 0, 1):g}"]
+    if options.get("scry_crawl"):
+        args += ["--scry-crawl-max-dollars", f"{_number(options, 'scry_crawl_dollars', float, 0, 1):g}"]
     if options.get("refetch_comments"):
         args += ["--refetch-comments-days", f"{_number(options, 'refetch_comments_days', float, 0, 0):g}"]
     if options.get("pdf_at_once") not in ("", None):

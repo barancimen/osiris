@@ -289,6 +289,8 @@ const HELP = {
   impersonate: "If a page is refused, ask again looking exactly like Chrome. Fast, and it gets past many bot walls.",
   doi: "If a page is a paper with a DOI, get its title, authors and summary from a paper database.",
   wayback: "If everything else fails, use the Internet Archive's copy of the page.",
+  scry_crawl: "After the Wayback Machine, take the text Scry's web crawler last read from pages that still failed or came out thin. It's kept only if it's longer than what you have. This sends those pages' addresses to Scry, and costs a little from your Scry wallet.",
+  scry_crawl_dollars: "Once a run has spent this much on Scry's page copies, the rest wait for the next run.",
   tries: "How many times to try one page when the connection fails or the site has a temporary problem.",
   max_retry_wait: "The wait before each new try grows. It never goes past this, even if the site asks for longer.",
   site_down_after: "After this many connection failures in a row, the rest of that site is skipped for this run, so a dead site doesn't hold things up.",
@@ -454,7 +456,7 @@ const term = (text, explanation) => explanation ? h("span", {class: "term", titl
 const SOURCE_WHAT = {
   html: "Text taken from the web page", pdf: "Text taken from a PDF on the web", text: "A plain text file on the web",
   singlefile: "A page you saved with the SingleFile extension", html_file: "A saved web page",
-  doi: "The paper's title, authors and summary, found through its DOI", arxiv_abstract: "The paper's title, authors and summary from arXiv",
+  doi: "The paper's title, authors and summary, found through its DOI", scry: "Text from Scry's archive", arxiv_abstract: "The paper's title, authors and summary from arXiv",
   github: "The repository's description and README", reddit: "The post and its comments", tweet: "The post",
   hackernews: "The discussion and its comments", lesswrong: "The post and its comments",
   stackexchange: "The question with its answers and comments", youtube: "From YouTube", fulltext: "The paper's summary and full text",
@@ -464,6 +466,7 @@ const FILE_KIND = {pdf: "A PDF on this computer", text: "A text file on this com
 const SOURCE_HOW = {
   arxiv: "the paper's full text from arXiv, after its summary",
   wayback: "from a copy in the Internet Archive's Wayback Machine, because the live page didn't work",
+  crawl: "as Scry's web crawler last read the page",
   render: "opened in an invisible browser, because a plain download didn't work",
   impersonate: "fetched while looking like a regular Chrome browser, because a plain download was refused",
   ocr: "read from pictures of the pages (OCR)", transcript: "the video's captions", auto: "made automatically by YouTube",
@@ -663,10 +666,11 @@ function renderOptions() {
             h("button", {class: "btn", title: help("choose-file"), onclick: () => Picker.open({title: "Choose a copy of a Chrome profile", kind: "chrome", start: o.chrome_profile || o.picker_dirs.chrome || "", onPick: path => { setOption("chrome_profile", path); redrawOptions(); }})}, "Choose…"))),
         numbers(number("render_concurrency", "Pages open at once in that browser"), number("challenge_wait", "Wait for a bot check to clear", "sec"))),
       group("When a page fails",
-        ticks(check("impersonate", "Try again looking like Chrome"), check("doi", "Look papers up by DOI"), check("wayback", "Use the Wayback Machine")),
+        ticks(check("impersonate", "Try again looking like Chrome"), check("doi", "Look papers up by DOI"), check("wayback", "Use the Wayback Machine"), check("scry_crawl", "Use Scry's copy of the page")),
         numbers(number("tries", "Tries per page"), number("max_retry_wait", "Longest wait before trying again", "sec"),
           number("site_down_after", "Skip a site after this many dropped connections in a row"), number("site_refused_after", "Skip a site after this many refusals in a row"),
-          number("wayback_delay", "Wait between Wayback Machine requests", "sec"), number("thin_under", "Call a page thin below", "chars"))),
+          number("wayback_delay", "Wait between Wayback Machine requests", "sec"), number("thin_under", "Call a page thin below", "chars"),
+          number("scry_crawl_dollars", "Spend at most this on Scry's page copies, per run", "$"))),
       group("Speed",
         numbers(number("concurrency", "Downloads at once, overall"), number("per_host", "Downloads at once, per site"), number("pdf_at_once", "PDFs at once"),
           number("workers", "Documents read at once"), number("worker_mem_mb", "Memory limit for each one", "MB")),
@@ -995,7 +999,7 @@ const REASONS = [
   [/^bad_url$/, "The URL isn't valid."],
   [/^(bug:|error:)/, "Something went wrong in osiris itself. The run's log has the details."],
 ];
-const PASS_LABEL = {impersonate: "a browser's TLS fingerprint", render: "the headless browser", doi: "the DOI lookup", wayback: "the Wayback Machine", refresh: "a PDF refresh"};
+const PASS_LABEL = {impersonate: "a browser's TLS fingerprint", render: "the headless browser", doi: "the DOI lookup", wayback: "the Wayback Machine", crawl: "Scry's copy of the page", refresh: "a PDF refresh"};
 const explainReason = reason => REASONS.find(([re]) => re.test(reason || ""))?.[1] ?? "";
 const reasonLabel = reason => (reason || "unknown").replace(/^http_(\d+)$/, "HTTP $1").replace(/^non_text:/, "not text: ").replaceAll("_", " ");
 

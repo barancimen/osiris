@@ -114,6 +114,7 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
         "generic": lambda: run_generic(store, pool, args.workers, args.concurrency, args.per_host,
                                        args.contact, impersonate=not args.no_impersonate,
                                        keep_raw=args.keep_raw_pdfs, wayback=not args.no_wayback,
+                                       crawl=args.scry_crawl, crawl_dollars=args.scry_crawl_max_dollars,
                                        doi=not args.no_doi, rules=host_rules(args.host_limit),
                                        cookies=browser_cookies, browser_ua=args.user_agent, render=args.render,
                                        render_concurrency=args.render_concurrency,
@@ -629,6 +630,11 @@ def main() -> None:
                           "Much faster, but Scry's copy drops formulas. Sends your paper ids to Scry")
     run.add_argument("--scry-arxiv-max-dollars", type=float, default=5.0, metavar="N",
                      help="stop taking papers from Scry after spending this much in a run; the rest wait (default 5)")
+    run.add_argument("--scry-crawl", action="store_true",
+                     help="after every other fallback, take Scry's crawl copy of web pages still failed or thin; this "
+                          "sends their addresses to Scry")
+    run.add_argument("--scry-crawl-max-dollars", type=float, default=1.0, metavar="N",
+                     help="with --scry-crawl, stop once a run has spent this much on it (default %(default)s)")
     run.add_argument("--scry-youtube", action="store_true",
                      help="take a video's transcript from Scry when it has one, so that video never touches YouTube. "
                           "Sends your video ids to Scry")
