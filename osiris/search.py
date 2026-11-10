@@ -271,9 +271,10 @@ def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: 
         params += decision[1]
     clause = " AND ".join(where)
     joins = " LEFT JOIN r.scores s ON s.doc_id = d.doc_id LEFT JOIN r.decisions dec ON dec.doc_id = d.doc_id"
-    # documents waiting for you (a version to choose, a fix to check) come first, whatever the order
-    order = "(dec.decision IN ('choose', 'fixed')) DESC, " + (
-        "COALESCE(s.score, -1) DESC, d.doc_id" if garbage_first else f"bm25(fts, {', '.join(map(str, WEIGHTS))})")
+    # worst first for Review; otherwise documents waiting for you (a version to choose, a fix to
+    # check) come first, then the best matches
+    order = "COALESCE(s.score, -1) DESC, d.doc_id" if garbage_first else \
+        f"(dec.decision IN ('choose', 'fixed')) DESC, bm25(fts, {', '.join(map(str, WEIGHTS))})"
     db = connect(out, readonly=True)
     try:
         db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / 'review.sqlite'))}?mode=ro",))

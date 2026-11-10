@@ -1145,7 +1145,8 @@ async def documents(request: web.Request) -> web.Response:
     q = request.query
     where, params = _list_where(q)
     # documents waiting for you (a version to choose, a fix to check) come first, whatever the order
-    order = WAITING_FIRST + ("COALESCE(s.score, -1) DESC, u.doc_id" if q.get("sort") == "garbage" else "MIN(u.rowid) DESC")
+    # Review: worst first and nothing else; otherwise what's waiting for you comes first
+    order = "COALESCE(s.score, -1) DESC, u.doc_id" if q.get("sort") == "garbage" else WAITING_FIRST + "MIN(u.rowid) DESC"
     offset = max(int(q.get("offset", 0)), 0)
     manifest = _list_db(request.app["out"])
     try:
@@ -1228,7 +1229,8 @@ def _scan_text(out: Path, term: str, lane: str, status: str, garbage_first: bool
         items = [it for it in items if it["decision"] == decision]
     if garbage_first:
         items.sort(key=lambda it: -(it["score"] if it["score"] is not None else -1))
-    items.sort(key=lambda it: it["decision"] not in ("choose", "fixed"))  # waiting for you first
+    else:
+        items.sort(key=lambda it: it["decision"] not in ("choose", "fixed"))  # waiting for you first
     return {"items": items, "total": len(items), "limited": len(items) >= SCAN_LIMIT, "searched": searched,
             "terms": [{"word": term, "substring": True}]}
 
