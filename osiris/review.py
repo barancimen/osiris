@@ -8,8 +8,8 @@ A decision holds for the exact text it was made about. When a document's text ch
 is dropped and it's scored afresh. A fix that was tried and changed nothing comes back as `bad`, so
 it can't be forgotten.
 
-Fetching again never decides for you. A document's file and manifest rows are kept before it's
-queued. If the fetch gives different text, the next check keeps both versions and the document waits
+Fetching again and OCR never decide for you. A document's file and manifest rows are kept before
+the fix runs. If it gives different text, the next check keeps both versions and the document waits
 under Choose version until you pick one; until then it's left out of exports. A fetch that failed
 puts the earlier document back as it was, with its earlier status, and it comes back as Bad.
 """
@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 FLAGGED = 0.35  # at or above this, a document is on the review list
 SAMPLE = 60_000  # characters read from each of three places in a long document
 OUTSIDE_LIST = ("fine", "unfixable")
-CHOOSE = "choose"  # set by the check, never by hand: fetching again gave different text, and you pick
+CHOOSE = "choose"  # set by the check, never by hand: fetching again or OCR gave different text, and you pick
 FIXED = "fixed"  # set by the check, never by hand: a fix you queued changed the text, for you to look over
 EXCLUDED = ("bad", "unfixable", CHOOSE)  # left out of `osiris export` and review-exclude.txt
 DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE TABLE IF NOT EXISTS refetch_kept (
     doc_id   TEXT PRIMARY KEY,
     original BLOB,             -- the document's file before fetching again, zstd; NULL if it had none
-    rows     TEXT NOT NULL     -- JSON: its manifest rows then, to put back if you keep the earlier version
+    rows     TEXT NOT NULL,    -- JSON: its manifest rows then, to put back if you keep the earlier version
+    fix      TEXT              -- ocr | refetch: the fix it was kept for
 );
 """
 
@@ -124,6 +125,8 @@ def connect(out: str | Path) -> sqlite3.Connection:
     db.executescript(SCHEMA)
     if "method" not in {row[1] for row in db.execute("PRAGMA table_info(decisions)")}:  # from before fix methods
         db.execute("ALTER TABLE decisions ADD COLUMN method TEXT")
+    if "fix" not in {row[1] for row in db.execute("PRAGMA table_info(refetch_kept)")}:  # from before OCR kept it too
+        db.execute("ALTER TABLE refetch_kept ADD COLUMN fix TEXT")
     return db
 
 
@@ -292,8 +295,10 @@ def _settle(db: sqlite3.Connection, store: Store, current: set[str]) -> dict[str
         label = "OCR" if decision == "ocr" else "Fetching again"
         fixed = (FIXED, "; ".join(filter(None, (note, f"{label} changed the text"))), hashes.get(did), did)
         kept = db.execute("SELECT original, rows FROM refetch_kept WHERE doc_id = ?", (did,)).fetchone()
-        if decision == "refetch" and applied and kept:
-            outcome = _judge_refetch(db, store, did, kept, did in current)
+        # an OCR run stopped before it was marked done may still have read this one
+        reached = applied or (decision == "ocr" and did in current and hashes.get(did) != old_hash)
+        if decision in ("ocr", "refetch") and reached and kept:
+            outcome = _judge_refetch(db, store, did, kept, did in current, label)
             if outcome == CHOOSE:  # both versions stay until you pick one
                 db.execute("UPDATE decisions SET decision = ?, hash = ?, applied_at = NULL WHERE doc_id = ?",
                            (CHOOSE, hashes.get(did), did))
@@ -344,8 +349,8 @@ ROW_FIELDS = ("url", "status", "reason", "http_status", "final_url", "content_ty
               "updated_at")
 
 
-def _keep_for_refetch(store: Store, db: sqlite3.Connection, key: str) -> None:
-    """The document as it is, to put back if fetching it again doesn't give anything better."""
+def _keep_for_refetch(store: Store, db: sqlite3.Connection, key: str, fix: str = "refetch") -> None:
+    """The document as it is, to put back if fetching it again or OCR doesn't give anything better."""
     import zstandard
 
     did = doc_id(key)
@@ -356,23 +361,24 @@ def _keep_for_refetch(store: Store, db: sqlite3.Connection, key: str) -> None:
     rows = [dict(zip(ROW_FIELDS, r)) for r in store.db.execute(
         f"SELECT {', '.join(ROW_FIELDS)} FROM urls WHERE doc_key = ?", (key,))]
     # the first copy is the one to keep: fetching again twice before a check mustn't keep the second try
-    db.execute("INSERT OR IGNORE INTO refetch_kept VALUES (?, ?, ?)", (did, original, json.dumps(rows)))
+    db.execute("INSERT OR IGNORE INTO refetch_kept VALUES (?, ?, ?, ?)", (did, original, json.dumps(rows), fix))
 
 
-def _judge_refetch(db: sqlite3.Connection, store: Store, did: str, kept: tuple, here: bool) -> str | None:
-    """What fetching again came to: CHOOSE if it gave different text. Otherwise a note saying what
-    happened, or None if there's no earlier document to compare it with."""
+def _judge_refetch(db: sqlite3.Connection, store: Store, did: str, kept: tuple, here: bool,
+                   label: str = "Fetching again") -> str | None:
+    """What fetching again or OCR came to: CHOOSE if it gave different text. Otherwise a note saying
+    what happened, or None if there's no earlier document to compare it with."""
     import zstandard
 
     original, rows = kept
     if original is None:  # nothing to go back to: whatever came is all there is
-        return None if here else "Fetching again failed"
+        return None if here else f"{label} failed"
     old_raw = zstandard.ZstdDecompressor().decompress(original)
     if here:
         return CHOOSE if store.read_doc(did)[1] != parse_doc(old_raw.decode("utf-8"))[1] \
-            else "Fetching again changed nothing"
+            else f"{label} changed nothing"
     _put_back(db, store, did, old_raw, json.loads(rows))
-    return "Fetching again failed, so the earlier text was put back"
+    return f"{label} failed, so the earlier text was put back"
 
 
 def _put_back(db: sqlite3.Connection, store: Store, did: str, old_raw: bytes, rows: list[dict]) -> None:
@@ -391,15 +397,16 @@ def _put_back(db: sqlite3.Connection, store: Store, did: str, old_raw: bytes, ro
 
 
 def earlier_version(db: sqlite3.Connection, did: str) -> dict | None:
-    """The text a document waiting for your choice had before it was fetched again."""
+    """The text a document waiting for your choice had before it was fetched again or OCR'd."""
     import zstandard
 
-    row = db.execute("SELECT k.original, s.lane FROM refetch_kept k JOIN decisions d USING (doc_id)"
+    row = db.execute("SELECT k.original, s.lane, k.fix FROM refetch_kept k JOIN decisions d USING (doc_id)"
                      " JOIN scores s USING (doc_id) WHERE k.doc_id = ? AND d.decision = ?", (did, CHOOSE)).fetchone()
     if row is None or row[0] is None:
         return None
     meta, body = parse_doc(zstandard.ZstdDecompressor().decompress(row[0]).decode("utf-8"))
-    return {"body": body, "length": len(body), "score": score_text(body, row[1]), "source": meta.get("source")}
+    return {"body": body, "length": len(body), "score": score_text(body, row[1]), "source": meta.get("source"),
+            "fix": row[2] or "refetch"}
 
 
 def choose(store: Store, db: sqlite3.Connection, did: str, keep_new: bool) -> None:
@@ -407,12 +414,16 @@ def choose(store: Store, db: sqlite3.Connection, did: str, keep_new: bool) -> No
     undecided again, so the text you kept gets a look like any other."""
     import zstandard
 
-    kept = db.execute("SELECT k.original, k.rows FROM refetch_kept k JOIN decisions d USING (doc_id)"
+    kept = db.execute("SELECT k.original, k.rows, k.fix FROM refetch_kept k JOIN decisions d USING (doc_id)"
                       " WHERE k.doc_id = ? AND d.decision = ?", (did, CHOOSE)).fetchone()
     if kept is None:
         raise ValueError(did)
     if not keep_new:
-        _put_back(db, store, did, zstandard.ZstdDecompressor().decompress(kept[0]), json.loads(kept[1]))
+        rows = json.loads(kept[1])
+        if kept[2] == "ocr":  # OCR was tried: a later run's OCR pass mustn't replace the text you kept
+            for r in rows:
+                r["tried"] = (r["tried"] or "") + ("" if ",ocr" in (r["tried"] or "") else ",ocr")
+        _put_back(db, store, did, zstandard.ZstdDecompressor().decompress(kept[0]), rows)
     db.execute("DELETE FROM decisions WHERE doc_id = ?", (did,))
     db.execute("DELETE FROM refetch_kept WHERE doc_id = ?", (did,))
     db.commit()
@@ -436,6 +447,8 @@ def decide(db: sqlite3.Connection, doc_ids: list[str], decision: str | None, not
     document waiting between two versions stays waiting: only choose() can settle it."""
     waiting = {did for (did,) in db.execute("SELECT doc_id FROM decisions WHERE decision = ?", (CHOOSE,))}
     doc_ids = [d for d in doc_ids if d not in waiting]
+    if decision not in ("ocr", "refetch"):  # a copy kept for a fix that was stopped and then given up
+        db.executemany("DELETE FROM refetch_kept WHERE doc_id = ?", ((d,) for d in doc_ids))
     if decision is None:
         db.executemany("DELETE FROM decisions WHERE doc_id = ?", ((d,) for d in doc_ids))
     else:
@@ -506,12 +519,20 @@ def prepare_refetch(store: Store, db: sqlite3.Connection, fixes: list[tuple[str,
             continue
         _keep_for_refetch(store, db, key)
         if method in fetched_like_new:
-            store.db.execute("UPDATE urls SET status = 'pending', tried = '' WHERE doc_key = ?", (key,))
+            # its old length too: every pass, OCR included, keeps what it gets only if it's longer than that
+            store.db.execute("UPDATE urls SET status = 'pending', tried = '', chars = NULL WHERE doc_key = ?", (key,))
         db.execute("UPDATE decisions SET applied_at = ? WHERE doc_id = ?", (now_iso(), doc_id(key)))
         ready.append((key, lane, method))
     store.commit()
     db.commit()
     return ready
+
+
+def keep_before_ocr(store: Store, db: sqlite3.Connection, keys: list[str]) -> None:
+    """Keep each document as it is, so you can compare it with what OCR reads, or go back to it."""
+    for key in keys:
+        _keep_for_refetch(store, db, key, "ocr")
+    db.commit()
 
 
 def mark_ocr_applied(db: sqlite3.Connection, keys: list[str]) -> None:

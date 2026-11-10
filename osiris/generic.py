@@ -418,7 +418,8 @@ class HostScheduler:
 class GenericPass:
     def __init__(self, store: Store, client, reader: Reader, pool: extract.WorkerPool, workers: int,
                  keep_raw: bool = False, prev_chars: dict[str, int] | None = None,
-                 pass_name: str | None = None, rules: tuple[HostRule, ...] = (), pdf_only: bool = False):
+                 pass_name: str | None = None, rules: tuple[HostRule, ...] = (), pdf_only: bool = False,
+                 failures_too: bool = False):
         self.store = store
         self.pdf_only = pdf_only  # a refreshed PDF isn't replaced by whatever page its URL now serves
         self.keep_raw = keep_raw
@@ -429,6 +430,8 @@ class GenericPass:
         self.pool = pool
         self.extract_slots = asyncio.Semaphore(2 * workers)
         self.prev_chars = prev_chars  # set on the upgrade pass: only better results get recorded
+        # and why it failed, over an earlier failure: the passes after it pick their links by that reason
+        self.failures_too = failures_too
         self.attempts: Counter[str] = Counter()
         self.host_failures: Counter[str] = Counter()
         self.host_forbidden: Counter[str] = Counter()
@@ -492,7 +495,7 @@ class GenericPass:
     def _fail(self, url: str, reason: str, f: Fetched, raw_path: str | None = None) -> None:
         if self.progress:
             self.progress.failed += 1
-        if self.prev_chars is not None:
+        if self.prev_chars is not None and not (self.failures_too and self.prev_chars.get(url, -1) < 0):
             return  # upgrade pass: keep the pass-1 record
         self.store.record(url, "failed", reason, http_status=f.status or None, final_url=f.final_url,
                           content_type=f.content_type, **({"raw_path": raw_path} if raw_path else {}))
@@ -563,7 +566,8 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                       refresh: list[tuple[str, str, int]] = (), pdf_at_once: int | None = None,
                       via: str = "plain", crawl: bool = False, crawl_dollars: float = 1.0) -> None:
     """`via` fetches with one fallback's client from the start (impersonate, render or wayback),
-    for a fix that asks for that method."""
+    for a fix that asks for that method. What it can't get goes through the other ways in the usual
+    order, the plain download first, skipping the one already tried."""
     pdf_slots = asyncio.Semaphore(pdf_at_once or max(3, 2 * workers))  # downloaded and waiting to be read, or being read
     reader = Reader(store.tmp_dir, pdf_slots)
 
@@ -571,6 +575,7 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
     log.info("generic: %d URLs across %d hosts", len(urls), len({host_of(u) for u in urls}))
     if refresh and urls:
         log.info("generic: %d web PDFs will be read again once the %d waiting URLs are done", len(refresh), len(urls))
+    usual = concurrency, per_host, rules  # for the plain download, when it comes after a fix's own way
     if via == "impersonate":
         client, concurrency, per_host = CurlClient(reader, 16, cookies), 16, 2
     elif via == "render":
@@ -599,7 +604,8 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
     finally:
         await client.close()
 
-    async def fallback(name, make_client, pass_concurrency, pass_per_host, pass_rules, eligible, what, url_ok=None):
+    async def fallback(name, make_client, pass_concurrency, pass_per_host, pass_rules, eligible, what, url_ok=None,
+                       failures_too=False):
         candidates = [(key, chars) for key, chars in store.retry_candidates("generic", name, eligible)
                       if url_ok is None or url_ok(key)]
         if not candidates:
@@ -615,16 +621,19 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
                               name, len(candidates), e)
                     return
             upgrade = GenericPass(store, client, reader, pool, workers, keep_raw, prev_chars=dict(candidates),
-                                  pass_name=name, rules=pass_rules)
+                                  pass_name=name, rules=pass_rules, failures_too=failures_too)
             await upgrade.run([key for key, _ in candidates], pass_concurrency, pass_per_host)
         finally:
             await client.close()
 
     # cheapest first: each pass only sees what the passes before it couldn't fix
-    if impersonate:
+    if via != "plain":
+        await fallback("plain", lambda: AiohttpClient(reader, usual[0], usual[1], contact, cookies, browser_ua),
+                       *usual, lambda reason: True, "failed/thin URLs downloaded the usual way", failures_too=True)
+    if impersonate and via != "impersonate":
         await fallback("impersonate", lambda: CurlClient(reader, 16, cookies), 16, 2, rules,
                        lambda reason: reason in BLOCKED, "blocked/thin URLs with a browser fingerprint")
-    if render:
+    if render and via != "render":
         from .render import RenderClient
 
         await fallback("render", lambda: RenderClient(render_concurrency, cookies, browser_ua, chrome_profile,
@@ -635,7 +644,7 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
         from .doi import run_doi_pass
 
         await run_doi_pass(store, contact)
-    if wayback:
+    if wayback and via != "wayback":
         # requests go to archive.org, so the per-site rules don't apply
         await fallback("wayback", lambda: WaybackClient(reader), WAYBACK_CONCURRENCY, WAYBACK_CONCURRENCY, (),
                        lambda reason: not reason.startswith(NOT_FOR_WAYBACK), "failed/thin URLs from the Wayback Machine")

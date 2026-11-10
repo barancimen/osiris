@@ -368,6 +368,7 @@ async def _run_fixes(store: Store, args: argparse.Namespace) -> None:
             if problem := ocr_unavailable(lang):
                 log.warning("fixes: %d PDFs not read with OCR: %s", len(keys), problem)
                 continue
+            review.keep_before_ocr(store, db, keys)
             await run_ocr(store, lang, args.workers, args.worker_mem_mb, forced=keys)
             review.mark_ocr_applied(db, keys)
     finally:
@@ -415,13 +416,20 @@ async def _fix(store: Store, args: argparse.Namespace, method: str, docs: list[t
             store.db.executemany("UPDATE urls SET tried = replace(tried, ?, '') WHERE doc_key = ?",
                                  ((f",{arxiv.FULLTEXT}", key) for key in keys))
             await arxiv.add_full_text(store, pool, args.keep_raw_pdfs)
-        else:  # impersonate, render or wayback: that one way of fetching a web page, from the start
+        else:  # impersonate, render or wayback first; then the other ways, and OCR, as in a run
             await run_generic(store, pool, args.workers, args.concurrency, args.per_host, args.contact,
-                              impersonate=False, keep_raw=args.keep_raw_pdfs, wayback=False, doi=False,
+                              impersonate=not args.no_impersonate, keep_raw=args.keep_raw_pdfs,
+                              wayback=not args.no_wayback, doi=not args.no_doi,
+                              crawl=args.scry_crawl, crawl_dollars=args.scry_crawl_max_dollars,
                               rules=host_rules(args.host_limit),
                               cookies=cookies.load(args.cookies) if args.cookies else [],
-                              browser_ua=args.user_agent, render_concurrency=args.render_concurrency,
+                              browser_ua=args.user_agent, render=args.render,
+                              render_concurrency=args.render_concurrency,
                               chrome_profile=args.chrome_profile, challenge_wait=args.challenge_wait, via=method)
+            if not args.no_ocr and not (problem := ocr_unavailable(args.ocr_lang)):
+                await run_ocr(store, args.ocr_lang, args.workers, args.worker_mem_mb, lanes=["generic"])
+            elif not args.no_ocr:
+                log.warning("fixes: PDFs with no text weren't read with OCR: %s", problem)
     finally:
         pool.shutdown()
 

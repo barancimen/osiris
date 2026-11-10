@@ -24,7 +24,7 @@ from pathlib import Path
 
 import aiohttp
 
-from . import extract, review
+from . import extract
 from .localfile import candidate_paths
 from .route import doc_id
 from .store import Store
@@ -41,9 +41,12 @@ TRIED = "ocr"
 LANES = ("generic", "localfile")  # the lanes whose PDFs can come back with no text
 
 
-def _page_text(image: bytes, lang: str) -> str:
+def _page_text(image: bytes, lang: str, orient: bool = False) -> str:
+    # orient: find which way up the page is first (tesseract's osd), so a sideways or upside-down
+    # page is turned before it's read, as scanned slides often are; an upright page reads the same
+    mode = ["--psm", "1"] if orient else []
     # one thread per tesseract: the workers are the unit of parallelism
-    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", lang], input=image, capture_output=True,
+    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", lang, *mode], input=image, capture_output=True,
                             timeout=PAGE_TIMEOUT, env={**os.environ, "OMP_THREAD_LIMIT": "1"})
     if result.returncode:
         raise RuntimeError(result.stderr.decode("utf-8", "replace")[-200:])
@@ -68,7 +71,7 @@ def pdf_info(path: str) -> dict:
             pdf.close()
 
 
-def read_page(path: str, index: int, lang: str) -> dict:
+def read_page(path: str, index: int, lang: str, orient: bool = False) -> dict:
     """Runs in an OCR worker. The PDF is only opened for reading. The text comes back as "page", not
     "text", because repairs that rejoin words have to see the whole document."""
     import pypdfium2 as pdfium
@@ -86,7 +89,7 @@ def read_page(path: str, index: int, lang: str) -> dict:
         buffer = BytesIO()
         page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
         page.close()
-        text = _page_text(buffer.getvalue(), lang)
+        text = _page_text(buffer.getvalue(), lang, orient)
     except subprocess.TimeoutExpired:
         text = ""  # one bad page shouldn't cost the rest of the book
     except Exception as e:
@@ -108,14 +111,23 @@ def pages_to_doc(pages: list[str], title: str | None, author: str | None, error:
 pages_to_doc.pdf_text = True  # tesseract breaks words at line ends like a typesetter: clean.py rejoins them
 
 
+def _languages() -> set[str]:
+    listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30)
+    return set((listed.stdout + listed.stderr).split())
+
+
+def can_orient() -> bool:
+    """Whether tesseract can tell which way up a page is: its osd data comes with most installs."""
+    return bool(shutil.which("tesseract")) and "osd" in _languages()
+
+
 def unavailable(lang: str) -> str | None:
     """Why OCR can't run in these languages, if so. Checked up front because a page that fails for
     this reason would otherwise count as the PDF's one try."""
     if not shutil.which("tesseract"):
         return ("tesseract isn't installed. On Debian/Ubuntu: apt install tesseract-ocr "
                 "(and tesseract-ocr-tur etc. for other languages); on macOS: brew install tesseract")
-    listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30)
-    have = set((listed.stdout + listed.stderr).split())
+    have = _languages()
     missing = [code for code in lang.split("+") if code not in have]
     if missing:
         return (f"tesseract has no language pack for {', '.join(missing)}. On Debian/Ubuntu: "
@@ -171,12 +183,16 @@ async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str
 
 async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: bool = False, limit: int | None = None,
                   lanes: Iterable[str] = LANES, forced: list[str] | None = None) -> None:
-    """With `forced` (doc keys), only those are read, and the result replaces the text when it scores
-    better rather than when it's longer: a garbage text layer can be longer than the truth."""
+    """With `forced` (doc keys, the fixes you asked for), only those are read, and any text that differs
+    from the document's replaces it: review kept the earlier version, and you choose between them."""
     todo = forced_rows(store, forced) if forced is not None else candidates(store, retry, lanes)[:limit]
     log.info("ocr: %d PDFs with no usable text, language %s, %d pages at a time", len(todo), lang, workers)
     if not todo:
         return
+    orient = await asyncio.to_thread(can_orient)
+    if not orient:
+        log.info("ocr: tesseract has no osd data, so sideways or upside-down pages will come out garbled. "
+                 "On Debian/Ubuntu: apt install tesseract-ocr-osd")
     pool = extract.WorkerPool(workers, mem_mb)
     open_pdfs = asyncio.Semaphore(workers)  # downloaded or being read
     page_slots = asyncio.Semaphore(workers)  # one core each; first come first served, so PDFs finish in turn
@@ -198,7 +214,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
                 if spent > limit:
                     problem = "ocr_timeout"  # what's read by then is kept
                     return ""
-                res = await pool.run(read_page, str(path), index, lang)
+                res = await pool.run(read_page, str(path), index, lang, orient)
             spent += res.get("seconds", 0.0)
             problem = problem or res.get("error")
             return res.get("page") or ""
@@ -235,7 +251,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
         finished += 1
         if forced is not None:
             old = store.read_doc(doc_id(doc_key))
-            improved = bool(text) and (old is None or review.score_text(text, lane) < review.score_text(old[1], lane))
+            improved = bool(text) and (old is None or text != old[1].strip())
         else:
             improved = len(text) > chars
         if not improved:

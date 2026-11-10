@@ -393,11 +393,11 @@ const HELP = {
   "method-twitterapi": "Look the tweet up on twitterapi.io, which charges for every tweet.",
   "decide-fine": "This one looks OK. It won't come up for review again unless its text changes.",
   "decide-bad": "This one is garbage. It's left out of exports.",
-  "decide-ocr": "Read this PDF again from pictures of its pages, now, or as soon as the job running now is done. The new text is only kept if it looks better.",
+  "decide-ocr": "Read this PDF again from pictures of its pages, now, or as soon as the job running now is done. If the text comes back different, you choose which version to keep.",
   "decide-refetch": "Download or read this again, the way chosen next to it, now, or as soon as the job running now is done. If the text comes back different, you choose which version to keep. If it can't be fetched, this one stays as it is.",
   "arxiv-full-text-row": "Counted by paper. Waiting: full text not looked for yet. Saved: it has its full text. Thin: arXiv had no full text for it, so it keeps its abstract.",
   "scholar-row": "Your Google Scholar links. They're already counted in Web pages and PDFs just above, so this row isn't extra.",
-  "keep-new": "Keep the text from the new fetch. The earlier version is deleted.",
+  "keep-new": "Keep the new text. The earlier version is deleted.",
   "keep-earlier": "Go back to the earlier text, exactly as it was. The new version is deleted.",
   "decide-unfixable": "Garbage that can't be repaired. It's left out of exports and off your to-do list.",
   "decide-undo": "Take back your decision.",
@@ -420,7 +420,7 @@ const LANE_HELP = {
 };
 const VIEW_HELP = {
   none: "Documents you haven't decided on yet.",
-  choose: "Fetching again gave different text. Both versions are kept until you pick one, and these stay out of exports until then.",
+  choose: "Fetching again or OCR gave different text. Both versions are kept until you pick one, and these stay out of exports until then.",
   fixed: "Documents whose text a fix you queued has changed. They stay here until you mark them, so you can check the result.",
   bad: "Ones you marked as garbage. They're left out of exports.",
   ocr: "Scanned PDFs waiting to be read again when you press Run fixes.",
@@ -1537,7 +1537,7 @@ function renderChoice(host, d, keep, extra) {
     h("div", {class: "detail-head"},
       h("h2", {}, d.meta.title || d.original.name || d.url),
       h("div", {class: "meta"}, url ? h("a", {href: url, target: "_blank", rel: "noreferrer noopener"}, url) : h("span", {}, d.original.path || d.url)),
-      h("div", {class: "decide-row"}, h("span", {style: "flex:1"}, "Fetching again gave different text. Keep one, and the other is deleted."), extra)),
+      h("div", {class: "decide-row"}, h("span", {style: "flex:1"}, `${d.earlier.fix === "ocr" ? "OCR" : "Fetching again"} gave different text. Keep one, and the other is deleted.`), extra)),
     h("div", {class: "versions"}, earlier.el, fresh.el));
 }
 

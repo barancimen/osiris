@@ -75,8 +75,8 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 |---|---|
 | **Fine** | Stays off the list unless its text changes |
 | **Bad** | Left out of `export` and listed in `data/review-exclude.txt`. It stays under **Bad** until you decide otherwise |
-| **OCR it** | PDFs only. Reads the PDF with OCR in the language chosen next to it, and replaces the text if the new text scores better, even if it's shorter |
-| **Fetch again** | Fetches or reads it again, the way chosen next to it (below). If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
+| **OCR it** | PDFs only. Reads the PDF with OCR in the language chosen next to it. If the text comes back different, the document waits under **Choose version** with both versions kept, as with Fetch again. If OCR reads nothing, the earlier text stays |
+| **Fetch again** | Fetches or reads it again, the way chosen next to it (below). For a web page or PDF, if that way doesn't work, the others follow in a run's order (the plain download, impersonate, browser, DOI, Wayback, Scry's crawl if ticked, then OCR), skipping the one already tried. The old length is forgotten first, so whatever comes back is kept to compare. If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
 | **Can't fix** | Like Bad, but no longer counted as something to come back to |
 
 Any document can be decided on, including ones the check hasn't scored yet and ones that failed.
@@ -96,7 +96,7 @@ Fetching again the usual way picks up new comments on Hacker News, LessWrong and
 
 **OCR it** and **Fetch again** start at once, for that document only: nothing else waiting in the archive is fetched. osiris runs one job at a time, so if a job is already running, the fix starts by itself as soon as that job ends, carrying on in the same log. After **Stop**, waiting fixes stay put until you press **Run fixes**. After a fixes job, only fixes asked for during it start by themselves, so one that can't work, such as OCR without tesseract, doesn't loop. The other decisions don't change your documents. A decision only holds for the exact text it was about: if the text changes, the document is scored afresh. A fix that didn't help comes back as Bad, with a note saying so, and the document as it was before.
 
-**Choose version** lists documents that Fetch again changed. Both versions show side by side, earlier on the left and new on the right, each with its length, garbage score and where its text came from (such as `pdf:ocr`). Scrolling one scrolls the other to the same share of its length. **Keep this one** keeps that side and deletes the other, then returns the document to undecided. Documents waiting for a choice, and those under **Fixed**, come first in every list, whatever the order and filters. Until you pick, the new text is the one on disk, and the document is left out of `export`. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris run --fixes`.
+**Choose version** lists documents that Fetch again or OCR it changed. Both versions show side by side, earlier on the left and new on the right, each with its length, garbage score and where its text came from (such as `pdf:ocr`). Scrolling one scrolls the other to the same share of its length. **Keep this one** keeps that side and deletes the other, then returns the document to undecided. Documents waiting for a choice, and those under **Fixed**, come first in every list, whatever the order and filters. Until you pick, the new text is the one on disk, and the document is left out of `export`. Keeping the earlier text after OCR still counts the PDF as OCR'd, so a later run's OCR pass won't replace it. Run fixes reaches this through its last step, the garbage check. From the command line, run `osiris review scan` after `osiris run --fixes`.
 
 **Fixed** lists documents whose text OCR or Fetch again changed, where there was no earlier version to choose from. They stay there, however well they score now, until you mark them **Fine** or queue another fix. They aren't left out of exports.
 
@@ -190,7 +190,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
 - **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
 
-**What can change:** files in `data/`. **OCR it** replaces a document's saved text when the new text is better, and **Fetch again** when you choose the new version, though neither touches the original. **Delete…** removes a document's files from `data/` only. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
+**What can change:** files in `data/`. **OCR it** and **Fetch again** replace a document's saved text when you choose the new version, though neither touches the original. **Delete…** removes a document's files from `data/` only. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
 
 ## Commands
 
@@ -393,6 +393,7 @@ Files of any size are accepted. What's left to stop a runaway file is each worke
 - **Results:** text is kept only if there's more of it than before, with `source: pdf:ocr` or `file:pdf:ocr`.
 - **Languages:** `--ocr-lang eng+tur` sets them, after installing their packs. The default is English. List only what you need, since each extra language is slower and can lower accuracy.
 - **Missing tesseract:** if tesseract or a language pack is missing, the run logs a warning and carries on, and those PDFs wait without using up their try.
+- **Sideways and upside-down pages:** each page's orientation is found first (tesseract's `--psm 1`), so scanned slides and rotated pages come out as text. Upright pages read the same, about a second slower each. This needs tesseract's `osd` data, which most installs include (`apt install tesseract-ocr-osd` otherwise); without it the run says so and reads pages as they are. PDFs OCR'd before this, upside down, keep their garbled text until you press **OCR it** on them.
 - **Pictures of letters:** some old TeX papers draw every letter as a numbered picture, so reading them gives codes instead of text. A PDF whose text is more than 5% control characters is treated as having no text, so OCR reads it.
 - **Limitation:** a PDF with a few readable pages and many scanned ones counts as having text, so it isn't picked up.
 

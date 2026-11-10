@@ -75,7 +75,7 @@ class InProcessPool:
 def test_ocr_reads_every_page_in_order_using_every_core_on_a_single_book(tmp_path: Path, monkeypatch):
     store, key = scanned_book(tmp_path, 40)
     numbers = iter(range(40))
-    monkeypatch.setattr(ocr, "_page_text", lambda image, lang: f"Words of a scanned page number {next(numbers)}, long enough to keep. " * 2)
+    monkeypatch.setattr(ocr, "_page_text", lambda image, lang, orient=False: f"Words of a scanned page number {next(numbers)}, long enough to keep. " * 2)
     monkeypatch.setattr(extract, "WorkerPool", InProcessPool)
     InProcessPool.most = 0
     asyncio.run(ocr.run_ocr(store, "eng", 4, 0))
@@ -89,7 +89,7 @@ def test_ocr_reads_every_page_in_order_using_every_core_on_a_single_book(tmp_pat
 def test_one_bad_ocr_page_does_not_cost_the_book(tmp_path: Path, monkeypatch):
     store, key = scanned_book(tmp_path, 6)
 
-    def page_text(image, lang, seen=[]):
+    def page_text(image, lang, orient=False, seen=[]):
         seen.append(1)
         if len(seen) == 3:
             raise RuntimeError("tesseract fell over")
@@ -105,7 +105,7 @@ def test_one_bad_ocr_page_does_not_cost_the_book(tmp_path: Path, monkeypatch):
 
 def test_ocr_stops_a_document_once_its_time_is_used_up_and_keeps_what_it_read(tmp_path: Path, monkeypatch):
     store, key = scanned_book(tmp_path, 8)
-    monkeypatch.setattr(ocr, "_page_text", lambda image, lang: "A perfectly ordinary scanned page of words that came out fine. " * 2)
+    monkeypatch.setattr(ocr, "_page_text", lambda image, lang, orient=False: "A perfectly ordinary scanned page of words that came out fine. " * 2)
     monkeypatch.setattr(extract, "WorkerPool", InProcessPool)
     monkeypatch.setattr(ocr, "DOC_TIMEOUT", -1)
     monkeypatch.setattr(ocr, "DOC_SECONDS_PER_PAGE", 0)
