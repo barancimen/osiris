@@ -1,4 +1,4 @@
-"""CLI: osiris ui | run URLFILE | import PATH | ocr | review | clean | search QUERY | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | ocr | review | clean | blocked | search QUERY | stats | export"""
 
 from __future__ import annotations
 
@@ -468,6 +468,37 @@ def cmd_clean(args: argparse.Namespace) -> None:
           + ("" if args.dry_run else "; `osiris clean --undo` puts the originals back"))
 
 
+def cmd_blocked(args: argparse.Namespace) -> None:
+    """Saved Google Scholar pages that are only Google's block page: listed, or with --apply removed,
+    their links waiting to be fetched again."""
+    from collections import Counter
+
+    from . import cleanup, scholar
+
+    store = Store(args.out)
+    try:
+        found = scholar.saved_blocks(store)
+        for did, url, source in found[:20]:
+            print(f"  {did}  {source:<16} {url[:100]}")
+        if len(found) > 20:
+            print(f"  ... and {len(found) - 20} more")
+        by_source = ", ".join(f"{n} {source}" for source, n in Counter(s for _, _, s in found).most_common())
+        print(f"\n{len(found)} saved pages are only Google's block page" + (f" ({by_source})" if found else ""))
+        if not found:
+            return
+        if not args.apply:
+            print("nothing changed: run again with --apply to delete them and fetch their links again")
+            return
+        for did, _, _ in found:
+            store.put_back(did)
+            cleanup.forget(Path(args.out), did)
+        review.forget(store, {did for did, _, _ in found})
+        print("deleted them; their links wait for the next run, which fetches Scholar about 20 s apart"
+              " and stops for the run at its first block page")
+    finally:
+        store.close()
+
+
 def cmd_ui(args: argparse.Namespace) -> None:
     from .ui import serve
 
@@ -629,7 +660,7 @@ def main() -> None:
                      help="seconds --render waits for bot-challenge pages to clear (default %(default)s)")
     run.add_argument("--host-limit", action="append", default=[], metavar="PATTERN=N[:SECONDS]",
                      help="hosts matching the glob share one queue: N requests in flight, SECONDS between "
-                          "starts (repeatable; default scholar.google.*=1:8)")
+                          "starts (repeatable; default scholar.google.*=1:20)")
     run.add_argument("--keep-raw-pdfs", action="store_true",
                      help="also keep originals under <out>/raw/, named after their documents: PDFs from the web "
                           "(~2 MB each), and arXiv papers' HTML, or their PDF if they have no HTML. Web pages and "
@@ -715,6 +746,12 @@ def main() -> None:
     cln.add_argument("--undo", action="store_true",
                      help="put back the originals of documents cleaned before, unless they've changed since")
     cln.set_defaults(func=cmd_clean)
+
+    blk = sub.add_parser("blocked", help="find saved Google Scholar pages that are only Google's block page; "
+                                         "with --apply, delete them so their links are fetched again")
+    blk.add_argument("--out", default=DEFAULT_OUT)
+    blk.add_argument("--apply", action="store_true", help="delete them (otherwise they're only listed)")
+    blk.set_defaults(func=cmd_blocked)
 
     stats = sub.add_parser("stats", help="summarize the manifest")
     stats.add_argument("--out", default=DEFAULT_OUT)

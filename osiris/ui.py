@@ -77,7 +77,7 @@ DEFAULT_CONFIG = {
                 "scry_crawl": False, "scry_crawl_dollars": 1, "log_font_px": 10,
                 "contact": "", "youtube_pace_updated": True, "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
                 "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
-                "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 8}],
+                "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 20}], "scholar_pace_updated": True,
                 **tuning.FLAG_DEFAULTS, **{knob.option: knob.default for knob in tuning.KNOBS},
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
 }
@@ -376,6 +376,10 @@ def load_config(out: Path) -> dict:
             del options["youtube_delay_min"], options["youtube_delay_max"]
         if options.get("youtube_block_wait") == 5:
             del options["youtube_block_wait"]
+    if "scholar_pace_updated" not in options:  # 8 s apart, the earlier default, drew blocks within hours
+        for row in options.get("host_limits") or []:
+            if isinstance(row, dict) and row.get("pattern") == BUILT_IN_HOST_LIMIT and row.get("seconds") in (8, 8.0):
+                row["seconds"] = 20
     if options.get("user_agent") and "user_agent_edit" not in options:  # typed by hand, before it was filled in for you
         options["user_agent_edit"] = True
     if "keep_raw" in options:  # its name before web pages stopped being kept

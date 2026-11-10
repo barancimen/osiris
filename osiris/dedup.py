@@ -17,6 +17,25 @@ LOCAL_HOST = re.compile(r'^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])$')
 def bare_host(u):
     return (urlsplit(u).hostname or '').lower()
 
+# Google's redirect links name where they go: Scholar's result links (/scholar_url?url=) and search
+# results (/url?q=). Following them would ask Google, and count towards Scholar's limit, for nothing.
+REDIRECTS = (('scholar.google.', '/scholar_url', ('url',)), ('', '/url', ('q', 'url')))
+
+def unwrap(u):
+    """The page a Google redirect link leads to, or the link itself."""
+    try:
+        p = urlsplit(u)
+        host = (p.hostname or '').lower()
+    except ValueError:
+        return u
+    for prefix, path, names in REDIRECTS:
+        if p.path == path and host.startswith(prefix) and (prefix or GOOGLE_HOST.search(host)):
+            query = dict(parse_qsl(p.query))
+            target = next((query[n] for n in names if re.match(r'^https?://', query.get(n, ''), re.I)), None)
+            if target:
+                return target
+    return u
+
 def keep(u):
     """Web pages and local files, no Google (except Scholar)/Gmail, no local servers."""
     if FILE_URL.match(u):

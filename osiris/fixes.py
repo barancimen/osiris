@@ -26,6 +26,8 @@ def methods_for(doc_key: str, lane: str, scry: bool, browser: bool) -> list[str]
         return []
     found = ["again"]
     if lane == "generic" and doc_key.startswith(("http://", "https://")):
+        # Google answers a headless browser with its block page about four times in five
+        browser = browser and not (urlsplit(doc_key).hostname or "").startswith("scholar.google.")
         found += ["impersonate", *(["render"] if browser else []), "wayback", *(["crawl"] if scry else [])]
         if doi_of(doc_key):
             found.append("doi")

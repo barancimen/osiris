@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, replace
 from urllib.parse import unquote, urlsplit, urlunsplit
 
-from .dedup import YOUTUBE_HOST, dedup_key, youtube_target
+from .dedup import YOUTUBE_HOST, dedup_key, unwrap, youtube_target
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
 
@@ -121,6 +121,7 @@ def route(raw: str) -> Route | None:
     found = extract_url(raw)
     if found is None:
         return None
+    found = unwrap(found)  # a Google redirect link: the page it leads to, without asking Google
     return replace(_route(found), dedup_key=safe_dedup_key(found))
 
 

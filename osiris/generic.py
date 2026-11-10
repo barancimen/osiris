@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from . import clean, extract
+from . import scholar
 from .cookies import BrowserCookie, into_aiohttp, to_cookiejar
 from .store import REFRESH, RefreshProgress, Store
 
@@ -82,15 +83,15 @@ class HostRule:
 
     @classmethod
     def parse(cls, spec: str) -> HostRule:
-        """'scholar.google.*=1:8' -> one request at a time, 8 s apart."""
+        """'scholar.google.*=1:20' -> one request at a time, about 20 s apart."""
         pattern, _, limits = spec.partition("=")
         concurrency, _, delay = limits.partition(":")
         return cls(pattern.strip().lower(), max(1, int(concurrency or 1)), float(delay or 0))
 
 
 # Google Scholar shows CAPTCHAs after a burst of requests even from home IPs, and treats
-# all its country domains as one service
-DEFAULT_HOST_RULES = (HostRule("scholar.google.*", 1, 8.0),)
+# all its country domains as one service; 8 s apart still drew blocks within hours
+DEFAULT_HOST_RULES = (HostRule("scholar.google.*", 1, 20.0),)
 
 TEXT_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
@@ -436,8 +437,11 @@ class GenericPass:
         self.host_failures: Counter[str] = Counter()
         self.host_forbidden: Counter[str] = Counter()
         self.progress: RefreshProgress | None = None  # a refresh, which says how far it is
+        self.live = not isinstance(client, WaybackClient)  # asks the site itself, not an archived copy
 
     async def run(self, urls: list[str], concurrency: int, per_host: int) -> None:
+        if self.live and scholar.blocked():  # Scholar blocked us earlier in this run: its links wait
+            urls = [u for u in urls if not scholar.is_google(u)]
         sched = HostScheduler(urls, per_host, self.rules)
         await asyncio.gather(*(self._worker(sched) for _ in range(concurrency)))
         self.store.commit()
@@ -446,10 +450,21 @@ class GenericPass:
         while (item := await sched.get()) is not None:
             key, url = item  # key: the host, or the HostRule pattern grouping several hosts
             requeue, cooldown, drop = None, 0.0, None
-            unfinished = False
+            unfinished = halt = False  # halt: leave this site's links as they are, for the next run
             try:
-                fetched = await self.client.fetch(url)
+                if self.live and scholar.blocked() and scholar.is_google(url):
+                    unfinished = halt = True
+                    continue
+                fetched = await self.client.fetch(scholar.fetch_url(url) if self.live else url)
                 self.attempts[url] += 1
+                if scholar.is_block(url, fetched.status, fetched.final_url, fetched.body):
+                    self.reader.release_pdf(fetched)
+                    if self.live:  # never saved, and nothing more asked of it this run
+                        scholar.note_block(url)
+                        unfinished = halt = True
+                    else:  # an archived copy that is only the block page
+                        self._fail(url, "blocked", fetched)
+                    continue
                 reason = fetched.error
                 self.host_failures[key] = self.host_failures[key] + 1 if reason in CONNECTION_LEVEL else 0
                 if reason is None:
@@ -482,7 +497,9 @@ class GenericPass:
                     self._mark_tried(url)
                     if self.progress:
                         self.progress.one()
-                for lost in sched.done(key, requeue, cooldown, drop is not None):
+                for lost in sched.done(key, requeue, cooldown, drop is not None or halt):
+                    if halt:
+                        continue
                     self._fail(lost, drop, Fetched())
                     self._mark_tried(lost)
                     if self.progress:
@@ -639,7 +656,9 @@ async def run_generic(store: Store, pool: extract.WorkerPool, workers: int, conc
         await fallback("render", lambda: RenderClient(render_concurrency, cookies, browser_ua, chrome_profile,
                                                       challenge_wait),
                        render_concurrency, 1, rules, lambda reason: reason in BLOCKED,
-                       "blocked/thin pages in a headless browser", url_ok=lambda u: not u.lower().endswith(".pdf"))
+                       "blocked/thin pages in a headless browser",
+                       # Google spots the browser and answers with its block page about four times in five
+                       url_ok=lambda u: not u.lower().endswith(".pdf") and not scholar.is_google(u))
     if doi:
         from .doi import run_doi_pass
 

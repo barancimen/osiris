@@ -197,7 +197,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | Command | What it does |
 |---|---|
 | `osiris ui` | Opens the web interface. `--search-index` adds [ranked search](#searching) |
-| `osiris review {scan,apply}` | Finds probable garbage to review, or carries out the fixes you queued |
+| `osiris review scan` | Scores new and changed documents for probable garbage, and settles the fixes that ran |
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
@@ -205,6 +205,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
 | `osiris stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
 | `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
+| `osiris blocked` | Lists saved Google Scholar pages that are only Google's "unusual traffic" block page. `--apply` deletes them and sends their links back to waiting. See [Google Scholar](#google-scholar) |
 
 Common `osiris run` options:
 
@@ -245,7 +246,7 @@ find ~/local_files -type f -print0 | python3 -c 'import sys,pathlib; [print(path
 .venv/bin/osiris run
 ```
 
-`extract_urls.py` rewrites `all_urls.md` each time, so run it first. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`.
+`extract_urls.py` rewrites `all_urls.md` each time, so run it first. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`. Google's redirect links are replaced by the page they lead to: Scholar's result links (`scholar.google.com/scholar_url?url=…`) and search results (`google.com/url?q=…`), so osiris fetches the paper or page without asking Google. osiris does the same for any such link it's given directly.
 
 - **Failed URLs:** each gets every fallback pass once and is then left alone until you use `--retry-failed` or `--retry-host`. A pass that couldn't run doesn't count: if the headless browser isn't installed, that pass is skipped with one error and its links wait for a later run.
 - **Routing changes:** every run applies the current routing rules to URLs that aren't archived yet.
@@ -347,7 +348,7 @@ Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdow
 **First pass**
 
 - Hosts are served round-robin, with at most `--per-host` (4) requests in flight per host and `--concurrency` (64) overall, and cooldowns on 429 and 5xx responses. `Retry-After` is honored.
-- `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue. The default is `scholar.google.*=1:8`, since Scholar shows CAPTCHAs after bursts.
+- `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue, each wait varied by up to a quarter either way. The default is `scholar.google.*=1:20`, since Scholar shows CAPTCHAs after bursts (see [Google Scholar](#google-scholar)).
 - The `Content-Type` is checked before the body is read, so non-text responses are dropped unread.
 - A host is skipped after 5 straight refusals (403, or 429 after retries) or 3 connection failures.
 
@@ -356,10 +357,20 @@ Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdow
 These run over what's still failed or thin, cheapest first. Each keeps a result only if it beats the previous one, and each URL gets each pass once, as recorded in the manifest's `tried` column.
 
 1. **impersonate:** curl_cffi with Chrome's TLS fingerprint, for 403s, resets and thin pages.
-2. **render** (`--render`, opt-in): headless Chromium, for pages that need JavaScript and for bot-challenge pages, which it waits out for `--challenge-wait` seconds. It costs a few hundred MB of RAM per page, so `--render-concurrency` defaults to 2.
+2. **render** (`--render`, opt-in): headless Chromium, for pages that need JavaScript and for bot-challenge pages, which it waits out for `--challenge-wait` seconds. Never for Google Scholar, which answered it with its block page four times in five. It costs a few hundred MB of RAM per page, so `--render-concurrency` defaults to 2.
 3. **doi:** failed paper links are matched by DOI, covering dead sci-hub mirrors, publisher `/doi/` pages, and nature.com and JSTOR IDs. Title, authors and abstract come from Scry's OpenAlex snapshot, then the OpenAlex API.
 4. **wayback:** the newest successful Wayback Machine capture, 4 requests at a time.
 5. **crawl** (`--scry-crawl`, opt-in, **Use Scry's copy of the page** under Advanced): the text Scry's web crawler last read from the page, under any of its http/https and www spellings, looked up 50 pages per query. It needs a Scry key, sends those pages' addresses to Scry, and stops once the run has spent `--scry-crawl-max-dollars` (1) on it. In one test, three pages found cost $0.006.
+
+### Google Scholar
+
+Scholar rations automated requests. Past some number it answers with an "unusual traffic" page, often as an ordinary page, even with your browser's cookies.
+
+- **Pace:** one request at a time, about 20 seconds apart (15 to 25). Settings saved with the earlier default of 8 seconds move to 20 by themselves; a value you set yourself is kept.
+- **Block pages:** Google's block page, a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
+- **No headless browser:** the browser pass and the browser fix method skip Scholar. Your cookies with the plain download work better.
+- **Profiles:** a profile's list of works is asked for 100 at a time (`cstart=0&pagesize=100`), not the 20 Scholar shows unless you click Show more. Profiles saved before this have 20; fetch one again to get the longer list.
+- **Saved block pages:** earlier versions saved the block page as the document, mostly through the browser pass. `osiris blocked` lists them, and `osiris blocked --apply` deletes them and sends their links back to waiting.
 
 ### Browser session
 

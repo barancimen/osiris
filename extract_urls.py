@@ -11,7 +11,7 @@ import sys
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_DIR)  # works under python -I and from any cwd
 import osiris.dedup  # noqa: E402
-from osiris.dedup import keep, dedup_key  # noqa: E402  (shared with the osiris manifest)
+from osiris.dedup import keep, dedup_key, unwrap  # noqa: E402  (shared with the osiris manifest)
 
 # Only explicitly saved links: bookmarks + Session Buddy, web pages and local files (file://).
 # htu_*.tsv (browser history) and twitter-Following-*.json are excluded.
@@ -143,13 +143,14 @@ def main():
         filtered = added = 0
         for u in urls:
             if u not in keys:
-                keys[u] = dedup_key(u) if keep(u) else None
+                target = unwrap(u)  # a Google redirect link: the page it leads to
+                keys[u] = (dedup_key(target), target) if keep(target) else None
             k = keys[u]
             if k is None:
                 filtered += 1
-            elif k not in seen:
-                seen.add(k)
-                ordered.append(u)
+            elif k[0] not in seen:
+                seen.add(k[0])
+                ordered.append(k[1])
                 added += 1
         print(f'{name}: {len(urls)} total, {filtered} filtered, '
               f'{added} new, running unique {len(seen)}', file=sys.stderr)
