@@ -32,8 +32,12 @@ from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
-from .store import REFRESH, REFRESH_FINISHED, TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
+from .store import (REFRESH, REFRESH_FINISHED, TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file,
+                    refreshed_pdf)
 from .arxiv import ABSTRACT_ONLY_CHARS, BATCH as ARXIV_BATCH, DELAY as ARXIV_DELAY, FULLTEXT, FULLTEXT_DELAY
+from .doi import doi_of
+from .generic import BLOCKED, NOT_FOR_WAYBACK
+from .ocr import LANES as OCR_LANES, TRIED as OCR_TRIED, unavailable as ocr_unavailable
 from .youtube import DEFAULT_DELAY
 
 log = logging.getLogger(__name__)
@@ -48,6 +52,7 @@ MAX_BODY = 400_000  # characters of a document sent to the page; the raw link ha
 PAGE_SIZE = 100
 SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
 INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
+TALLY_EVERY = 5  # seconds between counts of a run's work, page open or not
 FAILURES_EVERY = 2  # seconds between looks at whether the manifest has changed
 COOKIE_FILE_TYPES = (".txt", ".json", ".cookies")
 HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
@@ -93,8 +98,24 @@ class Job:
         self.env_extra: dict[str, str | None] = {}
         self.plan: dict | None = None  # set while fetching: what the time left is worked out from
         self.refreshed: set[str] = set()  # lanes whose PDF refresh has finished in this job
+        self.work: dict[str, int] = {}  # stage: items this job has had it do so far
+        self.left: dict[str, int] = {}  # stage: items it had left at the last count
         self.on_change = lambda: None  # a job started or ended
         self.on_line = lambda line: None  # a line was written
+
+    def tally(self, stages: list[dict]) -> int:
+        """How many items this job has finished: all it has had to do, less what's left, stage by stage so
+        that work moving between stages is counted. Work found on the way, such as a page that failed and
+        now gets fallbacks, adds to what it has had to do. A stage that's gone has nothing left."""
+        now = {stage["stage"]: stage["left"] for stage in stages}
+        for name in self.work.keys() | now.keys():
+            left = now.get(name, 0)
+            if name not in self.work:
+                self.work[name] = left
+            elif left > self.left[name]:
+                self.work[name] += left - self.left[name]
+            self.left[name] = left
+        return sum(self.work[name] - self.left[name] for name in self.work)
 
     @property
     def active(self) -> bool:
@@ -114,6 +135,7 @@ class Job:
         self.name, self.step, self.state = name, "", "running"
         self.plan = None
         self.refreshed = set()
+        self.work, self.left = {}, {}
         if not keep_log:
             self.lines.clear()
             self.count = 0
@@ -421,52 +443,111 @@ def _chosen_lanes(options: dict) -> list[str]:
 
 
 REFRESH_LANES = {"web": ("generic",), "local": ("localfile",), "both": ("generic", "localfile")}
-REFRESH_PDF = ("(content_type = 'application/pdf' OR lower(url) LIKE '%.pdf' OR lower(url) LIKE '%.pdf?%'"
-               " OR lower(url) LIKE '%.pdf#%')")  # store.start_refresh's PDFs, in SQL
 
 
 def _plan(lanes: list[str], options: dict) -> dict:
     """What a run will fetch, as far as its time left depends on it."""
     low = _number(options, "youtube_delay_min", float, 0, DEFAULT_DELAY[0])
     high = _number(options, "youtube_delay_max", float, 0, DEFAULT_DELAY[1])
+    fallbacks = [name for name, on in (("impersonate", options.get("impersonate", True)), ("render", options.get("render")),
+                                       ("doi", options.get("doi", True)), ("wayback", options.get("wayback", True)),
+                                       ("crawl", options.get("scry_crawl"))) if on] if "generic" in lanes else []
+    ocr = options.get("ocr", True) and any(lane in lanes for lane in OCR_LANES) \
+        and not ocr_unavailable(str(options.get("ocr_lang") or "eng"))
     return {"lanes": lanes, "full_text": bool(options.get("arxiv_fulltext", True)), "youtube_each": (low + high) / 2,
-            "refresh": [lane for lane in REFRESH_LANES.get(options.get("refresh") or "", ()) if lane in lanes]}
+            "refresh": [lane for lane in REFRESH_LANES.get(options.get("refresh") or "", ()) if lane in lanes],
+            "fallbacks": fallbacks, "ocr": bool(ocr)}
 
 
-def _progress(out: Path, since: float, plan: dict, full_text_left: int, refreshed: set[str] = frozenset()) -> dict:
-    """What a run has finished, and what each of its sources has left, stage by stage. `each` is the
+def _fallbacks_left(db: sqlite3.Connection, passes: list[str]) -> int:
+    """Fallback passes still to come for failed and thin web pages, one per page and pass, chosen as
+    generic.run_generic chooses them. A page one pass fixes drops out of the later ones."""
+    due: dict[str, set[str]] = {name: set() for name in passes}
+    for key, url, status, reason, tried in db.execute(
+            "SELECT doc_key, url, status, COALESCE(reason, ''), COALESCE(tried, '') FROM urls"
+            " WHERE lane = 'generic' AND status IN ('thin', 'failed')"):
+        thin = status == "thin"
+        for name in passes:
+            if f",{name}" in tried:
+                continue
+            if name in ("impersonate", "render"):
+                wanted = (thin or reason in BLOCKED) and not (name == "render" and url.lower().endswith(".pdf"))
+            elif name == "doi":
+                wanted = bool(doi_of(key))
+            else:  # wayback, crawl
+                wanted = (thin or not reason.startswith(NOT_FOR_WAYBACK)) and (name == "wayback" or url.startswith(("http://", "https://")))
+            if wanted:
+                due[name].add(key)
+    return sum(len(keys) for keys in due.values())
+
+
+def _progress(out: Path, plan: dict, full_text_left: int, refreshed: set[str] = frozenset()) -> dict:
+    """What each source of a run has left, stage by stage, and how many items that is. `each` is the
     fewest seconds one item can take, for the sources that work to a fixed schedule."""
     db = read_manifest(out)
     try:
-        counts = {lane: (left, done) for lane, left, done in db.execute(
-            "SELECT lane, COUNT(DISTINCT CASE WHEN status = 'pending' THEN doc_key END),"
-            " COALESCE(SUM(status NOT IN ('pending', 'skipped') AND updated_at >= ?), 0) FROM urls GROUP BY lane",
-            (_iso(since),))}
-        refresh = {}  # lane: (PDFs left to read again, read again without changing)
+        counts = {lane: left for lane, left in db.execute(
+            "SELECT lane, COUNT(DISTINCT CASE WHEN status = 'pending' THEN doc_key END) FROM urls GROUP BY lane")}
+        refresh = {}  # lane: PDFs left to read again
+        db.create_function("refreshed_pdf", 2, refreshed_pdf, deterministic=True)  # the refresh's own test
         for lane in plan.get("refresh", ()):
             if lane not in refreshed:
                 refresh[lane] = db.execute(
-                    "SELECT COUNT(DISTINCT CASE WHEN instr(tried, ?) = 0 THEN doc_key END),"
-                    " COUNT(DISTINCT CASE WHEN instr(tried, ?) > 0 AND updated_at < ? THEN doc_key END)"
-                    f" FROM urls WHERE lane = ? AND status IN ('ok', 'thin') AND {REFRESH_PDF}",
-                    (f",{REFRESH}", f",{REFRESH}", _iso(since), lane)).fetchone()
+                    "SELECT COUNT(DISTINCT doc_key) FROM urls WHERE lane = ? AND status IN ('ok', 'thin')"
+                    " AND refreshed_pdf(url, content_type) AND instr(COALESCE(tried, ''), ?) = 0",
+                    (lane, f",{REFRESH}")).fetchone()[0]
+        fallbacks = _fallbacks_left(db, plan.get("fallbacks", []))
+        ocr_lanes = [lane for lane in OCR_LANES if lane in plan["lanes"]] if plan.get("ocr") else []
+        ocr = db.execute(  # ocr.candidates, counted
+            f"SELECT COUNT(DISTINCT doc_key) FROM urls WHERE lane IN ({','.join('?' * len(ocr_lanes))})"
+            " AND ((status = 'failed' AND reason = 'no_text') OR status = 'thin')"
+            " AND (content_type = 'application/pdf' OR lower(url) LIKE '%.pdf%') AND instr(COALESCE(tried, ''), ?) = 0",
+            (*ocr_lanes, f",{OCR_TRIED}")).fetchone()[0] if ocr_lanes else 0
     finally:
         db.close()
     stages = []
     for lane in plan["lanes"]:
-        left = counts.get(lane, (0, 0))[0]
+        left = counts.get(lane, 0)
         if lane == "arxiv":
             stages.append({"source": lane, "stage": lane, "left": left, "each": ARXIV_DELAY / ARXIV_BATCH})
             if plan["full_text"]:  # each abstract still to come brings a paper to read
                 stages.append({"source": lane, "stage": "full_text", "left": full_text_left + left, "each": FULLTEXT_DELAY})
         elif lane == "localfile":  # its PDFs are read again alongside the waiting files
-            stages.append({"source": lane, "stage": lane, "left": left + refresh.get(lane, (0, 0))[0], "each": None})
+            stages.append({"source": lane, "stage": lane, "left": left + refresh.get(lane, 0), "each": None})
         else:
             stages.append({"source": lane, "stage": lane, "left": left, "each": plan["youtube_each"] if lane == "youtube" else None})
-            if lane in refresh:  # web PDFs are read again once the waiting URLs are done
-                stages.append({"source": lane, "stage": "refresh_web", "left": refresh[lane][0], "each": None})
-    return {"done": sum(counts.get(lane, (0, 0))[1] for lane in plan["lanes"]) + sum(done for _, done in refresh.values()),
-            "waiting": sum(stage["left"] for stage in stages), "stages": stages}
+            if lane == "generic":  # then, one after the other: PDFs read again, the fallbacks, and OCR
+                if lane in refresh:
+                    stages.append({"source": lane, "stage": "refresh_web", "left": refresh[lane], "each": None})
+                stages.append({"source": lane, "stage": "fallbacks", "left": fallbacks, "each": None})
+    if ocr_lanes:  # after the web pages and local files, so counted as the web pages' last stage
+        stages.append({"source": "generic" if "generic" in plan["lanes"] else "localfile", "stage": "ocr", "left": ocr, "each": None})
+    return {"waiting": sum(stage["left"] for stage in stages), "stages": stages}
+
+
+def _job_progress(job: Job, out: Path, table: dict | None = None) -> dict:
+    """The run's progress against the work it has had to do so far, which only grows when it finds more."""
+    if table is None:
+        table = _lane_table(out)
+    progress = _progress(out, job.plan, table["arxiv_full_text"].get("pending", 0), job.refreshed)
+    progress["done"] = job.tally(progress["stages"])
+    return progress
+
+
+async def _keep_tally(app: web.Application) -> None:
+    """Count a run's work even while no page is open, so the bar is right whenever one is."""
+    job = app["job"]
+    while True:
+        await asyncio.sleep(TALLY_EVERY)
+        if job.active and job.plan:
+            try:
+                _job_progress(job, app["out"])
+            except sqlite3.Error:  # busy: the next one counts it
+                pass
+
+
+async def _start_tally(app: web.Application) -> None:
+    app["tally_task"] = asyncio.create_task(_keep_tally(app))
 
 
 async def state(request: web.Request) -> web.Response:
@@ -486,8 +567,7 @@ async def state(request: web.Request) -> web.Response:
         "review": counts,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
-                "progress": _progress(out, job.started, job.plan, table["arxiv_full_text"].get("pending", 0), job.refreshed)
-        if job.active and job.plan else None},
+                "progress": _job_progress(job, out, table) if job.active and job.plan else None},
         "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
@@ -1355,6 +1435,7 @@ async def _start_index(app: web.Application) -> None:
 
 async def _stop_job_on_exit(app: web.Application) -> None:
     app["failures_task"].cancel()
+    app["tally_task"].cancel()
     app["titles_stop"].set()
     await app["titles_task"]
     index = app["index"]
@@ -1399,6 +1480,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
     app["job"].on_change = job_changed
     app.on_startup.append(_start_failures)
     app.on_startup.append(_start_titles)
+    app.on_startup.append(_start_tally)
     if search_index:
         search.connect(out).close()
         app.on_startup.append(_start_index)

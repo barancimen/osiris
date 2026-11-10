@@ -788,7 +788,7 @@ function renderState(s) {
 /* how far a run is. Sources run side by side, each on its own schedule, so a run lasts as long as its
    slowest source. Stages inside a source (arXiv's abstracts, then its full text) run one after the other. */
 const PACE_WINDOW = 180000;  // how much recent progress a pace is measured over
-const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text", refresh_web: "Web PDFs read again"};
+const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text", refresh_web: "Web PDFs read again", fallbacks: "Fallbacks for web pages", ocr: "OCR"};
 const Progress = {stages: {}, job: null};
 function renderProgress(j) {
   const box = $("#run-progress");
@@ -798,10 +798,10 @@ function renderProgress(j) {
   if (!p) { Progress.stages = {}; return; }
   if (Progress.job !== j.started) { Progress.job = j.started; Progress.stages = {}; }
   const all = p.done + p.waiting;
-  $("#run-bar").style.width = (all ? Math.round(100 * p.done / all) : 0) + "%";
+  $("#run-bar").style.width = (all ? Math.floor(100 * p.done / all) : 0) + "%";  // full only when nothing is left
   const parts = [`${fmt(p.done)} of ${fmt(all)} done`];
   if (p.waiting) parts.push(...timeLeft(p.stages));
-  else parts.push("now trying fallbacks for what failed or came back thin, then OCR");
+  else parts.push("finishing up");
   $("#run-text").textContent = parts.filter(Boolean).join(" · ");
 }
 /* Seconds per item: what the stage last really took, but never quicker than its schedule allows. */

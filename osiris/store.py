@@ -60,6 +60,11 @@ DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
 REFRESH_FINISHED = "refresh finished"  # in the log, after which a lane's marks are cleared
+
+
+def refreshed_pdf(url: str | None, content_type: str | None) -> bool:
+    """Whether a refresh reads this again: by its type, or by a path ending in .pdf (not its query)."""
+    return content_type == "application/pdf" or urlsplit(url or "").path.lower().endswith(".pdf")
 log = logging.getLogger(__name__)
 
 
@@ -320,8 +325,7 @@ class Store:
             "SELECT url, doc_key, status, content_type, COALESCE(chars, 0), tried FROM urls"
             " WHERE lane = ? AND status IN ('ok', 'thin', 'failed') ORDER BY rowid", (lane,)
         ).fetchall():
-            is_pdf = content_type == "application/pdf" or urlsplit(url).path.lower().endswith(".pdf")
-            if not is_pdf or f",{REFRESH}" in tried:
+            if not refreshed_pdf(url, content_type) or f",{REFRESH}" in tried:
                 continue
             if status == "failed":
                 requeue.add(doc_key)

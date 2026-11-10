@@ -30,7 +30,7 @@ from .env import load_env
 from .scry import ScryClient
 from .singlefile import run_import
 from .stackexchange import run_stackexchange
-from .store import Store, now_iso
+from .store import REFRESH_FINISHED, Store, now_iso
 from .twitter import run_twitter
 from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, parse_delay, run_youtube
 
@@ -233,6 +233,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         log.info("re-queued %d failed URLs%s", store.requeue(lanes, hosts=args.retry_host),
                  f" on {', '.join(args.retry_host)}" if args.retry_host else "")
     refresh = {lane: store.start_refresh(lane) for lane in refresh_lanes}
+    for lane, todo in refresh.items():
+        if not todo:  # said in so many words, so that the page stops counting on this refresh
+            log.info("%s: %s: no PDFs left to read again; a refresh that was stopped earlier read them all",
+                     lane, REFRESH_FINISHED)
 
     try:
         uvloop.run(_run_lanes(store, args, lanes, refresh))
