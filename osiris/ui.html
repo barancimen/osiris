@@ -1419,7 +1419,7 @@ const Docs = {
   renderList(from = 0, stay = false) {
     const rows = $("#doc-rows");
     const top = () => rows.getBoundingClientRect().top;
-    const anchor = stay && [...rows.querySelectorAll(".row")].find(el => el.getBoundingClientRect().bottom > top());
+    const anchor = stay ? [...rows.querySelectorAll(".row")].find(el => el.getBoundingClientRect().bottom > top()) : null;
     const anchorId = anchor?.dataset.id, anchorAt = anchor ? anchor.getBoundingClientRect().top - top() : 0;
     const row = (it, i) => {
       const flagged = it.score !== null && it.score >= FLAGGED_SCORE;
