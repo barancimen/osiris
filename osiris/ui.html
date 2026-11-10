@@ -786,6 +786,10 @@ function renderState(s) {
   c.textContent = fmt(s.review.to_review);
   Docs.renderCounts(s.review);
   if (Docs.fixing && !j.active) { Docs.fixing = false; if (currentTab === "documents") Docs.reload(); }
+  else if (currentTab === "documents" && Docs.built && (j.active || renderState.wasActive)) {
+    // during a run, the list as it is now: every 10 s, and once when the run ends
+    if (!j.active || Date.now() - (Docs.refreshedAt || 0) > 10000) { Docs.refreshedAt = Date.now(); Docs.load({keep: true, quiet: true}); }
+  }
   if (renderState.wasActive && !j.active) { reloadConfig(); Cleanup.refresh(); }  // a finished run clears the sites it retried
   renderState.wasActive = j.active;
 }
@@ -1348,15 +1352,18 @@ const Docs = {
     }, {root: $("#doc-rows"), rootMargin: "300px"});
   },
   // `keep`: the same list again after a decision, so the open document stays open even if it has left it
-  load: guarded(async function ({more = false, keep = false} = {}) {
+  // `quiet`: the same list again during a run, as many rows as are shown, the view staying where it is
+  load: guarded(async function ({more = false, keep = false, quiet = false} = {}) {
     const self = Docs;
     self.build();
-    const seq = ++self.seq, off = more ? self.items.length : 0;
-    if (!more) self.loadingMore = false;  // a new list: a page still loading for the old one doesn't count
     const term = self.q.trim(), text = self.text.trim(), indexed = config.search_index;
     // the text box narrows what every other box and filter leaves: an index search, or a scan of the files
     const inText = !!text && !NO_TEXT.includes(self.status) && (indexed || text.length > 1);
     const ranked = inText && indexed, scan = inText && !indexed;
+    if (quiet && (scan || self.loadingMore)) return;  // a scan reads files: only when asked for
+    const seq = ++self.seq, off = more ? self.items.length : 0;
+    if (!more) self.loadingMore = false;  // a new list: a page still loading for the old one doesn't count
+    const limit = quiet ? `&limit=${Math.max(self.items.length, 100)}` : "";
     $("#doc-review").setAttribute("aria-pressed", self.garbage);
     $("#doc-help").hidden = !ranked;
     if (self.status === "failed") self.loadReasons();
@@ -1367,7 +1374,7 @@ const Docs = {
     const order = self.garbage ? ", most likely garbage first" : "";
     let r;
     if (ranked) {
-      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}&offset=${off}`);
+      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}&offset=${off}${limit}`);
       const ix = r.index;
       self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
         + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}` + (order || ", best first");
@@ -1379,7 +1386,7 @@ const Docs = {
         : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`) + order;
       self.terms = r.terms;
     } else {
-      r = await api(`/api/documents?${common}&offset=${off}`);
+      r = await api(`/api/documents?${common}&offset=${off}${limit}`);
       self.note = `${fmt(r.total)} documents` + (term ? ` matching "${term}" in the URL or title` : "") + order;
       self.terms = [];
     }
@@ -1393,7 +1400,7 @@ const Docs = {
       self.detached = keep && !!self.doc && i < 0;
       self.at = i >= 0 ? i : self.detached ? Math.min(self.at, self.items.length) : -1;
     }
-    self.renderList(more ? off : 0);
+    self.renderList(more ? off : 0, quiet);
   }),
   // after a fix or a decision: the list, and the open document as it is now
   async reload() {
@@ -1408,11 +1415,15 @@ const Docs = {
       title: explainReason(x.reason)}, `${reasonLabel(x.reason)} (${fmt(x.count)})`)));
   },
   // `from`: the first new row when more were loaded; they're added below, so the list doesn't move
-  renderList(from = 0) {
+  // `stay`: keep the row at the top of the view where it is, though rows came or went above it
+  renderList(from = 0, stay = false) {
     const rows = $("#doc-rows");
+    const top = () => rows.getBoundingClientRect().top;
+    const anchor = stay && [...rows.querySelectorAll(".row")].find(el => el.getBoundingClientRect().bottom > top());
+    const anchorId = anchor?.dataset.id, anchorAt = anchor ? anchor.getBoundingClientRect().top - top() : 0;
     const row = (it, i) => {
       const flagged = it.score !== null && it.score >= FLAGGED_SCORE;
-      return h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
+      return h("button", {class: "row", "data-id": it.id, "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
         h("div", {class: "title"}, it.title || it.url),
         h("div", {class: "sub"}, h("span", {}, it.host),
           (flagged || (this.garbage && it.score !== null)) && h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Garbage score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})),
@@ -1431,6 +1442,8 @@ const Docs = {
       rows.append(more);
       this.moreWatch?.observe(more);
     }
+    const same = anchorId && [...rows.querySelectorAll(".row")].find(el => el.dataset.id === anchorId);
+    if (same) rows.scrollTop += same.getBoundingClientRect().top - top() - anchorAt;
     $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason || this.tagsNarrow());
   },
   // whether the tag ticks leave anything out: everything ticked is no filter at all

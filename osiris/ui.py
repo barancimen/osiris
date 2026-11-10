@@ -50,6 +50,7 @@ BILLED_KEY = "TWITTERAPI_IO_KEY"
 FETCHING_JOBS = ("Archive", "Fixes")  # jobs whose failures the page reports as this run's
 MAX_BODY = 400_000  # characters of a document sent to the page; the raw link has the rest
 PAGE_SIZE = 100
+MAX_LIST = 2000  # rows the list asks for at once when it refreshes what it shows
 SCAN_LIMIT = 100  # matches a text scan stops at, when there's no search index
 INDEX_EVERY = 300  # seconds between search-index refreshes while a job runs
 TALLY_EVERY = 5  # seconds between counts of a run's work, page open or not
@@ -1221,11 +1222,12 @@ async def documents(request: web.Request) -> web.Response:
     where, params = _list_where(q)
     order = _list_order(q)
     offset = max(int(q.get("offset", 0)), 0)
+    limit = min(max(int(q.get("limit") or PAGE_SIZE), 1), MAX_LIST)  # more than a page: the list refreshed as shown
     manifest = _list_db(request.app["out"])
     try:
         rows = manifest.execute(
             f"SELECT u.doc_id, MIN(u.url), u.lane, u.status, u.reason, MAX(u.chars), MAX(u.title) FROM urls u{LIST_JOINS}"
-            f" WHERE {where} GROUP BY u.doc_id ORDER BY {order} LIMIT ? OFFSET ?", (*params, PAGE_SIZE, offset),
+            f" WHERE {where} GROUP BY u.doc_id ORDER BY {order} LIMIT ? OFFSET ?", (*params, limit, offset),
         ).fetchall()
         total = manifest.execute(f"SELECT COUNT(DISTINCT u.doc_id) FROM urls u{LIST_JOINS} WHERE {where}", params).fetchone()[0]
     finally:
@@ -1310,7 +1312,8 @@ async def search_documents(request: web.Request) -> web.Response:
     if not text:
         raise web.HTTPBadRequest(text="Type something to search for.")
     found = await asyncio.to_thread(search.search, out, text, q.get("lane", ""), q.get("status", ""),
-                                    search.PAGE, max(int(q.get("offset", 0)), 0), q.get("sort") == "garbage",
+                                    min(max(int(q.get("limit") or search.PAGE), 1), MAX_LIST),
+                                    max(int(q.get("offset", 0)), 0), q.get("sort") == "garbage",
                                     _decision_filter(q.get("decision", "")),
                                     _box_filters(q, "d.url", "d.title", "d.host", "s.signals"), True)
     found["items"] = _with_review(out, found["items"])
