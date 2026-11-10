@@ -366,7 +366,7 @@ These run over what's still failed or thin, cheapest first. Each keeps a result 
 Scholar rations automated requests. Past some number it answers with an "unusual traffic" page, often as an ordinary page, even with your browser's cookies.
 
 - **Pace:** one request at a time, about 20 seconds apart (15 to 25). Settings saved with the earlier default of 8 seconds move to 20 by themselves; a value you set yourself is kept.
-- **Block pages:** Google's block page, a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
+- **Block pages:** Google's block page ("unusual traffic", or "Verifying your request… Please wait while we verify your session"), a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
 - **No headless browser:** the browser pass and the browser fix method skip Scholar. Your cookies with the plain download work better.
 - **Profiles:** a profile's list of works is asked for 100 at a time (`cstart=0&pagesize=100`), not the 20 Scholar shows unless you click Show more. Profiles saved before this have 20; fetch one again to get the longer list.
 

@@ -18,7 +18,8 @@ log = logging.getLogger(__name__)
 GOOGLE = re.compile(r"(^|\.)google(\.com?)?\.[a-z]{2,3}$")  # scholar.google.com, www.google.co.uk, ...
 # the block page as Google serves it, and as text once extracted
 BLOCK = re.compile(r"unusual traffic from your computer network|systems have detected unusual traffic"
-                   r"|sending automated queries|automated queries from your computer", re.I)
+                   r"|sending automated queries|automated queries from your computer"
+                   r"|verifying your request|verify your session", re.I)  # a JavaScript check plain downloads can't pass
 BLOCK_PAGE_MAX = 200_000  # bytes of HTML: a real Scholar page that quotes those words is longer
 PROFILE_PAGE = 100  # works on a profile page; Scholar shows 20 unless asked, and 100 is the most it gives at once
 
