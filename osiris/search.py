@@ -254,14 +254,19 @@ def snippet(body: str, pattern: re.Pattern | None) -> list[tuple[str, bool]]:
 
 
 def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: int = PAGE,
-           offset: int = 0, garbage_first: bool = False, decision: tuple[str, list] | None = None) -> dict:
+           offset: int = 0, garbage_first: bool = False, decision: tuple[str, list] | None = None,
+           extra: tuple[list[str], list] = ([], []), body_only: bool = False) -> dict:
     """Matches with a snippet each: {"items", "total", "terms"}, best first, or most likely garbage first.
-    `decision` is a condition on the garbage check's `d.decision` with its parameters."""
+    `decision` is a condition on the garbage check's `d.decision` with its parameters; `extra`, more
+    conditions on `d` (the indexed document) and `s` (its garbage check scores), all of which must hold.
+    `body_only` looks for the words in the text alone, not the title or URL."""
     out = Path(out)
     expr, terms = parse(text)
     if expr is None:
         return {"items": [], "total": 0, "terms": []}
-    where, params = ["fts MATCH ?"], [expr]
+    where, params = ["fts MATCH ?"], [f"body : ({expr})" if body_only else expr]
+    where += extra[0]
+    params += extra[1]
     for column, value in (("lane", lane), ("status", status)):
         if value:
             where.append(f"d.{column} = ?")
@@ -277,6 +282,7 @@ def search(out: str | Path, text: str, lane: str = "", status: str = "", limit: 
         f"(dec.decision IN ('choose', 'fixed')) DESC, bm25(fts, {', '.join(map(str, WEIGHTS))})"
     db = connect(out, readonly=True)
     try:
+        db.create_function("fold", 1, lambda t: t.casefold() if t else "", deterministic=True)  # for `extra`
         db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / 'review.sqlite'))}?mode=ro",))
         total = db.execute(f"SELECT COUNT(*) FROM fts JOIN docs d ON d.rowid = fts.rowid{joins} WHERE {clause}",
                            params).fetchone()[0]

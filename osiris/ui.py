@@ -1124,23 +1124,66 @@ def _list_db(out: Path) -> sqlite3.Connection:
     """The manifest, with the garbage check's scores and decisions alongside as `r`."""
     db = read_manifest(out)
     db.create_function("fold", 1, _fold, deterministic=True)  # SQLite's LIKE only ignores case for A to Z
+    db.create_function("host_of", 1, lambda url: (urlsplit(url).hostname or "") if url else "", deterministic=True)
     db.execute("ATTACH DATABASE ? AS r", (f"file:{quote(str(out / review.DB_FILE))}?mode=ro",))
     return db
 
 
+TAGS = tuple(review.WEIGHTS)  # the garbage check's signals, as tags to filter by
+TAG_SHOWN = 0.25  # a document shows a tag from this strength up, so the filter does too
+
+
+def _title_box(text: str) -> tuple[list[str], list[str]]:
+    """The words to find in a title or URL, and the sites named with site:."""
+    words, sites = [], []
+    for part in text.split():
+        if not part.lower().startswith("site:"):
+            words.append(part)
+            continue
+        site = part[5:].strip().lower()
+        site = (urlsplit(site).hostname or "") if "://" in site else site.split("/")[0]
+        if site := site.removeprefix("www.").strip("."):
+            sites.append(site)
+    return words, sites
+
+
+def _box_filters(q, url: str, title: str, host: str, signals: str) -> tuple[list[str], list]:
+    """Conditions for the title box (every word, in the title or URL; any site: named) and the tag,
+    on whichever columns hold these: the manifest's for the list, the search index's for its search."""
+    where, params = [], []
+    words, sites = _title_box(str(q.get("q", "")))
+    for word in words:
+        where.append(f"({url} LIKE ? OR fold({title}) LIKE ?)")
+        params += [f"%{word}%", f"%{word.casefold()}%"]
+    if sites:  # the site itself or any of its subdomains: springer.com takes link.springer.com too
+        where.append("(" + " OR ".join(f"({host} = ? OR {host} LIKE ?)" for _ in sites) + ")")
+        for site in sites:
+            params += [site, f"%.{site}"]
+    if (tag := q.get("tag")) in TAGS:
+        where.append(f"CAST(json_extract({signals}, ?) AS REAL) >= ?")
+        params += [f'$."{tag}"', TAG_SHOWN]
+    return where, params
+
+
 def _list_where(q) -> tuple[str, list]:
+    """Every box and filter but the text one: a document has to pass them all."""
     where, params = ["u.lane != 'skip'", "u.doc_id IS NOT NULL"], []
     for column in ("lane", "status", "reason"):
         if q.get(column):
             where.append(f"u.{column} = ?")
             params.append(q[column])
-    if term := str(q.get("q", "")).strip():
-        where.append("(u.url LIKE ? OR fold(u.title) LIKE ?)")
-        params += [f"%{term}%", f"%{term.casefold()}%"]
+    boxes, box_params = _box_filters(q, "u.url", "u.title", "host_of(u.url)", "s.signals")
+    where += boxes
+    params += box_params
     if decided := _decision_filter(q.get("decision", "")):
         where.append(decided[0])
         params += decided[1]
     return " AND ".join(where), params
+
+
+def _list_order(q) -> str:
+    # Review: worst first and nothing else; otherwise what's waiting for you comes first, then the newest
+    return "COALESCE(s.score, -1) DESC, u.doc_id" if q.get("sort") == "garbage" else WAITING_FIRST + "MIN(u.rowid) DESC"
 
 
 async def documents(request: web.Request) -> web.Response:
@@ -1148,9 +1191,7 @@ async def documents(request: web.Request) -> web.Response:
     rest: for every status, including documents with no text, which the search index doesn't hold."""
     q = request.query
     where, params = _list_where(q)
-    # documents waiting for you (a version to choose, a fix to check) come first, whatever the order
-    # Review: worst first and nothing else; otherwise what's waiting for you comes first
-    order = "COALESCE(s.score, -1) DESC, u.doc_id" if q.get("sort") == "garbage" else WAITING_FIRST + "MIN(u.rowid) DESC"
+    order = _list_order(q)
     offset = max(int(q.get("offset", 0)), 0)
     manifest = _list_db(request.app["out"])
     try:
@@ -1197,64 +1238,53 @@ async def reasons(request: web.Request) -> web.Response:
         for r, ids in sorted(docs.items(), key=lambda kv: -len(kv[1]))]})
 
 
-def _scan_text(out: Path, term: str, lane: str, status: str, garbage_first: bool = False, decision: str = "") -> dict:
-    """Without the search index: a plain case-insensitive scan of the documents, newest first,
-    stopping at the limit. The filters apply while scanning, so a filtered scan isn't cut short."""
-    where, params = ["status IN ('ok', 'thin')", "doc_id IS NOT NULL"], []
-    for column, value in (("lane", lane), ("status", status)):
-        if value:
-            where.append(f"{column} = ?")
-            params.append(value)
-    db = read_manifest(out)
+def _scan_text(out: Path, q, text: str) -> dict:
+    """Without the search index: the saved text of the documents that pass every other box and filter,
+    read in the list's order until SCAN_LIMIT have every word of `text` (any case)."""
+    where, params = _list_where(q)
+    db = _list_db(out)
     try:
-        rows = db.execute(f"SELECT doc_id, MIN(url), lane, status, reason, MAX(chars) FROM urls WHERE {' AND '.join(where)}"
-                          " GROUP BY doc_id ORDER BY MIN(rowid) DESC", params).fetchall()
+        rows = db.execute(
+            f"SELECT u.doc_id, MIN(u.url), u.lane, u.status, u.reason, MAX(u.chars) FROM urls u{LIST_JOINS}"
+            f" WHERE {where} AND u.status IN ('ok', 'thin') GROUP BY u.doc_id ORDER BY {_list_order(q)}", params,
+        ).fetchall()
     finally:
         db.close()
-    pattern = re.compile(re.escape(term), re.I)
+    words = text.split()
+    patterns = [re.compile(re.escape(word), re.I) for word in words]
     items, searched = [], 0
-    for did, url, lane_, status_, reason, chars in rows:
+    for did, url, lane, status, reason, chars in rows:
         searched += 1
         doc = read_doc_file(md_path(out, did))
         if doc is None:
             continue
         meta, body = doc
-        if not (pattern.search(body) or pattern.search(meta.get("title") or "")):
+        if not all(p.search(body) for p in patterns):
             continue
-        items.append({"id": did, "url": url, "lane": lane_, "status": status_, "reason": reason, "chars": chars,
+        items.append({"id": did, "url": url, "lane": lane, "status": status, "reason": reason, "chars": chars,
                       "title": meta.get("title"), "host": urlsplit(url).hostname or "local file",
-                      "snippet": search.snippet(body, pattern)})
+                      "snippet": search.snippet(body, patterns[0])})
         if len(items) >= SCAN_LIMIT:
             break
-    items = _with_review(out, items)
-    if decision == "none":
-        items = [it for it in items if it["decision"] is None]
-    elif decision in DECISION_FILTERS:
-        items = [it for it in items if it["decision"] == decision]
-    if garbage_first:
-        items.sort(key=lambda it: -(it["score"] if it["score"] is not None else -1))
-    else:
-        items.sort(key=lambda it: it["decision"] not in ("choose", "fixed"))  # waiting for you first
-    return {"items": items, "total": len(items), "limited": len(items) >= SCAN_LIMIT, "searched": searched,
-            "terms": [{"word": term, "substring": True}]}
+    return {"items": _with_review(out, items), "total": len(items), "limited": len(items) >= SCAN_LIMIT,
+            "searched": searched, "terms": [{"word": word, "substring": True} for word in words]}
 
 
 async def search_documents(request: web.Request) -> web.Response:
     """Ranked full-text search from the search index, or a plain scan of the text without one."""
     q = request.query
-    term = q.get("q", "").strip()
+    text = q.get("text", "").strip()  # the inside-documents box; the other boxes and filters narrow it
     index, out = request.app["index"], request.app["out"]
     if index is None:
-        if len(term) < 2:
+        if len(text) < 2:
             raise web.HTTPBadRequest(text="Search for at least 2 characters.")
-        found = await asyncio.to_thread(_scan_text, out, term, q.get("lane", ""), q.get("status", ""),
-                                        q.get("sort") == "garbage", q.get("decision", ""))
-        return web.json_response(found)
-    if not term:
+        return web.json_response(await asyncio.to_thread(_scan_text, out, q, text))
+    if not text:
         raise web.HTTPBadRequest(text="Type something to search for.")
-    found = await asyncio.to_thread(search.search, out, term, q.get("lane", ""), q.get("status", ""),
+    found = await asyncio.to_thread(search.search, out, text, q.get("lane", ""), q.get("status", ""),
                                     search.PAGE, max(int(q.get("offset", 0)), 0), q.get("sort") == "garbage",
-                                    _decision_filter(q.get("decision", "")))
+                                    _decision_filter(q.get("decision", "")),
+                                    _box_filters(q, "d.url", "d.title", "d.host", "s.signals"), True)
     found["items"] = _with_review(out, found["items"])
     return web.json_response({**found, "index": index.status()})
 

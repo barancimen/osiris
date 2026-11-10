@@ -369,9 +369,10 @@ const HELP = {
   "prev-match": "Previous match (Shift+N)",
   "next-match": "Next match (N)",
   "garbage-score": "How likely this text is to be garbled, from 0 (looks fine) to 1 (clearly broken). Anything from 0.35 up is flagged, and comes first when you press Review on the Documents tab.",
-  "doc-search": "Searches titles and web addresses. Tick \"Inside documents\" to search the text itself.",
-  "doc-search-indexed": "Searches titles, web addresses and the text, best matches first.",
-  "inside-documents": "Search the text of every document. It's slower, so it starts when you press Enter.",
+  "doc-search": "Every word must appear in the title or web address, in any order. site:example.com keeps only that site and its subdomains; several site: words mean any of them.",
+  "doc-text": "Searches the saved text of the documents the other boxes and filters leave, for every word. It's slower, so it starts when you press Enter.",
+  "doc-text-indexed": "Searches the saved text of the documents the other boxes and filters leave, best matches first.",
+  "doc-tag": "Documents the garbage check gave this tag, as shown on each document.",
   "doc-lane": "Show only one kind of source.",
   "doc-status": "Show only documents in one state.",
   "doc-reason": "Show only documents that failed for one reason.",
@@ -1282,33 +1283,38 @@ const topSignal = sig => Object.entries(sig || {}).sort((a, b) => b[1] - a[1])[0
 const Docs = {
   // `at` is the list position of the open document. One you've decided on can leave the list but stay open
   // (`detached`), and then `at` is where it was, so j opens the one that took its place
-  built: false, items: [], at: -1, total: 0, q: "", lane: "", status: "", reason: "", decision: "", garbage: false,
-  terms: [], note: "", seq: 0, ranked: false, inText: false, counts: {}, doc: null, openTerms: [], detached: false,
+  built: false, items: [], at: -1, total: 0, q: "", text: "", lane: "", status: "", reason: "", decision: "", tag: "", garbage: false,
+  terms: [], note: "", seq: 0, ranked: false, counts: {}, doc: null, openTerms: [], detached: false,
   wanted: null, fixing: false,
   build() {
     if (this.built) return; this.built = true;
     const refresh = () => this.load();
     const indexed = config.search_index;
-    const placeholder = () => indexed ? "Search titles, URLs and text" : this.inText ? "Search inside documents, then press Enter" : "Search titles and URLs";
     let timer;
+    // the text box searches files when there's no index, so it waits for Enter; the title box waits too then
+    const soon = () => { clearTimeout(timer); if (indexed || !this.text.trim()) timer = setTimeout(refresh, 250); };
+    const now = e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } };
     $("#documents").append(
       h("div", {class: "list-pane"},
         h("div", {class: "list-tools"},
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-q", placeholder: placeholder(), "aria-label": "Search", title: help(indexed ? "doc-search-indexed" : "doc-search"), oninput: e => {
-              this.q = e.target.value; clearTimeout(timer); if (indexed || !this.inText) timer = setTimeout(refresh, 250);
-            }, onkeydown: e => { if (e.key === "Enter") { clearTimeout(timer); refresh(); } }}),
+            h("input", {type: "search", id: "doc-q", placeholder: "Title or URL words, site:example.com", "aria-label": "Search titles and URLs", title: help("doc-search"),
+              oninput: e => { this.q = e.target.value; soon(); }, onkeydown: now}),
             h("button", {class: "btn", id: "doc-review", style: "flex:none", "aria-pressed": this.garbage, title: help("review-sort"), onclick: () => { this.garbage = !this.garbage; refresh(); }},
               "Review", " ", h("span", {class: "count", id: "doc-review-count", hidden: true}))),
           h("div", {class: "tool-row"},
-            !indexed && h("label", {class: "opt", style: "flex:none", title: help("inside-documents")}, h("input", {type: "checkbox", onchange: e => {
-              this.inText = e.target.checked; $("#doc-q").placeholder = placeholder();
-              if (!this.inText || this.q.trim().length > 1) refresh();
-            }}), "Inside documents"),
+            h("input", {type: "search", id: "doc-text", placeholder: indexed ? "Inside documents" : "Inside documents, then press Enter", "aria-label": "Search inside documents",
+              title: help(indexed ? "doc-text-indexed" : "doc-text"), oninput: e => {
+                this.text = e.target.value; clearTimeout(timer);
+                if (indexed) timer = setTimeout(refresh, 250); else if (!this.text.trim()) refresh();  // emptied: back to the list
+              }, onkeydown: now})),
+          h("div", {class: "tool-row"},
             h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
             h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),
             h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }}),
-            h("select", {"aria-label": "Decision", id: "doc-decision", title: help("doc-decision"), onchange: e => { this.decision = e.target.value; refresh(); }}, DECISION_FILTERS.map(([v, l]) => h("option", {value: v, title: VIEW_HELP[v] || ""}, l)))),
+            h("select", {"aria-label": "Decision", id: "doc-decision", title: help("doc-decision"), onchange: e => { this.decision = e.target.value; refresh(); }}, DECISION_FILTERS.map(([v, l]) => h("option", {value: v, title: VIEW_HELP[v] || ""}, l))),
+            h("select", {"aria-label": "Tag", id: "doc-tag", title: help("doc-tag"), onchange: e => { this.tag = e.target.value; refresh(); }},
+              h("option", {value: ""}, "Any tag"), Object.keys(SIGNAL_HELP).map(t => h("option", {value: t, title: SIGNAL_HELP[t]}, t)))),
           h("div", {class: "tool-row", id: "doc-bulk", hidden: true},
             h("span", {class: "hint", style: "flex:1"}, "Flagged and not decided here:"),
             h("button", {class: "btn", title: help("bulk-bad"), onclick: guarded(() => this.markAll("bad"))}, "All bad"),
@@ -1324,31 +1330,33 @@ const Docs = {
     const self = Docs;
     self.build();
     const seq = ++self.seq, off = more ? self.items.length : 0;
-    const term = self.q.trim(), indexed = config.search_index;
-    const ranked = indexed && !!term && !NO_TEXT.includes(self.status);
-    const scan = !indexed && self.inText && term.length > 1 && !NO_TEXT.includes(self.status);
+    const term = self.q.trim(), text = self.text.trim(), indexed = config.search_index;
+    // the text box narrows what every other box and filter leaves: an index search, or a scan of the files
+    const inText = !!text && !NO_TEXT.includes(self.status) && (indexed || text.length > 1);
+    const ranked = inText && indexed, scan = inText && !indexed;
     $("#doc-review").setAttribute("aria-pressed", self.garbage);
     $("#doc-help").hidden = !ranked;
     if (self.status === "failed") self.loadReasons();
     else $("#doc-reason").hidden = true;
-    const common = `lane=${self.lane}&status=${self.status}&decision=${self.decision}&sort=${self.garbage ? "garbage" : ""}`;
+    const common = `q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&reason=${encodeURIComponent(self.reason)}`
+      + `&decision=${self.decision}&tag=${encodeURIComponent(self.tag)}&sort=${self.garbage ? "garbage" : ""}`;
     const order = self.garbage ? ", most likely garbage first" : "";
     let r;
     if (ranked) {
-      r = await api(`/api/search?q=${encodeURIComponent(term)}&${common}&offset=${off}`);
+      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}&offset=${off}`);
       const ix = r.index;
       self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
         + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}` + (order || ", best first");
       self.terms = r.terms;
     } else if (scan) {
       if (!more) $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
-      r = await api(`/api/search?q=${encodeURIComponent(term)}&${common}`);
+      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}`);
       self.note = (r.limited ? `The newest ${fmt(r.items.length)} matches. Search for something more specific to narrow it.`
         : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`) + order;
       self.terms = r.terms;
     } else {
-      r = await api(`/api/documents?q=${encodeURIComponent(term)}&${common}&reason=${encodeURIComponent(self.reason)}&offset=${off}`);
-      self.note = `${fmt(r.total)} documents` + (term ? ` with "${term}" in the URL or title` : "") + order;
+      r = await api(`/api/documents?${common}&offset=${off}`);
+      self.note = `${fmt(r.total)} documents` + (term ? ` matching "${term}" in the URL or title` : "") + order;
       self.terms = [];
     }
     if (seq !== self.seq) return;  // a newer search has started
@@ -1390,7 +1398,7 @@ const Docs = {
           it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)));
       }));
     if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load({more: true})}, "Show more")));
-    $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason);
+    $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason || this.tag);
   },
   // the counts the garbage check keeps: on the Review button, the decision filter and the fixes banner
   renderCounts(counts) {
@@ -1495,7 +1503,7 @@ const Docs = {
   },
   async markAll(decision) {
     if (!confirm(`Mark everything listed here that's flagged as possible garbage and not decided yet as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
-    const r = await api("/api/decide", {filter: {q: this.q, lane: this.lane, status: this.status, reason: this.reason}, decision});
+    const r = await api("/api/decide", {filter: {q: this.q, lane: this.lane, status: this.status, reason: this.reason, tag: this.tag}, decision});
     toast(`Marked ${fmt(r.changed)} as ${DECISION_LABEL[decision]}.`);
     await this.reload();
   },
