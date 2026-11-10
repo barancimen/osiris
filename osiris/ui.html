@@ -134,6 +134,8 @@ td.zero { color: var(--line-strong); }
 .scorebar { width: 42px; height: 5px; border-radius: 3px; background: var(--sunk); overflow: hidden; flex: none; }
 .scorebar i { display: block; height: 100%; background: var(--bad); }
 .more { padding: 10px; text-align: center; }
+.list-tools .chips { margin-bottom: 0; gap: 4px; }
+.list-tools .chip { font-size: 12px; padding: 1px 8px 1px 5px; }
 .detail { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .empty { margin: auto; color: var(--muted); text-align: center; padding: 24px; max-width: 420px; }
 .empty h3 { color: var(--text); font-size: 16px; margin-bottom: 4px; }
@@ -372,7 +374,8 @@ const HELP = {
   "doc-search": "Every word must appear in the title or web address, in any order. site:example.com keeps only that site and its subdomains; several site: words mean any of them.",
   "doc-text": "Searches the saved text of the documents the other boxes and filters leave, for every word. It's slower, so it starts when you press Enter.",
   "doc-text-indexed": "Searches the saved text of the documents the other boxes and filters leave, best matches first.",
-  "doc-tag": "Documents the garbage check gave this tag, as shown on each document.",
+  "doc-tag": "Show documents the garbage check gave this tag, as shown on each document. A document with several tags shows if any of them is ticked.",
+  "doc-all-tags": "Ticked, documents with no tag show too, including ones never checked. Clicking it ticks or unticks every tag; the tags below don't change it.",
   "doc-lane": "Show only one kind of source.",
   "doc-status": "Show only documents in one state.",
   "doc-reason": "Show only documents that failed for one reason.",
@@ -1283,7 +1286,8 @@ const topSignal = sig => Object.entries(sig || {}).sort((a, b) => b[1] - a[1])[0
 const Docs = {
   // `at` is the list position of the open document. One you've decided on can leave the list but stay open
   // (`detached`), and then `at` is where it was, so j opens the one that took its place
-  built: false, items: [], at: -1, total: 0, q: "", text: "", lane: "", status: "", reason: "", decision: "", tag: "", garbage: false,
+  built: false, items: [], at: -1, total: 0, q: "", text: "", lane: "", status: "", reason: "", decision: "", garbage: false,
+  tags: new Set(Object.keys(SIGNAL_HELP)), tagless: true, loadingMore: false,
   terms: [], note: "", seq: 0, ranked: false, counts: {}, doc: null, openTerms: [], detached: false,
   wanted: null, fixing: false,
   build() {
@@ -1313,8 +1317,19 @@ const Docs = {
             h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),
             h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }}),
             h("select", {"aria-label": "Decision", id: "doc-decision", title: help("doc-decision"), onchange: e => { this.decision = e.target.value; refresh(); }}, DECISION_FILTERS.map(([v, l]) => h("option", {value: v, title: VIEW_HELP[v] || ""}, l))),
-            h("select", {"aria-label": "Tag", id: "doc-tag", title: help("doc-tag"), onchange: e => { this.tag = e.target.value; refresh(); }},
-              h("option", {value: ""}, "Any tag"), Object.keys(SIGNAL_HELP).map(t => h("option", {value: t, title: SIGNAL_HELP[t]}, t)))),
+          ),
+          h("div", {class: "tool-row chips", role: "group", "aria-label": "Tags"},
+            h("label", {class: "chip", title: help("doc-all-tags")}, h("input", {type: "checkbox", id: "doc-all-tags", checked: this.tagless, onchange: e => {
+              this.tagless = e.target.checked;
+              this.tags = new Set(this.tagless ? Object.keys(SIGNAL_HELP) : []);
+              for (const box of document.querySelectorAll(".doc-tag")) box.checked = this.tagless;
+              refresh();
+            }}), h("b", {}, "All tags")),
+            Object.keys(SIGNAL_HELP).map(t => h("label", {class: "chip", title: `${SIGNAL_HELP[t]} ${help("doc-tag")}`},
+              h("input", {type: "checkbox", class: "doc-tag", checked: this.tags.has(t), onchange: e => {
+                if (e.target.checked) this.tags.add(t); else this.tags.delete(t);
+                refresh();
+              }}), t))),
           h("div", {class: "tool-row", id: "doc-bulk", hidden: true},
             h("span", {class: "hint", style: "flex:1"}, "Flagged and not decided here:"),
             h("button", {class: "btn", title: help("bulk-bad"), onclick: guarded(() => this.markAll("bad"))}, "All bad"),
@@ -1324,12 +1339,20 @@ const Docs = {
         h("div", {class: "rows", id: "doc-rows"})),
       h("div", {class: "detail", id: "doc-detail"}, h("div", {class: "empty"}, h("h3", {}, "Choose a document"), h("p", {}, "Its saved text and original appear here, with ways to fix it."))));
     this.renderCounts(this.counts);
+    // the next page loads when the end of the list comes near, in place of a Show more button
+    this.moreWatch = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting) && !this.loadingMore && this.total > this.items.length) {
+        this.loadingMore = true;
+        this.load({more: true});
+      }
+    }, {root: $("#doc-rows"), rootMargin: "300px"});
   },
   // `keep`: the same list again after a decision, so the open document stays open even if it has left it
   load: guarded(async function ({more = false, keep = false} = {}) {
     const self = Docs;
     self.build();
     const seq = ++self.seq, off = more ? self.items.length : 0;
+    if (!more) self.loadingMore = false;  // a new list: a page still loading for the old one doesn't count
     const term = self.q.trim(), text = self.text.trim(), indexed = config.search_index;
     // the text box narrows what every other box and filter leaves: an index search, or a scan of the files
     const inText = !!text && !NO_TEXT.includes(self.status) && (indexed || text.length > 1);
@@ -1338,8 +1361,9 @@ const Docs = {
     $("#doc-help").hidden = !ranked;
     if (self.status === "failed") self.loadReasons();
     else $("#doc-reason").hidden = true;
+    const tagged = self.tagsNarrow() ? `&tags=${encodeURIComponent([...self.tags].join(","))}&tagless=${self.tagless ? 1 : 0}` : "";
     const common = `q=${encodeURIComponent(term)}&lane=${self.lane}&status=${self.status}&reason=${encodeURIComponent(self.reason)}`
-      + `&decision=${self.decision}&tag=${encodeURIComponent(self.tag)}&sort=${self.garbage ? "garbage" : ""}`;
+      + `&decision=${self.decision}${tagged}&sort=${self.garbage ? "garbage" : ""}`;
     const order = self.garbage ? ", most likely garbage first" : "";
     let r;
     if (ranked) {
@@ -1362,13 +1386,14 @@ const Docs = {
     if (seq !== self.seq) return;  // a newer search has started
     if (self.garbage && self.counts.scored_total === 0) self.note += ". Nothing has been checked for garbage yet: press Check for garbage on the Archive tab";
     self.items = more ? [...self.items, ...r.items] : r.items;
+    self.loadingMore = false;
     self.total = r.total; self.ranked = ranked || scan;
     if (!more) {
       const i = self.doc ? self.items.findIndex(it => it.id === self.doc.id) : -1;
       self.detached = keep && !!self.doc && i < 0;
       self.at = i >= 0 ? i : self.detached ? Math.min(self.at, self.items.length) : -1;
     }
-    self.renderList();
+    self.renderList(more ? off : 0);
   }),
   // after a fix or a decision: the list, and the open document as it is now
   async reload() {
@@ -1382,24 +1407,34 @@ const Docs = {
     sel.replaceChildren(h("option", {value: ""}, "Any reason"), ...r.reasons.map(x => h("option", {value: x.reason, selected: x.reason === this.reason,
       title: explainReason(x.reason)}, `${reasonLabel(x.reason)} (${fmt(x.count)})`)));
   },
-  renderList() {
+  // `from`: the first new row when more were loaded; they're added below, so the list doesn't move
+  renderList(from = 0) {
     const rows = $("#doc-rows");
-    rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note),
-      ...this.items.map((it, i) => {
-        const flagged = it.score !== null && it.score >= FLAGGED_SCORE;
-        return h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
-          h("div", {class: "title"}, it.title || it.url),
-          h("div", {class: "sub"}, h("span", {}, it.host),
-            (flagged || (this.garbage && it.score !== null)) && h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Garbage score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})),
-            flagged ? h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))
-              : h("span", {class: "right", title: [help("status-" + it.status), it.status === "failed" ? explainReason(it.reason) : ""].filter(Boolean).join(" ")},
-                it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
-          it.decision && h("div", {class: "snippet"}, decisionText(it)),
-          it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)));
-      }));
-    if (this.total > this.items.length) rows.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load({more: true})}, "Show more")));
-    $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason || this.tag);
+    const row = (it, i) => {
+      const flagged = it.score !== null && it.score >= FLAGGED_SCORE;
+      return h("button", {class: "row", "aria-current": !this.detached && i === this.at, onclick: () => this.open(i)},
+        h("div", {class: "title"}, it.title || it.url),
+        h("div", {class: "sub"}, h("span", {}, it.host),
+          (flagged || (this.garbage && it.score !== null)) && h("span", {class: "scorebar", title: `${help("score")} (${it.score})`, "aria-label": `Garbage score ${it.score}`}, h("i", {style: `width:${Math.round(it.score * 100)}%`})),
+          flagged ? h("span", {class: "right", title: SIGNAL_HELP[topSignal(it.signals)] ?? ""}, topSignal(it.signals))
+            : h("span", {class: "right", title: [help("status-" + it.status), it.status === "failed" ? explainReason(it.reason) : ""].filter(Boolean).join(" ")},
+              it.status === "ok" ? shortChars(it.chars) + " chars" : it.reason ? `${it.status}: ${reasonLabel(it.reason)}` : it.status)),
+        it.decision && h("div", {class: "snippet"}, decisionText(it)),
+        it.snippet && h("div", {class: "snippet"}, it.snippet.map(([text, hit]) => hit ? h("mark", {}, text) : text)));
+    };
+    const old = $("#doc-more");
+    if (old) { this.moreWatch?.unobserve(old); old.remove(); }
+    if (from > 0) rows.append(...this.items.slice(from).map((it, n) => row(it, from + n)));
+    else rows.replaceChildren(h("div", {class: "hint", style: "padding:6px 12px", role: "status"}, this.note), ...this.items.map(row));
+    if (this.total > this.items.length) {  // in view, it loads the next page
+      const more = h("div", {class: "more hint", id: "doc-more"}, "Loading more…");
+      rows.append(more);
+      this.moreWatch?.observe(more);
+    }
+    $("#doc-bulk").hidden = this.ranked || !(this.q.trim() || this.lane || this.status || this.reason || this.tagsNarrow());
   },
+  // whether the tag ticks leave anything out: everything ticked is no filter at all
+  tagsNarrow() { return !(this.tagless && this.tags.size === Object.keys(SIGNAL_HELP).length); },
   // the counts the garbage check keeps: on the Review button, the decision filter and the fixes banner
   renderCounts(counts) {
     this.counts = counts || {};
@@ -1453,8 +1488,16 @@ const Docs = {
   }),
   fixRow(d) {
     const note = h("input", {type: "text", id: "doc-note", placeholder: "Note (optional)", value: d.note || "", "aria-label": "Note"});
-    const btn = (label, decision, why, method) => h("button", {class: "btn", disabled: !!why, "aria-pressed": d.decision === decision, title: why || help("decide-" + decision), onclick: guarded(() => this.decide(decision, method?.()))}, label);
     const usual = config.options.ocr_lang || "eng";
+    // a chosen button, clicked again, undoes it; for a fix, only while it's still waiting, and only the same way
+    const btn = (label, decision, why, method, way = null) => {
+      const chosen = d.decision === decision;
+      const running = chosen && ["ocr", "refetch"].includes(decision) && d.applied && lastState?.job.active;
+      const undo = () => chosen && (!method || (method() || way) === (d.method || way));
+      return h("button", {class: "btn", disabled: !!why || running, "aria-pressed": chosen,
+        title: why || (running ? "This fix is running now, so it can't be called back." : chosen ? "Chosen. Click again to undo." : help("decide-" + decision)),
+        onclick: guarded(() => undo() ? this.decide(null) : this.decide(decision, method?.()))}, label);
+    };
     const langs = [...new Set([usual, ...(config.ocr_langs || [])])];
     const chosenLang = d.decision === "ocr" && d.method ? d.method : usual;
     const ways = d.methods || [];
@@ -1462,9 +1505,9 @@ const Docs = {
     return h("div", {class: "decide-row"},
       d.decision === "fixed" && h("span", {style: "flex-basis:100%"}, `${d.note || "A fix changed this text"}. Check it, then mark it Fine, or try another fix.`),
       btn("Fine", "fine"), btn("Bad", "bad"),
-      btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value),
+      btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value, usual),
       d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
-      btn("Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value),
+      btn("Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
       ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),
       btn("Can't fix", "unfixable"),
       d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo"),
@@ -1503,7 +1546,8 @@ const Docs = {
   },
   async markAll(decision) {
     if (!confirm(`Mark everything listed here that's flagged as possible garbage and not decided yet as ${DECISION_LABEL[decision]}? Your documents aren't changed, and you can undo each one later.`)) return;
-    const r = await api("/api/decide", {filter: {q: this.q, lane: this.lane, status: this.status, reason: this.reason, tag: this.tag}, decision});
+    const tags = this.tagsNarrow() ? {tags: [...this.tags], tagless: this.tagless ? 1 : 0} : {};
+    const r = await api("/api/decide", {filter: {q: this.q, lane: this.lane, status: this.status, reason: this.reason, ...tags}, decision});
     toast(`Marked ${fmt(r.changed)} as ${DECISION_LABEL[decision]}.`);
     await this.reload();
   },

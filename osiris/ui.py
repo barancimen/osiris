@@ -1062,6 +1062,10 @@ async def decide(request: web.Request) -> web.Response:
         ids = [d for d in body.get("ids", []) if DOC_ID.match(str(d))]
     db = review.connect(app["out"])
     try:
+        if app["job"].active:  # a fix the running job has taken can't be called back or changed
+            under_way = {did for (did,) in db.execute(
+                "SELECT doc_id FROM decisions WHERE decision IN ('ocr', 'refetch') AND applied_at IS NOT NULL")}
+            ids = [d for d in ids if d not in under_way]
         review.ensure_scored(db, app["store"], ids)  # never checked, or failed: it can still be decided on
         n = review.decide(db, ids, decision, str(body.get("note") or "") or None, method)
         counts = review.counts(db)
@@ -1133,6 +1137,30 @@ TAGS = tuple(review.WEIGHTS)  # the garbage check's signals, as tags to filter b
 TAG_SHOWN = 0.25  # a document shows a tag from this strength up, so the filter does too
 
 
+def _tag_filter(q, signals: str) -> tuple[str, list] | None:
+    """`tags`, the ticked tags, and `tagless`, the All tags tick: a document shows if it has any ticked
+    tag, or with All tags ticked, if it has none at all (documents never checked included). Neither given:
+    no filter."""
+    if "tags" not in q and "tagless" not in q:
+        return None
+    ticked = q.get("tags", "")
+    ticked = [t for t in (ticked if isinstance(ticked, list) else str(ticked).split(",")) if t in TAGS]
+
+    def has(tag: str) -> tuple[str, list]:
+        return f"COALESCE(CAST(json_extract({signals}, ?) AS REAL), 0) >= ?", [f'$."{tag}"', TAG_SHOWN]
+
+    parts, params = [], []
+    for tag in ticked:
+        part, part_params = has(tag)
+        parts.append(part)
+        params += part_params
+    if str(q.get("tagless", "")) in ("1", "true", "True"):
+        every = [has(tag) for tag in TAGS]
+        parts.append("NOT (" + " OR ".join(part for part, _ in every) + ")")
+        params += [p for _, part_params in every for p in part_params]
+    return ("(" + " OR ".join(parts) + ")", params) if parts else ("0", [])
+
+
 def _title_box(text: str) -> tuple[list[str], list[str]]:
     """The words to find in a title or URL, and the sites named with site:."""
     words, sites = [], []
@@ -1159,9 +1187,9 @@ def _box_filters(q, url: str, title: str, host: str, signals: str) -> tuple[list
         where.append("(" + " OR ".join(f"({host} = ? OR {host} LIKE ?)" for _ in sites) + ")")
         for site in sites:
             params += [site, f"%.{site}"]
-    if (tag := q.get("tag")) in TAGS:
-        where.append(f"CAST(json_extract({signals}, ?) AS REAL) >= ?")
-        params += [f'$."{tag}"', TAG_SHOWN]
+    if tagged := _tag_filter(q, signals):
+        where.append(tagged[0])
+        params += tagged[1]
     return where, params
 
 
@@ -1345,7 +1373,7 @@ async def document(request: web.Request) -> web.Response:
     db = review.connect(out)
     try:
         scored = db.execute(
-            "SELECT s.score, s.signals, s.source, d.decision, d.note, d.method FROM scores s LEFT JOIN decisions d USING (doc_id)"
+            "SELECT s.score, s.signals, s.source, d.decision, d.note, d.method, d.applied_at FROM scores s LEFT JOIN decisions d USING (doc_id)"
             " WHERE s.doc_id = ?", (did,)).fetchone()
         earlier = review.earlier_version(db, did)
     finally:
@@ -1368,6 +1396,7 @@ async def document(request: web.Request) -> web.Response:
         "score": scored[0] if scored else None, "signals": json.loads(scored[1]) if scored else {},
         "decision": scored[3] if scored else None, "note": scored[4] if scored else None,
         "method": scored[5] if scored else None,
+        "applied": bool(scored and scored[6]),  # a fix already handed to a job: running, or done and not checked yet
         "pdf": review.is_pdf_source(meta.get("source") or (scored[2] if scored else None)),
         "methods": fixes.methods_for(rows[0][-1], lane, bool(load_key()), _has_browser()),
         "earlier": {**earlier, "body": earlier["body"][:MAX_BODY], "truncated": earlier["length"] > MAX_BODY}
