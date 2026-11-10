@@ -33,6 +33,8 @@ from .store import Store, now_iso, parse_doc
 log = logging.getLogger(__name__)
 
 FLAGGED = 0.35  # at or above this, a document is on the review list
+SAVE_EVERY = 1.0  # seconds a check holds review.sqlite before letting another writer in
+YIELD = 0.15  # seconds it then leaves the lock free
 SAMPLE = 60_000  # characters read from each of three places in a long document
 OUTSIDE_LIST = ("fine", "unfixable")
 CHOOSE = "choose"  # set by the check, never by hand: fetching again or OCR gave different text, and you pick
@@ -207,15 +209,24 @@ def _excerpt(body: str) -> str:
 def scan(store: Store, out: str | Path) -> dict[str, int]:
     """Score new and changed documents, then settle decisions against the current text."""
     db = connect(out)
-    known = {did: (mtime, size) for did, mtime, size in db.execute("SELECT doc_id, mtime, size FROM scores")}
+    known = {did: rest for did, *rest in db.execute("SELECT doc_id, mtime, size, status, lane FROM scores")}
     rows = store.db.execute(
         "SELECT doc_id, MIN(doc_key), MIN(url), lane, status, MAX(chars) FROM urls"
         " WHERE status IN ('ok', 'thin') GROUP BY doc_id"
     ).fetchall()
     log.info("review: checking %d documents", len(rows))
     current, scored, missing = set(), 0, 0
-    last = time.monotonic()
+    logged = saved = time.monotonic()
     for i, (did, key, url, lane, status, chars) in enumerate(rows, 1):
+        now = time.monotonic()
+        if now - saved > SAVE_EVERY:  # the page writes decisions here too: never make it wait long
+            if db.in_transaction:
+                db.commit()
+                time.sleep(YIELD)  # a writer waiting for the lock retries every few dozen ms: give it the gap
+            saved = time.monotonic()
+        if now - logged > 5:
+            logged = now
+            log.info("review: %d of %d checked, %d scored", i, len(rows), scored)
         path = store.md_path(did)
         try:
             stat = path.stat()
@@ -223,8 +234,10 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
             missing += 1
             continue
         current.add(did)
-        if known.get(did) == (stat.st_mtime, stat.st_size):
-            db.execute("UPDATE scores SET status = ?, lane = ? WHERE doc_id = ?", (status, lane, did))
+        mtime, size, was_status, was_lane = known.get(did, (None, None, None, None))
+        if (mtime, size) == (stat.st_mtime, stat.st_size):
+            if (was_status, was_lane) != (status, lane):  # an unchanged document costs no write at all
+                db.execute("UPDATE scores SET status = ?, lane = ? WHERE doc_id = ?", (status, lane, did))
             continue
         doc = store.read_doc(did)
         if doc is None:
@@ -233,10 +246,6 @@ def scan(store: Store, out: str | Path) -> dict[str, int]:
             continue
         _insert_score(db, (did, key, url, lane, status), doc, stat)
         scored += 1
-        if time.monotonic() - last > 5:
-            db.commit()
-            last = time.monotonic()
-            log.info("review: %d of %d checked, %d scored", i, len(rows), scored)
     db.commit()
 
     settled = _settle(db, store, current)
