@@ -788,7 +788,7 @@ function renderState(s) {
 /* how far a run is. Sources run side by side, each on its own schedule, so a run lasts as long as its
    slowest source. Stages inside a source (arXiv's abstracts, then its full text) run one after the other. */
 const PACE_WINDOW = 180000;  // how much recent progress a pace is measured over
-const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text"};
+const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text", refresh_web: "Web PDFs read again"};
 const Progress = {stages: {}, job: null};
 function renderProgress(j) {
   const box = $("#run-progress");

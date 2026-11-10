@@ -32,7 +32,7 @@ from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
-from .store import TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
+from .store import REFRESH, REFRESH_FINISHED, TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file
 from .arxiv import ABSTRACT_ONLY_CHARS, BATCH as ARXIV_BATCH, DELAY as ARXIV_DELAY, FULLTEXT, FULLTEXT_DELAY
 from .youtube import DEFAULT_DELAY
 
@@ -92,6 +92,7 @@ class Job:
         self.started = self.finished = None
         self.env_extra: dict[str, str | None] = {}
         self.plan: dict | None = None  # set while fetching: what the time left is worked out from
+        self.refreshed: set[str] = set()  # lanes whose PDF refresh has finished in this job
         self.on_change = lambda: None  # a job started or ended
         self.on_line = lambda line: None  # a line was written
 
@@ -102,6 +103,8 @@ class Job:
     def log(self, line: str) -> None:
         line = line.rstrip()
         line = line if not line or STAMPED.match(line) else f"{time.strftime('%H:%M:%S')} {line}"
+        if REFRESH_FINISHED in line:  # its marks are cleared now, so the manifest can't tell
+            self.refreshed.update(lane for lane in REFRESH_LANES["both"] if f"{lane}: {REFRESH_FINISHED}" in line)
         self.lines.append(line)
         self.count += 1
         self.on_line(line)
@@ -110,6 +113,7 @@ class Job:
         """`keep_log`: carry on the log of the job before, for one that follows on from it by itself."""
         self.name, self.step, self.state = name, "", "running"
         self.plan = None
+        self.refreshed = set()
         if not keep_log:
             self.lines.clear()
             self.count = 0
@@ -416,14 +420,20 @@ def _chosen_lanes(options: dict) -> list[str]:
     return [lane for lane in options.get("lanes", LANES) if lane in LANES]
 
 
+REFRESH_LANES = {"web": ("generic",), "local": ("localfile",), "both": ("generic", "localfile")}
+REFRESH_PDF = ("(content_type = 'application/pdf' OR lower(url) LIKE '%.pdf' OR lower(url) LIKE '%.pdf?%'"
+               " OR lower(url) LIKE '%.pdf#%')")  # store.start_refresh's PDFs, in SQL
+
+
 def _plan(lanes: list[str], options: dict) -> dict:
     """What a run will fetch, as far as its time left depends on it."""
     low = _number(options, "youtube_delay_min", float, 0, DEFAULT_DELAY[0])
     high = _number(options, "youtube_delay_max", float, 0, DEFAULT_DELAY[1])
-    return {"lanes": lanes, "full_text": bool(options.get("arxiv_fulltext", True)), "youtube_each": (low + high) / 2}
+    return {"lanes": lanes, "full_text": bool(options.get("arxiv_fulltext", True)), "youtube_each": (low + high) / 2,
+            "refresh": [lane for lane in REFRESH_LANES.get(options.get("refresh") or "", ()) if lane in lanes]}
 
 
-def _progress(out: Path, since: float, plan: dict, full_text_left: int) -> dict:
+def _progress(out: Path, since: float, plan: dict, full_text_left: int, refreshed: set[str] = frozenset()) -> dict:
     """What a run has finished, and what each of its sources has left, stage by stage. `each` is the
     fewest seconds one item can take, for the sources that work to a fixed schedule."""
     db = read_manifest(out)
@@ -432,6 +442,14 @@ def _progress(out: Path, since: float, plan: dict, full_text_left: int) -> dict:
             "SELECT lane, COUNT(DISTINCT CASE WHEN status = 'pending' THEN doc_key END),"
             " COALESCE(SUM(status NOT IN ('pending', 'skipped') AND updated_at >= ?), 0) FROM urls GROUP BY lane",
             (_iso(since),))}
+        refresh = {}  # lane: (PDFs left to read again, read again without changing)
+        for lane in plan.get("refresh", ()):
+            if lane not in refreshed:
+                refresh[lane] = db.execute(
+                    "SELECT COUNT(DISTINCT CASE WHEN instr(tried, ?) = 0 THEN doc_key END),"
+                    " COUNT(DISTINCT CASE WHEN instr(tried, ?) > 0 AND updated_at < ? THEN doc_key END)"
+                    f" FROM urls WHERE lane = ? AND status IN ('ok', 'thin') AND {REFRESH_PDF}",
+                    (f",{REFRESH}", f",{REFRESH}", _iso(since), lane)).fetchone()
     finally:
         db.close()
     stages = []
@@ -441,9 +459,13 @@ def _progress(out: Path, since: float, plan: dict, full_text_left: int) -> dict:
             stages.append({"source": lane, "stage": lane, "left": left, "each": ARXIV_DELAY / ARXIV_BATCH})
             if plan["full_text"]:  # each abstract still to come brings a paper to read
                 stages.append({"source": lane, "stage": "full_text", "left": full_text_left + left, "each": FULLTEXT_DELAY})
+        elif lane == "localfile":  # its PDFs are read again alongside the waiting files
+            stages.append({"source": lane, "stage": lane, "left": left + refresh.get(lane, (0, 0))[0], "each": None})
         else:
             stages.append({"source": lane, "stage": lane, "left": left, "each": plan["youtube_each"] if lane == "youtube" else None})
-    return {"done": sum(counts.get(lane, (0, 0))[1] for lane in plan["lanes"]),
+            if lane in refresh:  # web PDFs are read again once the waiting URLs are done
+                stages.append({"source": lane, "stage": "refresh_web", "left": refresh[lane][0], "each": None})
+    return {"done": sum(counts.get(lane, (0, 0))[1] for lane in plan["lanes"]) + sum(done for _, done in refresh.values()),
             "waiting": sum(stage["left"] for stage in stages), "stages": stages}
 
 
@@ -464,7 +486,8 @@ async def state(request: web.Request) -> web.Response:
         "review": counts,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
                 "lines": lines, "started": job.started, "finished": job.finished,
-                "progress": _progress(out, job.started, job.plan, table["arxiv_full_text"].get("pending", 0)) if job.active and job.plan else None},
+                "progress": _progress(out, job.started, job.plan, table["arxiv_full_text"].get("pending", 0), job.refreshed)
+        if job.active and job.plan else None},
         "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,
         "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),

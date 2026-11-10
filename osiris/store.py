@@ -59,6 +59,7 @@ FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "dat
 DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
+REFRESH_FINISHED = "refresh finished"  # in the log, after which a lane's marks are cleared
 log = logging.getLogger(__name__)
 
 
@@ -84,7 +85,7 @@ class RefreshProgress:
             log.info("%s: refresh: %s", self.lane, self._counts())
 
     def finish(self) -> None:
-        log.info("%s: refresh finished: %s", self.lane, self._counts())
+        log.info("%s: %s: %s", self.lane, REFRESH_FINISHED, self._counts())
 
 
 def now_iso() -> str:
