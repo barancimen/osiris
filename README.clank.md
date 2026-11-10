@@ -205,7 +205,6 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
 | `osiris stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
 | `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
-| `osiris blocked` | Lists saved Google Scholar pages that are only Google's "unusual traffic" block page. `--apply` deletes them and sends their links back to waiting. See [Google Scholar](#google-scholar) |
 
 Common `osiris run` options:
 
@@ -370,7 +369,6 @@ Scholar rations automated requests. Past some number it answers with an "unusual
 - **Block pages:** Google's block page, a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
 - **No headless browser:** the browser pass and the browser fix method skip Scholar. Your cookies with the plain download work better.
 - **Profiles:** a profile's list of works is asked for 100 at a time (`cstart=0&pagesize=100`), not the 20 Scholar shows unless you click Show more. Profiles saved before this have 20; fetch one again to get the longer list.
-- **Saved block pages:** earlier versions saved the block page as the document, mostly through the browser pass. `osiris blocked` lists them, and `osiris blocked --apply` deletes them and sends their links back to waiting.
 
 ### Browser session
 

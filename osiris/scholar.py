@@ -1,5 +1,5 @@
 """Google Scholar: recognising its block page, leaving it alone for the rest of a run once it blocks,
-asking for a profile's whole list of works, and finding block pages saved by earlier versions.
+and asking for a profile's whole list of works.
 
 Scholar rations automated requests: past some number, it answers with an "unusual traffic" page, often
 as an ordinary 200, and a headless browser gets that page about four times in five. Saving it as the
@@ -19,7 +19,7 @@ GOOGLE = re.compile(r"(^|\.)google(\.com?)?\.[a-z]{2,3}$")  # scholar.google.com
 # the block page as Google serves it, and as text once extracted
 BLOCK = re.compile(r"unusual traffic from your computer network|systems have detected unusual traffic"
                    r"|sending automated queries|automated queries from your computer", re.I)
-BLOCK_PAGE_MAX = 200_000  # bytes of HTML, or characters of text: a real Scholar page that quotes those words is longer
+BLOCK_PAGE_MAX = 200_000  # bytes of HTML: a real Scholar page that quotes those words is longer
 PROFILE_PAGE = 100  # works on a profile page; Scholar shows 20 unless asked, and 100 is the most it gives at once
 
 _blocked = False  # this run has seen a block page: one process is one run
@@ -45,11 +45,6 @@ def is_block(url: str, status: int, final_url: str | None, body: bytes | str | N
     return bool(BLOCK.search(text))
 
 
-def block_page_text(body: str) -> bool:
-    """A document saved earlier that is only Google's block page."""
-    return len(body) < 5_000 and bool(BLOCK.search(body))
-
-
 def blocked() -> bool:
     return _blocked
 
@@ -65,26 +60,6 @@ def reset() -> None:
     """For tests: a fresh run."""
     global _blocked
     _blocked = False
-
-
-def saved_blocks(store) -> list[tuple[str, str, str]]:
-    """(doc_id, url, source) for each saved Google page that is only Google's block page."""
-    from .store import parse_doc
-
-    found = []
-    for did, url in store.db.execute(
-        "SELECT doc_id, MIN(url) FROM urls WHERE status IN ('ok', 'thin') AND doc_id IS NOT NULL"
-        " AND url LIKE '%google.%' GROUP BY doc_id ORDER BY MIN(rowid)"
-    ).fetchall():
-        if not is_google(url):
-            continue
-        try:
-            meta, body = parse_doc(store.md_path(did).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if block_page_text(body):
-            found.append((did, url, meta.get("source") or "?"))
-    return found
 
 
 def fetch_url(url: str) -> str:

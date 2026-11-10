@@ -206,25 +206,6 @@ class Store:
         """Remove a document's saved text and osiris's own copies of its original. Its links stay in the
         manifest, marked deleted, so that no later run fetches them again from your tab backups. Your own
         files (local files, saved pages) are never touched. False if there's no such document."""
-        if not self._remove_files(did):
-            return False
-        self.db.execute("UPDATE urls SET lane = 'skip', status = 'skipped', reason = 'deleted', chars = NULL,"
-                        " raw_path = NULL, title = '', updated_at = ? WHERE doc_id = ?", (now_iso(), did))
-        self.db.commit()
-        return True
-
-    def put_back(self, did: str) -> bool:
-        """Remove what was saved for a document and send its links back to waiting, as if never
-        fetched: for a saved page that turned out to be a site's block page. False if there's no such document."""
-        if not self._remove_files(did):
-            return False
-        self.db.execute("UPDATE urls SET status = 'pending', reason = NULL, http_status = NULL, chars = NULL,"
-                        " raw_path = NULL, tried = '', title = '', updated_at = ? WHERE doc_id = ?", (now_iso(), did))
-        self.db.commit()
-        return True
-
-    def _remove_files(self, did: str) -> bool:
-        """The document's text and osiris's own copies of its original; never anything outside md/ and raw/."""
         rows = self.db.execute("SELECT raw_path FROM urls WHERE doc_id = ?", (did,)).fetchall()
         if not rows:
             return False
@@ -233,6 +214,9 @@ class Store:
         for path in files:
             if any(path.resolve().is_relative_to(folder) for folder in ours):
                 path.unlink(missing_ok=True)
+        self.db.execute("UPDATE urls SET lane = 'skip', status = 'skipped', reason = 'deleted', chars = NULL,"
+                        " raw_path = NULL, title = '', updated_at = ? WHERE doc_id = ?", (now_iso(), did))
+        self.db.commit()
         return True
 
     def mark_inputs_read(self, files: Iterable[tuple[str, str]]) -> None:
