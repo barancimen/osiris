@@ -13,8 +13,8 @@ sys.path.insert(0, REPO_DIR)  # works under python -I and from any cwd
 import osiris.dedup  # noqa: E402
 from osiris.dedup import keep, dedup_key, unwrap  # noqa: E402  (shared with the osiris manifest)
 
-# Only explicitly saved links: bookmarks + Session Buddy, web pages and local files (file://).
-# htu_*.tsv (browser history) and twitter-Following-*.json are excluded.
+# Only explicitly saved links: bookmarks + Session Buddy + hand-written *.txt lists, web pages and local
+# files (file://). htu_*.tsv (browser history) and twitter-Following-*.json are excluded.
 
 def unescape_attr(s):
     # html.unescape() also decodes legacy entities without a trailing ';'
@@ -57,6 +57,25 @@ def extract_session_buddy(path):
             for tab in (win.get('tabs') or []):
                 if isinstance(tab, dict) and tab.get('url'):
                     urls.append(tab['url'].strip())
+    return urls
+
+SCHEME = re.compile(r'^[a-z][a-z0-9+.-]*:', re.I)
+BARE_LINK = re.compile(r'^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?$', re.I)  # example.com/page
+
+def extract_text(path):
+    """A hand-written list: the first word of each line, if it's a link. One with no scheme, such as
+    example.com/page or www.youtube.com/watch?v=..., is taken as https."""
+    urls = []
+    with open(path, encoding='utf-8-sig', errors='replace') as f:
+        for line in f:
+            words = line.split()
+            if not words:
+                continue
+            u = words[0]
+            if BARE_LINK.match(u):  # before SCHEME, which would read example.com:8080 as a scheme
+                urls.append('https://' + u)
+            elif SCHEME.match(u):
+                urls.append(u)
     return urls
 
 INPUT_DIR = os.path.normpath(os.path.join(REPO_DIR, '..', 'tab-backups'))
@@ -117,8 +136,9 @@ def main():
     files = []
     files += sorted(glob.glob(os.path.join(d, 'bookmarks_*.html')))
     files += sorted(glob.glob(os.path.join(d, 'session-buddy-*.json')))
+    files += sorted(glob.glob(os.path.join(d, '*.txt')))
     if not files:
-        sys.exit(f'no bookmarks_*.html or session-buddy-*.json in {d}')
+        sys.exit(f'no bookmarks_*.html, session-buddy-*.json or *.txt in {d}')
 
     seen = set()
     ordered = []  # first-seen original spelling of each page
@@ -138,6 +158,8 @@ def main():
             read.append((key, name))
         if name.startswith('bookmarks_'):
             urls = extract_bookmarks(path)
+        elif name.endswith('.txt'):
+            urls = extract_text(path)
         else:
             urls = extract_session_buddy(path)
         filtered = added = 0

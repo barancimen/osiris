@@ -687,9 +687,11 @@ def _scan_folder(path: Path, kind: str) -> dict:
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
         sessions = len(list(path.glob("session-buddy-*.json")))
-        if not bookmarks and not sessions:
-            return {"ok": False, "summary": "No bookmarks_*.html or session-buddy-*.json files here"}
-        return {"ok": True, "summary": f"{_files(bookmarks, 'bookmark')}, {_files(sessions, 'Session Buddy')}"}
+        lists = len(list(path.glob("*.txt")))
+        if not bookmarks and not sessions and not lists:
+            return {"ok": False, "summary": "No bookmarks_*.html, session-buddy-*.json or .txt files here"}
+        return {"ok": True, "summary": f"{_files(bookmarks, 'bookmark')}, {_files(sessions, 'Session Buddy')}"
+                + (f", {_files(lists, 'text')}" if lists else "")}
     readable, other, html = Counter(), 0, 0
     for root, dirs, names in os.walk(path):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
