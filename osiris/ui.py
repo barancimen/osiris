@@ -685,10 +685,12 @@ def _scan_folder(path: Path, kind: str) -> dict:
     if not path.is_dir():
         return {"ok": False, "summary": "Folder not found"}
     if kind == "tweets":
-        counts = [n for n in map(tweetdb.count_tweets, tweetdb.find_databases([path])) if n is not None]
-        if not counts:
-            return {"ok": False, "summary": "No tweet databases here"}
-        return {"ok": True, "summary": f"{len(counts):,} tweet database{'' if len(counts) == 1 else 's'}, {sum(counts):,} tweets"}
+        found = [c for c in map(tweetdb.count_tweets, tweetdb.find_files([path])) if c is not None]
+        if not found:
+            return {"ok": False, "summary": "No tweet databases or archives here"}
+        kinds = Counter(kind for kind, _ in found)
+        files = " and ".join(f"{kinds[k]:,} {k}{'' if kinds[k] == 1 else 's'}" for k in ("database", "archive") if kinds[k])
+        return {"ok": True, "summary": f"{files}, {sum(n for _, n in found):,} tweets"}
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
         sessions = len(list(path.glob("session-buddy-*.json")))
@@ -859,7 +861,7 @@ async def start_archive(request: web.Request) -> web.Response:
         if config["saved"]:
             await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
         if config["tweets"]:  # before archiving, so tweets they hold aren't looked up
-            await j.run("Importing tweet databases",
+            await j.run("Importing tweet databases and archives",
                         j.osiris("import-tweets", *[str(Path(p).expanduser()) for p in config["tweets"]]))
         j.plan = _plan(_chosen_lanes(options), options)
         await j.run("Archiving", j.osiris(*run_args, "--mark-inputs", str(read_files)))
