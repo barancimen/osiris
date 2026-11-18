@@ -253,12 +253,13 @@ function fill(el, ...kids) { el.replaceChildren(...kids.flat().filter(k => k !==
 const fmt = n => (n ?? 0).toLocaleString("en-US");
 const shortChars = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n ?? 0);
 function toast(text) { const t = $("#toast"); t.textContent = text; t.style.display = "block"; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 3500); }
-async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+async function api(path, body, signal) {
+  const res = await fetch(path, {signal, ...(body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})});
   if (!res.ok) { const text = await res.text(); throw new Error(text || res.statusText); }
   return res.json();
 }
-const guarded = fn => async (...args) => { try { return await fn(...args); } catch (e) { toast(e.message); } };
+// a request cancelled because a newer one replaced it isn't an error
+const guarded = fn => async (...args) => { try { return await fn(...args); } catch (e) { if (e.name !== "AbortError") toast(e.message); } };
 
 /* ---- tabs ---- */
 let currentTab = "archive";
@@ -1294,7 +1295,7 @@ const Docs = {
   // (`detached`), and then `at` is where it was, so j opens the one that took its place
   built: false, items: [], at: -1, total: 0, q: "", text: "", lane: "", status: "", reason: "", decision: "", garbage: false,
   tags: new Set(Object.keys(SIGNAL_HELP)), tagless: true, loadingMore: false,
-  terms: [], note: "", seq: 0, ranked: false, counts: {}, doc: null, openTerms: [], detached: false,
+  terms: [], note: "", seq: 0, request: null, ranked: false, counts: {}, doc: null, openTerms: [], detached: false,
   wanted: null, fixing: false,
   build() {
     if (this.built) return; this.built = true;
@@ -1364,6 +1365,8 @@ const Docs = {
     const ranked = inText && indexed, scan = inText && !indexed;
     if (quiet && (scan || self.loadingMore)) return;  // a scan reads files: only when asked for
     const seq = ++self.seq, off = more ? self.items.length : 0;
+    self.request?.abort();  // the previous search or list stops, on the server too
+    const signal = (self.request = new AbortController()).signal;
     if (!more) self.loadingMore = false;  // a new list: a page still loading for the old one doesn't count
     const limit = quiet ? `&limit=${Math.max(self.items.length, 100)}` : "";
     $("#doc-review").setAttribute("aria-pressed", self.garbage);
@@ -1376,19 +1379,19 @@ const Docs = {
     const order = self.garbage ? ", most likely garbage first" : "";
     let r;
     if (ranked) {
-      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}&offset=${off}${limit}`);
+      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}&offset=${off}${limit}`, undefined, signal);
       const ix = r.index;
       self.note = (ix.updating && ix.total && ix.done < ix.total ? `Still building the search index (${fmt(ix.done)} of ${fmt(ix.total)}), so some matches are missing. ` : "")
         + `${fmt(r.total)} ${r.total === 1 ? "document matches" : "documents match"}` + (order || ", best first");
       self.terms = r.terms;
     } else if (scan) {
       if (!more) $("#doc-rows").replaceChildren(h("div", {class: "more hint"}, "Searching…"));
-      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}`);
+      r = await api(`/api/search?text=${encodeURIComponent(text)}&${common}`, undefined, signal);
       self.note = (r.limited ? `The newest ${fmt(r.items.length)} matches. Search for something more specific to narrow it.`
         : `${fmt(r.items.length)} ${r.items.length === 1 ? "match" : "matches"} in ${fmt(r.searched)} documents`) + order;
       self.terms = r.terms;
     } else {
-      r = await api(`/api/documents?${common}&offset=${off}${limit}`);
+      r = await api(`/api/documents?${common}&offset=${off}${limit}`, undefined, signal);
       self.note = `${fmt(r.total)} documents` + (term ? ` matching "${term}" in the URL or title` : "") + order;
       self.terms = [];
     }

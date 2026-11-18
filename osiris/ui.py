@@ -1280,9 +1280,9 @@ async def reasons(request: web.Request) -> web.Response:
         for r, ids in sorted(docs.items(), key=lambda kv: -len(kv[1]))]})
 
 
-def _scan_text(out: Path, q, text: str) -> dict:
+def _scan_text(out: Path, q, text: str, stopped=lambda: False) -> dict:
     """Without the search index: the saved text of the documents that pass every other box and filter,
-    read in the list's order until SCAN_LIMIT have every word of `text` (any case)."""
+    read in the list's order until SCAN_LIMIT have every word of `text` (any case), or until `stopped()`."""
     where, params = _list_where(q)
     db = _list_db(out)
     try:
@@ -1296,6 +1296,8 @@ def _scan_text(out: Path, q, text: str) -> dict:
     patterns = [re.compile(re.escape(word), re.I) for word in words]
     items, searched = [], 0
     for did, url, lane, status, reason, chars in rows:
+        if stopped():
+            break
         searched += 1
         doc = read_doc_file(md_path(out, did))
         if doc is None:
@@ -1320,7 +1322,10 @@ async def search_documents(request: web.Request) -> web.Response:
     if index is None:
         if len(text) < 2:
             raise web.HTTPBadRequest(text="Search for at least 2 characters.")
-        return web.json_response(await asyncio.to_thread(_scan_text, out, q, text))
+        # the page cancels a search when a newer one starts, which closes this request's connection
+        transport = request.transport
+        stopped = lambda: transport is None or transport.is_closing()  # noqa: E731
+        return web.json_response(await asyncio.to_thread(_scan_text, out, q, text, stopped))
     if not text:
         raise web.HTTPBadRequest(text="Type something to search for.")
     found = await asyncio.to_thread(search.search, out, text, q.get("lane", ""), q.get("status", ""),
