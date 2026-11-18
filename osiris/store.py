@@ -182,16 +182,29 @@ class Store:
     # -- manifest -----------------------------------------------------------
 
     def add(self, routes: Iterable[Route]) -> tuple[int, int]:
-        """Queue routes whose dedup key isn't in the manifest yet. Returns (added, already known)."""
+        """Queue routes whose dedup key isn't in the manifest yet. Returns (added, already known).
+        A link to a tweet already in the manifest, under another username, is recorded with that
+        tweet's state rather than queued, so it isn't fetched again."""
         known = {key for (key,) in self.db.execute("SELECT dedup_key FROM urls")}
-        rows, seen = [], 0
+        tweets = {row[0]: row[1:] for row in self.db.execute(
+            "SELECT doc_key, lane, status, reason, http_status, final_url, chars, title, tried FROM urls"
+            " WHERE doc_key LIKE 'tweet:%' GROUP BY doc_key")}
+        rows, aliases, seen = [], [], 0
         for r in routes:
             if r.dedup_key in known:
                 seen += 1
                 continue
             known.add(r.dedup_key)
+            if r.doc_key in tweets:
+                aliases.append((r.url, r.doc_key, r.doc_id, now_iso(), r.dedup_key, *tweets[r.doc_key]))
+                continue
             status = "skipped" if r.lane == "skip" else "pending"
             rows.append((r.url, r.lane, r.doc_key, r.doc_id, status, r.reason, now_iso(), r.dedup_key))
+        self.db.executemany(
+            "INSERT OR IGNORE INTO urls (url, doc_key, doc_id, updated_at, dedup_key, lane, status, reason,"
+            " http_status, final_url, chars, title, tried) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            aliases,
+        )
         before = self.db.total_changes
         self.db.executemany(
             "INSERT OR IGNORE INTO urls (url, lane, doc_key, doc_id, status, reason, updated_at, dedup_key)"
@@ -200,7 +213,7 @@ class Store:
         )
         self.db.commit()
         added = self.db.total_changes - before
-        return added, seen + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
+        return added, seen + len(aliases) + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
 
     def delete(self, did: str) -> bool:
         """Remove a document's saved text and osiris's own copies of its original. Its links stay in the

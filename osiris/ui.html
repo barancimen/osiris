@@ -482,6 +482,7 @@ const SOURCE_HOW = {
   ocr: "read from pictures of the pages (OCR)", transcript: "the video's captions", auto: "made automatically by YouTube",
   manual: "written by people", metadata: "the title and description only", playlist: "the playlist's title and video titles",
   channel: "the channel's title and video titles", api: "from the official API",
+  import: "from a tweet database you imported",
 };
 const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io"};
 function sourceHelp(source) {
@@ -503,6 +504,7 @@ const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, ebooks, Word files and text. Your files are only read, never changed."},
   {key: "saved", title: "Saved pages", text: "Folders of pages saved with the SingleFile browser extension."},
+  {key: "tweets", title: "Tweet databases", text: "Folders of tweets.db files from fetch_tweets.py. Every database file in them is read, and tweets already saved are skipped."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
@@ -546,7 +548,7 @@ function renderArchive() {
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
-  for (const key of ["backups", "local", "saved"]) for (const p of config[key]) scanFolder(key, p);
+  for (const key of ["backups", "local", "saved", "tweets"]) for (const p of config[key]) scanFolder(key, p);
   checkCookies();
 }
 

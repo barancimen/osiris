@@ -312,6 +312,22 @@ def cmd_import(args: argparse.Namespace) -> None:
         store.close()
 
 
+def cmd_import_tweets(args: argparse.Namespace) -> None:
+    from .tweetdb import import_databases
+
+    paths = [Path(p).expanduser() for p in args.paths]
+    if missing := [p for p in paths if not p.exists()]:
+        sys.exit(f"not found: {', '.join(map(str, missing))}")
+    store = Store(args.out)
+    try:
+        import_databases(store, paths)
+    except KeyboardInterrupt:
+        log.warning("interrupted: progress is saved, re-run the same command to resume")
+    finally:
+        store.commit()
+        store.close()
+
+
 def cmd_ocr(args: argparse.Namespace) -> None:
     import uvloop
 
@@ -672,6 +688,12 @@ def main() -> None:
     imp.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="extraction processes (default: CPUs)")
     imp.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per extraction process (0 = none)")
     imp.set_defaults(func=cmd_import)
+
+    tweets = sub.add_parser("import-tweets", help="store tweets from fetch_tweets.py's SQLite databases as markdown;"
+                            " tweets already saved are skipped")
+    tweets.add_argument("paths", nargs="+", help="directories (searched recursively for .db/.sqlite/.sqlite3) or files")
+    tweets.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    tweets.set_defaults(func=cmd_import_tweets)
 
     ocr = sub.add_parser("ocr", help="read PDFs with no text layer (scans) with tesseract; slow, resumable")
     ocr.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
