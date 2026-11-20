@@ -52,7 +52,7 @@ MAX_ATTEMPTS = 3
 MAX_COOLDOWN = 60.0
 PAGE_TIMEOUT = 30.0  # seconds for one download, PDFs included
 STALL_TIMEOUT = 15.0  # seconds a download may send nothing
-HOST_DOWN_AFTER = 3  # consecutive connection-level failures before skipping the rest of a host
+HOST_DOWN_AFTER = 3  # connection-level failures in a row, DNS included, before skipping the rest of a host
 # consecutive refusals (403, or 429 after its retries) before skipping the rest of a host
 # (Scholar, Reddit, Cloudflare walls); the skipped URLs keep that reason, so the fallback
 # passes still get to try them
@@ -401,14 +401,24 @@ class HostScheduler:
             except asyncio.TimeoutError:
                 pass
 
-    def done(self, host: str, requeue: str | None = None, cooldown: float = 0.0, drop: bool = False) -> list[str]:
-        """Release a slot; optionally retry a URL later, cool the host down, or drop the host."""
+    def done(self, host: str, requeue: str | None = None, cooldown: float = 0.0, drop: bool = False,
+             only_host: str | None = None) -> list[str]:
+        """Release a slot; optionally retry a URL later, cool the host down, or drop the host's queue.
+        `only_host` drops just that host's URLs from a queue a rule shares between several hosts."""
         self.active[host] -= 1
         self.in_flight -= 1
         if cooldown:
             self.cooldown[host] = max(self.cooldown.get(host, 0.0), time.monotonic() + cooldown)
         dropped: list[str] = []
-        if drop:
+        if drop and only_host and only_host != host and host in self.queues:
+            queue = self.queues[host]
+            dropped = [u for u in queue if host_of(u) == only_host]
+            queue = deque(u for u in queue if host_of(u) != only_host)
+            if queue:
+                self.queues[host] = queue
+            else:
+                del self.queues[host]
+        elif drop:
             dropped = list(self.queues.pop(host, ()))
         elif requeue:
             self.queues.setdefault(host, deque()).appendleft(requeue)
@@ -466,20 +476,23 @@ class GenericPass:
                         self._fail(url, "blocked", fetched)
                     continue
                 reason = fetched.error
-                self.host_failures[key] = self.host_failures[key] + 1 if reason in CONNECTION_LEVEL else 0
+                # counted per host, though a rule may queue several together (scholar.google.*): one
+                # dead host shouldn't take the others' links with it
+                host = host_of(url)
+                self.host_failures[host] = self.host_failures[host] + 1 if reason in CONNECTION_LEVEL else 0
                 if reason is None:
-                    self.host_forbidden[key] = 0
+                    self.host_forbidden[host] = 0
                     await self._extract(url, fetched)
                     continue
-                if reason == "dns" or self.host_failures[key] >= HOST_DOWN_AFTER:
+                if self.host_failures[host] >= HOST_DOWN_AFTER:
                     drop = "host_down"
                 retry = reason in RETRYABLE and self.attempts[url] < MAX_ATTEMPTS and drop is None
                 if reason == "http_403" or (reason == "http_429" and not retry):
-                    self.host_forbidden[key] += 1
-                    if drop is None and self.host_forbidden[key] >= FORBIDDEN_AFTER:
+                    self.host_forbidden[host] += 1
+                    if drop is None and self.host_forbidden[host] >= FORBIDDEN_AFTER:
                         drop = reason
                 elif reason != "http_429":
-                    self.host_forbidden[key] = 0
+                    self.host_forbidden[host] = 0
                 if retry:
                     requeue = url
                     cooldown = fetched.retry_after or min(2 ** self.attempts[url] + random.uniform(0, 2), MAX_COOLDOWN)
@@ -497,7 +510,8 @@ class GenericPass:
                     self._mark_tried(url)
                     if self.progress:
                         self.progress.one()
-                for lost in sched.done(key, requeue, cooldown, drop is not None or halt):
+                for lost in sched.done(key, requeue, cooldown, drop is not None or halt,
+                                       only_host=host_of(url) if drop is not None else None):
                     if halt:
                         continue
                     self._fail(lost, drop, Fetched())

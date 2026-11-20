@@ -348,7 +348,7 @@ Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdow
 **First pass**
 
 - Hosts are served round-robin, with at most `--per-host` (4) requests in flight per host and `--concurrency` (64) overall, and cooldowns on 429 and 5xx responses. `Retry-After` is honored.
-- `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue, each wait varied by up to a quarter either way. The default is `scholar.google.*=1:20`, since Scholar shows CAPTCHAs after bursts (see [Google Scholar](#google-scholar)).
+- `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue, each wait varied by up to a quarter either way. The default is `scholar.google.*=1:20`, since Scholar shows CAPTCHAs after bursts (see [Google Scholar](#google-scholar)). Hosts in a group share the pace, but each is judged on its own: after 3 connection failures in a row, DNS included, only that host's remaining links are skipped as `host_down`.
 - The `Content-Type` is checked before the body is read, so non-text responses are dropped unread.
 - A host is skipped after 5 straight refusals (403, or 429 after retries) or 3 connection failures.
 
