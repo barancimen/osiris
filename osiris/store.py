@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
@@ -16,6 +17,44 @@ from urllib.parse import urlsplit
 
 from . import clean
 from .route import FORUM_LANES, Route, doc_id, safe_dedup_key
+
+BUSY_FILE = ".osiris-busy"  # in the output folder: locked while a command writes to the archive (see archiving)
+
+
+@contextmanager
+def archiving(out_dir: str | os.PathLike) -> Iterator[None]:
+    """Marks the archive as being written to, for as long as the block runs, so that a program that
+    reads it, such as isis, can put off heavy work until osiris is done. The mark is a shared lock on
+    BUSY_FILE: several osiris commands can hold it at once, a reader tests it with an exclusive lock
+    that doesn't wait, and the system drops it when the process ends, however it ends. Where locks
+    aren't available (Windows), nothing is marked."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    path = Path(out_dir) / BUSY_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)  # waits only while a reader is testing it, a moment
+        yield
+
+
+def is_archiving(out_dir: str | os.PathLike) -> bool:
+    """Whether an osiris command is writing to the archive now (see archiving)."""
+    try:
+        import fcntl
+        f = open(Path(out_dir) / BUSY_FILE)
+    except (ImportError, OSError):
+        return False
+    with f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS urls (

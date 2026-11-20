@@ -471,6 +471,7 @@ Everything goes in `data/`.
 | `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
+| `.osiris-busy` | An empty file that `run` (with or without `--fixes`), `import`, `import-tweets`, `ocr` and `clean` hold a shared lock on while they run, so that a program reading the archive, such as isis, can tell that osiris is writing to it and put off heavy work until it's done. The system drops the lock when the command ends, however it ends. `osiris.store.is_archiving(data)` tests it |
 | `ui.json`, `ui_urls.txt`, `ui_inputs.txt` | The web interface's settings, latest URL list and the tab backups behind it |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw-pdfs`; the same id as the document in `md/`. `.html.zst` is arXiv's HTML. Budget about 2 MB per PDF |
 

@@ -30,7 +30,7 @@ from .env import load_env
 from .scry import ScryClient
 from .singlefile import run_import
 from .stackexchange import run_stackexchange
-from .store import REFRESH_FINISHED, Store, now_iso
+from .store import REFRESH_FINISHED, Store, archiving, now_iso
 from .twitter import run_twitter
 from .youtube import DEFAULT_DELAY as YOUTUBE_DELAY, parse_delay, run_youtube
 
@@ -579,6 +579,10 @@ def cmd_export(args: argparse.Namespace) -> None:
     print(f"wrote {n} documents to {out}" + (f", leaving out {left_out} marked bad in review" if left_out else ""))
 
 
+# The commands that write to the archive, which mark it as busy while they run (see store.archiving).
+WRITERS = (cmd_run, cmd_import, cmd_import_tweets, cmd_ocr, cmd_clean)
+
+
 def main() -> None:
     load_env()
     parser = argparse.ArgumentParser(prog="osiris", description=__doc__)
@@ -756,7 +760,11 @@ def main() -> None:
     os.environ[clean.LEXICON_ENV] = str(Path(args.out).resolve() / clean.LEXICON_FILE)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S",
                         stream=sys.stderr)
-    args.func(args)
+    if args.func in WRITERS:  # so that isis, reading the archive, waits for it to be done before saving its index
+        with archiving(args.out):
+            args.func(args)
+    else:
+        args.func(args)
 
 
 if __name__ == "__main__":
