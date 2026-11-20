@@ -52,6 +52,11 @@ BLOCK_TEXT = re.compile(r"sign in to confirm|not a bot|too many requests|http er
 GONE_TEXT = re.compile(r"does not exist|not available|unavailable|private|removed|terminated|http error 404", re.I)
 PARAGRAPH = 1000
 SCRY_LOOKUP_BATCH = 2000  # a lookup returns only sizes, so it's cheap to ask about many at once
+# No index narrows a video_id lookup in youtube.transcripts, so every query reads all its video ids:
+# 1.8 billion rows by 2026-11, about two minutes, and still growing. A query stopped at its limit is
+# charged and returns nothing, so the limit is generous (Scry allows up to 2000 s).
+SCRY_SECONDS = 600
+SCRY_FAILURES = 2  # failed Scry queries in a row before the rest of the videos go to YouTube
 # of transcript in one response. Scry counts YouTube data 20 times over and its price rises as you take more,
 # so this keeps one query under scry.MAX_EXPOSURE_NANODOLLARS even after a run has spent several dollars
 SCRY_BATCH_CHARS = 500_000
@@ -215,13 +220,13 @@ async def _scry_titles(client: ScryClient, videos: list[str]) -> dict[str, tuple
     rows = await client.query(
         "SELECT video_id, argMax(title, observed_hour) AS title, argMax(channel_name, observed_hour) AS channel"
         f" FROM youtube.videos_live WHERE video_id IN ({sql_list(videos)}) AND title IS NOT NULL"
-        f" GROUP BY video_id LIMIT {len(videos)}", max_seconds=90)
+        f" GROUP BY video_id LIMIT {len(videos)}", max_seconds=SCRY_SECONDS)
     found = {r["video_id"]: (r["title"], r["channel"]) for r in rows if r["title"]}
     missing = [v for v in videos if v not in found]
     if missing:
         rows = await client.query(
             f"SELECT video_id, any(title) AS title, any(uploader) AS channel FROM youtube.videos"
-            f" WHERE video_id IN ({sql_list(missing)}) GROUP BY video_id LIMIT {len(missing)}", max_seconds=90)
+            f" WHERE video_id IN ({sql_list(missing)}) GROUP BY video_id LIMIT {len(missing)}", max_seconds=SCRY_SECONDS)
         found.update({r["video_id"]: (r["title"], r["channel"]) for r in rows if r["title"]})
     return found
 
@@ -266,17 +271,51 @@ async def fill_from_scry(store: Store, pending: list[tuple[str, str]], max_dolla
 
     async def take_all(client: ScryClient) -> None:
         nonlocal saved
+        failures = 0  # in a row
+
+        async def attempt(videos_asked: int, make):
+            """The query's result, or None if Scry failed: those videos are left for YouTube."""
+            nonlocal failures
+            try:
+                result = await make()
+            except ScryError as e:
+                failures += 1
+                log.warning("youtube: Scry failed for %d videos (%s); they come from YouTube", videos_asked, e)
+                return None
+            failures = 0
+            return result
+
+        def giving_up() -> bool:
+            if failures < SCRY_FAILURES:
+                return False
+            log.warning("youtube: Scry failed %d times in a row, so the rest come from YouTube", failures)
+            return True
+
+        async def look_up(batch: list[str]):
+            rows = await client.query(_best_track("length(payload) AS chars", batch), max_seconds=SCRY_SECONDS)
+            sizes = {r["video_id"]: r["chars"] for r in rows if r["chars"]}
+            return sizes, (await _scry_titles(client, list(sizes)) if sizes else {})
+
         for i in range(0, len(wanted), SCRY_LOOKUP_BATCH):
             if out_of_money():
                 return
             batch = wanted[i : i + SCRY_LOOKUP_BATCH]
-            rows = await client.query(_best_track("length(payload) AS chars", batch), max_seconds=120)
-            sizes = {r["video_id"]: r["chars"] for r in rows if r["chars"]}
-            titles = await _scry_titles(client, list(sizes)) if sizes else {}
+            found = await attempt(len(batch), lambda: look_up(batch))
+            if found is None:
+                if giving_up():
+                    return
+                continue
+            sizes, titles = found
             for part in _text_batches(sizes):
                 if out_of_money():
                     return
-                for row in await client.query(_best_track("is_auto_caption AS auto, payload", part), max_seconds=120):
+                rows = await attempt(len(part), lambda: client.query(_best_track("is_auto_caption AS auto, payload", part),
+                                                                     max_seconds=SCRY_SECONDS))
+                if rows is None:
+                    if giving_up():
+                        return
+                    continue
+                for row in rows:
                     video = row["video_id"]
                     text = _scry_text(row["payload"])
                     if text:
