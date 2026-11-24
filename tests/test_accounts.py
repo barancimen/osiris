@@ -10,7 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from osiris import accounts, twitter, ui
+from osiris import accounts, scry as scry_api, twitter, ui
 from osiris.route import doc_id, route
 from osiris.scry import ScryClient, ScryError
 from osiris.store import Store
@@ -32,7 +32,8 @@ def no_real_services(monkeypatch):
     monkeypatch.setattr(ScryClient, "spent_nanodollars", 0)
     monkeypatch.setattr(accounts, "PAGE_DELAY", 0)
     monkeypatch.setattr(twitter, "PAGE_DELAY", 0)
-    monkeypatch.setattr(twitter, "BASE_URL", "http://127.0.0.1:9")  # nothing listens there
+    for service in ("BASE_URL", "API_URL", "TOOL_URL"):  # nothing listens there
+        monkeypatch.setattr(twitter if service == "BASE_URL" else scry_api, service, "http://127.0.0.1:9")
 
 
 def doc(store: Store, tid) -> tuple[dict, str] | None:
@@ -225,8 +226,29 @@ class Scry:
         self.most_chars = most_chars  # the most text it will send in one answer
         self.asked: list[tuple[str, list[int]]] = []  # the tweets asked for, with the account they were asked of
         self.listed = 0
+        self.collecting: dict[str, dict] = {}  # lowercase username: the account it was asked to collect, and how that stands
+        self.collect_asked: list[list[str]] = []
+        self.collects = True
+        self.will_not_collect: set[str] = set()  # accounts it has tweets of and still says it doesn't know
         monkeypatch.setenv("SCRY_API_KEY", "key")
         monkeypatch.setattr(ScryClient, "query", lambda client, sql, max_seconds=60: self.query(sql))
+        monkeypatch.setattr(ScryClient, "tool", lambda client, name, arguments: self.tool(name, arguments))
+
+    async def tool(self, name: str, arguments: dict) -> dict:
+        assert name == "twitter_watch"
+        if not self.collects:
+            raise ScryError("twitter_watch: not for this key")
+        if arguments["action"] == "list":
+            return {"rows": list(self.collecting.values())}
+        assert arguments["action"] == "watch" and arguments["cadence_secs"] == 86400 and len(arguments["handles"]) <= 100
+        self.collect_asked.append(arguments["handles"])
+        rows = []
+        for handle in arguments["handles"]:  # it takes only accounts it has met
+            known = handle.lower() in self.handles and handle.lower() not in self.will_not_collect
+            rows.append({"handle": handle.lower(), "status": "watching" if known else "unknown_handle", "history_walked_at": None})
+            if known:
+                self.collecting[handle.lower()] = rows[-1]
+        return {"rows": rows}
 
     def account(self, aid: str, handle: str, name: str, tweets: dict[int, str | dict]) -> None:
         self.handles.setdefault(handle.lower(), []).insert(0, aid)
@@ -301,6 +323,37 @@ def test_scry_gives_what_it_has_of_an_account_and_is_asked_for_each_tweet_once(s
     assert state(store, "ada")["scry_count"] == 6
 
 
+def test_with_scry_alone_it_is_asked_to_collect_each_account_once(store: Store, monkeypatch, caplog):
+    scry = Scry(monkeypatch)
+    scry.account(ADA, "ada", "Ada L", {10001: "the one tweet Scry happened to have"})
+    scry.account(BOB, "bob", "Bob B", {20001: "from an account that has since gone"})
+    scry.will_not_collect.add("bob")
+    with caplog.at_level(logging.INFO):
+        run(store, ["Ada", "newbie", "bob"])
+    assert scry.collect_asked == [["Ada", "newbie", "bob"]] and set(scry.collecting) == {"ada"} and saved(store) == {10001, 20001}
+    assert "asked Scry to collect 1 account" in caplog.text and "@Ada: Scry is still walking back" in caplog.text
+    assert "@newbie: Scry has never seen this account" in caplog.text
+    assert "@bob: Scry has some of this account's tweets but wouldn't take it to collect (unknown handle)" in caplog.text
+
+    scry.collecting["ada"]["history_walked_at"] = "2026-11-25T03:00:00Z"  # its walk is done, and found an older tweet
+    scry.tweets[10000] = {"author_id": ADA, "author_handle": "ada", "text": "found on the walk"}
+    scry.collect_asked.clear()
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        run(store, ["Ada", "newbie"])
+    assert scry.collect_asked == [["newbie"]]  # ada is being collected already; newbie may have turned up since
+    assert saved(store) == {10000, 10001, 20001} and "still walking" not in caplog.text and "asked Scry to collect" not in caplog.text
+
+
+def test_a_key_that_cannot_ask_scry_to_collect_still_takes_what_scry_has(store: Store, monkeypatch, caplog):
+    scry = Scry(monkeypatch)
+    scry.collects = False
+    scry.account(ADA, "ada", "Ada L", {10001: "one"})
+    with caplog.at_level(logging.INFO):
+        run(store, ["ada"])
+    assert saved(store) == {10001} and "couldn't be asked to collect" in caplog.text and state(store, "ada")["checked_at"]
+
+
 def test_scry_stops_at_its_limit_and_the_next_run_carries_on(store: Store, monkeypatch, caplog):
     monkeypatch.setattr(twitter, "SCRY_BATCH", 2)
     scry = Scry(monkeypatch, price=1_000_000)
@@ -339,6 +392,7 @@ def test_with_both_turned_on_scry_adds_what_twitterapi_did_not_have(store: Store
     scry.account(ADA, "ada", "Ada L", {10001: "deleted since", 10002: "also deleted", 10003: "still up", 10004: "still up too"})
     run(store, ["ada"], api, monkeypatch)
     assert saved(store) == {10001, 10002, 10003, 10004, 10005} and scry.asked == [(ADA, [10001, 10002])]
+    assert scry.collect_asked == []  # twitterapi.io has the timeline, so Scry isn't asked to walk it too
     assert [doc(store, tid)[0]["source"] for tid in (10001, 10003, 10005)] == ["tweet:scry", "tweet:twitterapi", "tweet:twitterapi"]
 
 
@@ -347,7 +401,7 @@ def test_with_neither_turned_on_the_accounts_are_skipped(store: Store, monkeypat
     scry.account(ADA, "ada", "Ada L", {10001: "a tweet"})
     with caplog.at_level(logging.WARNING):
         run(store, ["ada"], use_scry=False)  # Scry has a key but is turned off, and twitterapi.io has no key
-    assert saved(store) == set() and "1 account skipped" in caplog.text and scry.listed == 0
+    assert saved(store) == set() and "1 account skipped" in caplog.text and scry.listed == 0 and scry.collect_asked == []
 
 
 # -- tweets you saved a link to --------------------------------------------------------------------

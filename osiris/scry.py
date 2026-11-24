@@ -13,6 +13,7 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API_URL = "https://api.scry.io/v1/scry/query"
+TOOL_URL = "https://api.scry.io/mcp"  # Scry's tools that aren't queries, called as its agents call them
 # Most a single query may hold against the wallet. Uncapped, Scry reserves the worst case at
 # its 50 MB response cap (~$5 once the free egress band is used up), so a modest wallet admits
 # one query at a time. Our largest responses (10k-comment threads) stay well under this.
@@ -64,3 +65,31 @@ class ScryClient:
                 error = data.get("error") or data
                 raise ScryError(f"{error.get('code')}: {error.get('message')}", error.get("code"))
         raise ScryError("scry unreachable")
+
+    async def tool(self, name: str, arguments: dict) -> dict:
+        """What one of Scry's tools answers, for those that aren't queries, such as twitter_watch."""
+        call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+        headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json, text/event-stream"}
+        try:
+            async with self.session.post(TOOL_URL, json=call, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                text = await resp.text()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise ScryError(f"scry unreachable: {e}") from None
+        for line in text.splitlines():  # the answer is plain JSON, or one event of a stream
+            line = line.removeprefix("data:").strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                answer = json.loads(line)
+                if "error" in answer:
+                    raise ScryError(f"{name}: {answer['error'].get('message')}")
+                said = answer["result"]["content"][0]["text"]
+                if answer["result"].get("isError"):
+                    raise ScryError(f"{name}: {said[:300]}")
+                found = json.loads(said)
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                break
+            if isinstance(found, dict):
+                return found
+            break
+        raise ScryError(f"{name}: Scry's answer wasn't understood")

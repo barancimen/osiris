@@ -12,8 +12,11 @@ takes what is new since the run before, from whichever of these is turned on:
    since, oldest first. Tweets already saved aren't asked for again, and a run stops asking once
    Scry has cost --scry-tweets-max-dollars.
 
-With both on, twitterapi.io goes first and Scry adds what it has beyond that. With neither, the
-accounts are skipped. How far each account has got is kept in the manifest's twitter_accounts table.
+With both on, twitterapi.io goes first and Scry adds what it has beyond that. With Scry alone, what
+it holds of an account is whatever it happened to see, so it's also asked to collect the account:
+it then walks back through the account's latest 3,200 or so tweets in its own time and looks again
+every day, and later runs take what that adds. With neither, the accounts are skipped. How far each
+account has got is kept in the manifest's twitter_accounts table.
 """
 
 from __future__ import annotations
@@ -44,6 +47,9 @@ TWEET_NANODOLLARS = 150_000  # twitterapi.io: $0.15 per 1,000 tweets, and a requ
 PROGRESS_EVERY = 30.0  # seconds between lines saying how far a long walk has got
 SCRY_HANDLES = 200  # usernames looked up at once
 SCRY_PAGE = 1000  # tweet ids listed at once: about 25 KB, inside what Scry lets out per query
+SCRY_WATCH = "twitter_watch"  # Scry's tool for collecting accounts
+SCRY_WATCH_BATCH = 100  # usernames it takes at once
+SCRY_WATCH_EVERY = 86400  # seconds between Scry's own looks at an account, once it has walked its timeline
 
 
 # -- the lists -----------------------------------------------------------------------------------
@@ -252,6 +258,26 @@ async def _scry_authors(scry: ScryTweets, handles: list[str]) -> dict[str, tuple
             for handle, aid in ids.items() if handle in typed}
 
 
+async def _collect(scry: ScryTweets, handles: list[str]) -> dict[str, dict]:
+    """Ask Scry to collect the accounts it isn't collecting for this key yet. It only takes accounts
+    it has met. Returns {lowercase username: how its collecting stands}, where history_walked_at is
+    when the walk back through the timeline finished, and nothing while it's still going."""
+    row = lambda found: (str(found.get("handle") or "").lower(), found)
+    standing = dict(map(row, (await scry.client.tool(SCRY_WATCH, {"action": "list"})).get("rows") or []))
+    new = [h for h in handles if h.lower() not in standing]
+    for i in range(0, len(new), SCRY_WATCH_BATCH):
+        answer = await scry.client.tool(SCRY_WATCH, {"action": "watch", "handles": new[i : i + SCRY_WATCH_BATCH],
+                                                     "cadence_secs": SCRY_WATCH_EVERY})
+        standing.update(map(row, answer.get("rows") or []))
+    begun = sum(standing.get(h.lower(), {}).get("status") == "watching" for h in new)
+    if begun:
+        log.info("twitter: asked Scry to collect %s: it walks back through an account's latest 3,200 or so tweets in its "
+                 "own time, and later runs take what that adds", _accounts(begun))
+    if any(standing.get(h.lower(), {}).get("status") == "at_cap" for h in new):
+        log.warning("twitter: Scry is collecting as many accounts for this key as it allows, so it took no more")
+    return standing
+
+
 async def _archive(store: Store, saver: Saver, scry: ScryTweets, handle: str, author: tuple[str, str, str | None]) -> bool:
     """Save the tweets Scry's archive has for the account and that aren't saved yet, oldest first.
     False if the money for Scry ran out before the end."""
@@ -306,6 +332,12 @@ async def run_accounts(store: Store, handles: list[str], scry: ScryTweets | None
         except ScryError as e:
             log.error("twitter: Scry couldn't look the accounts up: %s", e)
             scry = None
+    collecting: dict[str, dict] | None = None  # None: Scry wasn't asked to collect anything
+    if scry and not api_key:  # Scry is all there is: have it collect the accounts, not only hand over what it has
+        try:
+            collecting = await _collect(scry, handles)
+        except ScryError as e:
+            log.info("twitter: Scry couldn't be asked to collect the accounts, so this run takes what it has: %s", e)
     budget = Budget(api_dollars)
     session = aiohttp.ClientSession(headers={"X-API-Key": api_key}, timeout=aiohttp.ClientTimeout(total=60)) if api_key else None
     try:
@@ -326,7 +358,15 @@ async def run_accounts(store: Store, handles: list[str], scry: ScryTweets | None
                     if author:
                         done = await _archive(store, saver, scry, handle, author) and done
                     elif not session:
-                        log.info("twitter: @%s: Scry has no tweets under that name", handle)
+                        log.info("twitter: @%s: Scry has never seen this account, so it has nothing of it and can't collect it", handle)
+                    standing = (collecting or {}).get(handle.lower()) or {}
+                    if not author or collecting is None:
+                        pass
+                    elif standing.get("status") != "watching":  # it has met the account, and still wouldn't
+                        log.info("twitter: @%s: Scry has some of this account's tweets but wouldn't take it to collect (%s)",
+                                 handle, str(standing.get("status") or "no answer").replace("_", " "))
+                    elif not standing.get("history_walked_at"):
+                        log.info("twitter: @%s: Scry is still walking back through this account, so later runs will find more", handle)
                 except ScryError as e:
                     log.error("twitter: Scry failed on @%s, so it's left alone for the rest of this run: %s", handle, e)
                     scry, done = None, False
