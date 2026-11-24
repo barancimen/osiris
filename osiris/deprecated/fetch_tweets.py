@@ -34,12 +34,13 @@ import requests
 # ---------------------------------------------------------------------------
 
 def _api_key() -> str:
-    """TWITTERAPI_IO_KEY from the environment, or else from the .env file beside this script."""
+    """TWITTERAPI_IO_KEY from the environment, or else from the .env file in the repo's top folder."""
     key = os.environ.get("TWITTERAPI_IO_KEY", "")
     if key:
         return key
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), encoding="utf-8") as f:
+        here = os.path.dirname(os.path.abspath(__file__))  # osiris/deprecated, two folders down from .env
+        with open(os.path.join(here, "..", "..", ".env"), encoding="utf-8") as f:
             for line in f:
                 name, _, value = line.strip().partition("=")
                 if name.strip() == "TWITTERAPI_IO_KEY":
@@ -721,7 +722,7 @@ def main() -> None:
         return
 
     if not API_KEY:
-        sys.exit("No twitterapi.io key. Set TWITTERAPI_IO_KEY in the environment or in .env beside this script.")
+        sys.exit("No twitterapi.io key. Set TWITTERAPI_IO_KEY in the environment or in .env in the repo's top folder.")
 
     fetch_all(
         username=args.username,

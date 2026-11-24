@@ -458,7 +458,7 @@ This downloads or reads every PDF again, whatever its status.
 | [Community Archive](https://www.community-archive.org) uploads, one `.json` file per account | The same as the export, which holds the same data. Tweets posted in Communities are included |
 | SQLite databases written by `fetch_tweets.py`, with a `tweets` table | Every tweet. A retweet keeps the original tweet's full text, as twitterapi.io's do |
 
-`fetch_tweets.py` in this folder is deprecated. It is a separate script that saves one account's tweets from twitterapi.io to a SQLite database, which a list of usernames now does inside osiris. It reads `TWITTERAPI_IO_KEY` from the environment or from `.env`.
+`fetch_tweets.py` is deprecated and has moved to `osiris/deprecated/`. It is a separate script that saves one account's tweets from twitterapi.io to a SQLite database, which a list of usernames now does inside osiris. It reads `TWITTERAPI_IO_KEY` from the environment or from `.env`.
 
 Folders are searched, subfolders included, for `.zip`, `.json`, `.html`, `.htm`, `.db`, `.sqlite` and `.sqlite3` files, and a file that is none of these kinds is skipped. Files are read a tweet at a time, so their size doesn't matter. On the page, add the folders under **Tweets**. Each run imports them before archiving, so the tweets they hold aren't looked up in Scry or twitterapi.io.
 

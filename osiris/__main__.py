@@ -716,7 +716,7 @@ def main() -> None:
     imp.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per extraction process (0 = none)")
     imp.set_defaults(func=cmd_import)
 
-    tweets = sub.add_parser("import-tweets", help="store tweets from fetch_tweets.py's SQLite databases, Community Archive "
+    tweets = sub.add_parser("import-tweets", help="store tweets from SQLite databases, Community Archive "
                             "JSON files, Twitter's export zips and bookmark exports as markdown; tweets already saved "
                             "are skipped")
     tweets.add_argument("paths", nargs="+",
