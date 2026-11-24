@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.twitterapi.io"
 BATCH = 50  # API maximum; more returns HTTP 400
-PAGE_DELAY = 0.5  # same pacing as /root/twitterapi/fetch_tweets.py
+PAGE_DELAY = 0.5  # same pacing as fetch_tweets.py
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2.0
 KEY_ENV = "TWITTERAPI_IO_KEY"

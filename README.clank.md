@@ -458,6 +458,8 @@ This downloads or reads every PDF again, whatever its status.
 | [Community Archive](https://www.community-archive.org) uploads, one `.json` file per account | The same as the export, which holds the same data. Tweets posted in Communities are included |
 | SQLite databases written by `fetch_tweets.py`, with a `tweets` table | Every tweet. A retweet keeps the original tweet's full text, as twitterapi.io's do |
 
+`fetch_tweets.py` in this folder is a separate script that saves one account's tweets from twitterapi.io to a SQLite database. It reads `TWITTERAPI_IO_KEY` from the environment or from `.env`.
+
 Folders are searched, subfolders included, for `.zip`, `.json`, `.html`, `.htm`, `.db`, `.sqlite` and `.sqlite3` files, and a file that is none of these kinds is skipped. Files are read a tweet at a time, so their size doesn't matter. On the page, add the folders under **Tweets**. Each run imports them before archiving, so the tweets they hold aren't looked up in Scry or twitterapi.io.
 
 Tweets are matched by ID, so a username that changed doesn't matter. A tweet that's already saved, or that you deleted, is left alone. One that's waiting or failed, such as `not_in_scry`, gets the file's text. New tweets join the `twitter` lane, so **Fetch again** works on them. The export and the Community Archive hold only a retweet's `RT @user: …` text, often cut short, so that's what is kept, and they hold no quoted tweets. Text is kept as the file has it, `t.co` links included. Dates are written in UTC as `2026-09-16 22:18:18`, like Scry's. Running the import again only adds tweets that are new.

@@ -1,5 +1,5 @@
 """Tweets from files you already have:
-- SQLite databases written by /root/twitterapi/fetch_tweets.py: a `tweets` table in twitterapi.io's fields
+- SQLite databases written by fetch_tweets.py, the script in the repo's top folder: a `tweets` table in twitterapi.io's fields
 - Community Archive uploads: Twitter's account archive as one JSON file, with `account` and `tweets`
   at the top, and the full text of long tweets under `note-tweet`
 - Twitter's own export, as the .zip it comes in: the same tweets, replies and retweets, read inside
