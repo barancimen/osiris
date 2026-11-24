@@ -527,9 +527,9 @@ One test prints a page to PDF with Chrome, and is skipped if there's none.
 .venv/bin/python tools/screenshot.py
 ```
 
-The picture shows the same archive every time, on any machine. Its folders, settings, numbers and log come from `tools/screenshot.json`, and nothing is read from your own archive or settings. To change what a box or a table shows, change that file. A setting the page has gained since shows its default. The command warns about any name in the file that the server no longer knows, and a test does the same.
+The picture shows the same archive every time, on any machine. Its folders, settings, numbers and log come from `tools/screenshot.json`, and nothing is read from your own archive or settings. To change what a box or a table shows, change that file. A setting the page has gained since shows its default. Everything the picture shows was copied from the picture it replaced. Two things in the file that the picture can't show are made up, which are the log lines above the ones in view and the counts beside the sites in `hosts`. The command warns about any name in the file that the server no longer knows, and a test does the same.
 
-The page is drawn in a window 900 px wide at two pixels to the pixel, so the picture is 1800 pixels wide. It ends as far under the last line as the first card is under the tabs. Two runs give the same file, byte for byte.
+The page is drawn in a window 900 px wide at two pixels to the pixel, so the picture is 1800 pixels wide. It ends as far under the last line as the first card is under the tabs. Two runs on the same machine give the same file, byte for byte. Another machine's browser can draw a few pixels differently.
 
 It needs Playwright's Chromium, which `pip install -e .[render]` and `playwright install chromium` set up, and the two fonts the file names, Ubuntu Sans and DejaVu Sans Mono. An Ubuntu 24.04 desktop has both. Elsewhere, `--fonts FOLDER` adds a folder of font files. The command stops without writing anything if the browser drew the page in other fonts.
 
