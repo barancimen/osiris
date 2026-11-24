@@ -470,12 +470,12 @@ A `.txt` file with a line that isn't a username is left alone as a whole, and th
 
 Where the tweets come from depends on what's turned on.
 
-- twitterapi.io is used when `TWITTERAPI_IO_KEY` is set and, on the page, **Allow twitterapi.io** is ticked. It gives the account's timeline with replies, newest first, for about $0.15 per 1,000 tweets. A run stops once it has spent about `--twitterapi-max-dollars` (5), and the next run carries on from the same place.
+- twitterapi.io is used when `TWITTERAPI_IO_KEY` is set and, on the page, **Allow twitterapi.io** is ticked. It gives the account's timeline with replies, newest first, for about $0.15 per 1,000 tweets. Each page of 20 is saved as it arrives, so stopping a run loses nothing that was paid for. A run stops once it has spent about `--twitterapi-max-dollars` (5). The next run carries on from the same place, and then takes what the account has posted since.
 - Scry is used when it has a key and isn't turned off. It gives what its archive holds for the account, which includes tweets deleted since and is rarely all of them. Finding them cost about $0.03 per 1,000 tweets in a test. Scry also meters the data it sends: its allowance covers about 2,000 tweets a day, and its price list charges for a day's data past that at a rising rate, which the test didn't reach. A run stops once it has spent `--scry-tweets-max-dollars` (1) on tweets.
 - With both on, twitterapi.io goes first and Scry adds what it has beyond that.
 - With neither, the accounts are skipped with a warning.
 
-Each run takes only what's new. twitterapi.io is read down to the newest tweet of the last finished walk, and Scry is asked only for tweets that aren't saved yet. How far each account has got is kept in the manifest, so no tweet is paid for twice. These documents have `source: tweet:twitterapi` or `tweet:scry`.
+Each run takes only what's new. twitterapi.io is read down to the newest tweet of the last finished walk, which costs one page per account when nothing is new, and Scry is asked only for tweets that aren't saved yet. How far each account has got is kept in the manifest, so a run that was stopped carries on without paying for the same pages again. These documents have `source: tweet:twitterapi` or `tweet:scry`.
 
 ## Output
 

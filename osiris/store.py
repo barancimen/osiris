@@ -263,6 +263,15 @@ class Store:
         added = self.db.total_changes - before
         return added, seen + len(aliases) + len(rows) - added  # INSERT OR IGNORE: same normalized URL, different key
 
+    def queue(self, routes: Iterable[Route]) -> None:
+        """Queue routes the caller knows the manifest doesn't have, without reading it through to
+        check as add does: for work that adds a few at a time, many times over."""
+        self.db.executemany(
+            "INSERT OR IGNORE INTO urls (url, lane, doc_key, doc_id, status, reason, updated_at, dedup_key)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(r.url, r.lane, r.doc_key, r.doc_id, "skipped" if r.lane == "skip" else "pending", r.reason, now_iso(), r.dedup_key)
+             for r in routes])
+
     def delete(self, did: str) -> bool:
         """Remove a document's saved text and osiris's own copies of its original. Its links stay in the
         manifest, marked deleted, so that no later run fetches them again from your tab backups. Your own

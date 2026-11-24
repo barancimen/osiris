@@ -125,9 +125,11 @@ class Saver:
                 if r is None or r.doc_key != key:  # an address that isn't this tweet's: use the plain one
                     r = route(f"https://x.com/i/web/status/{t['id']}")
                 new.append(r)
-        if new:  # into the manifest first, all at once, so each document below has its rows to record against
-            self.store.add(new)
-            self.waiting.update(r.doc_key for r in new)
+        # into the manifest first, so each document below has its rows to record against. No tweet here is
+        # in it yet, so they're queued without add's look through the whole manifest, which a timeline
+        # saved a page at a time would repeat thousands of times
+        self.store.queue(new)
+        self.waiting.update(r.doc_key for r in new)
         written = 0
         for t in tweets:
             key = f"tweet:{t['id']}"

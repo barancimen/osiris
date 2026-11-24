@@ -80,26 +80,39 @@ def api_tweet(tid: int, user: str = "ada", text: str | None = None, **more) -> d
 
 
 class Twitterapi:
-    """twitterapi.io's user timeline: pages of `size` tweets, newest first, with the cursor at the top level."""
+    """twitterapi.io's user timeline: pages of `size` tweets, newest first, with the cursor at the top level.
+    A cursor is the last tweet of the page before, as a real one marks a place in the timeline."""
 
-    def __init__(self, timelines: dict[str, list[dict]], size: int = 3, pins: dict[str, dict] | None = None):
+    def __init__(self, timelines: dict[str, list[dict]], size: int = 3, pins: dict[str, dict] | None = None,
+                 repeats_at_the_end: bool = False):
         self.timelines, self.size, self.pins = timelines, size, pins or {}
+        self.repeats_at_the_end = repeats_at_the_end  # the last page comes back for ever, each time under a new cursor
+        self.refused: set[tuple[str, str]] = set()
         self.asked: list[tuple[str, str]] = []
 
     async def last_tweets(self, request: web.Request) -> web.Response:
         assert request.headers["X-API-Key"] == "paid" and request.query["includeReplies"] == "true"
+        assert request.query.get("cursor", "x")  # a first page is asked for without a cursor, not with an empty one
         handle, cursor = request.query["userName"].lower(), request.query.get("cursor", "")
         self.asked.append((handle, cursor))
+        if (handle, cursor) in self.refused:
+            return web.json_response({"error": 403, "message": "no"}, status=403)
         if handle not in self.timelines:
             return web.json_response({"status": "error", "msg": "user not found", "data": None})
-        if cursor and not cursor.isdigit():
+        place, _, again = cursor.partition("r")
+        if cursor and not place.isdigit():
             return web.json_response({"error": 400, "message": "bad cursor"}, status=400)
-        start = int(cursor or 0)
-        tweets = self.timelines[handle][start : start + self.size]
-        more = start + self.size < len(self.timelines[handle])
+        timeline = sorted(self.timelines[handle], key=lambda tweet: -int(tweet["id"]))
+        below = [tweet for tweet in timeline if not place or int(tweet["id"]) < int(place)]
+        tweets, more, following = below[: self.size], len(below) > self.size, ""
+        if more:
+            following = tweets[-1]["id"]
+        elif self.repeats_at_the_end:
+            tweets = timeline[-self.size:] if again or not tweets else tweets
+            more, following = True, f"{timeline[-1]['id']}r{int(again or 0) + 1}"
         return web.json_response({"status": "success", "code": 0, "msg": "success",
                                   "data": {"pin_tweet": self.pins.get(handle), "tweets": tweets},
-                                  "has_next_page": more, "next_cursor": str(start + self.size) if more else ""})
+                                  "has_next_page": more, "next_cursor": following})
 
 
 def run(store: Store, handles: list[str], api: Twitterapi | None = None, monkeypatch=None, **options) -> None:
@@ -120,13 +133,16 @@ def run(store: Store, handles: list[str], api: Twitterapi | None = None, monkeyp
     asyncio.run(main())
 
 
+ONE_PAGE = 3 * accounts.TWEET_NANODOLLARS / 1e9  # what a page of the stand-in's costs, in dollars
+
+
 def test_twitterapi_walks_a_timeline_once_and_then_only_takes_what_is_new(store: Store, monkeypatch):
     timeline = [api_tweet(tid) for tid in range(10007, 10000, -1)]
     timeline[2] = api_tweet(10005, text="@bob a reply", isReply=True)
     timeline[4] = api_tweet(10003, text="RT @bob: cut sh…", retweeted_tweet=api_tweet(777, "bob", "all of what bob said"))
     api = Twitterapi({"ada": timeline}, pins={"ada": api_tweet(10001)})
     run(store, ["Ada"], api, monkeypatch)
-    assert saved(store) == set(range(10001, 10008)) and api.asked == [("ada", ""), ("ada", "3"), ("ada", "6")]
+    assert saved(store) == set(range(10001, 10008)) and api.asked == [("ada", ""), ("ada", "10005"), ("ada", "10002")]
     meta, body = doc(store, 10003)
     assert meta["source"] == "tweet:twitterapi" and body.endswith("Retweeted @bob:\n\n> all of what bob said")
     assert state(store, "ada")["api_newest"] == 10007 and state(store, "ada")["checked_at"] and not state(store, "ada")["api_cursor"]
@@ -135,38 +151,65 @@ def test_twitterapi_walks_a_timeline_once_and_then_only_takes_what_is_new(store:
     api.asked.clear()
     run(store, ["Ada"], api, monkeypatch)
     assert saved(store) == set(range(10001, 10010))
-    assert api.asked == [("ada", ""), ("ada", "3")]  # it stops at a page it has all of, not at the account's first tweet
+    assert api.asked == [("ada", ""), ("ada", "10007")]  # it stops at a page it has all of, not at the account's first tweet
     assert state(store, "ada")["api_newest"] == 10009
 
 
 def test_twitterapi_stops_at_its_limit_and_the_next_run_carries_on_from_there(store: Store, monkeypatch, caplog):
-    api = Twitterapi({"ada": [api_tweet(tid) for tid in range(10010, 10000, -1)], "bob": [api_tweet(20001, "bob")]})
-    one_page = 3 * accounts.TWEET_NANODOLLARS / 1e9
+    api = Twitterapi({"ada": [api_tweet(tid) for tid in range(10010, 10000, -1)], "bob": [api_tweet(20001, "bob")]},
+                     pins={"ada": api_tweet(10001)})
     with caplog.at_level(logging.WARNING):
-        run(store, ["ada", "bob"], api, monkeypatch, api_dollars=2 * one_page)
-    assert saved(store) == set(range(10005, 10011)) and api.asked == [("ada", ""), ("ada", "3")]  # what was paid for is kept
-    assert state(store, "ada")["api_cursor"] == "6" and not state(store, "ada")["checked_at"] and not state(store, "bob")["checked_at"]
+        run(store, ["ada", "bob"], api, monkeypatch, api_dollars=2 * ONE_PAGE)
+    assert api.asked == [("ada", ""), ("ada", "10008")]
+    assert saved(store) == {*range(10005, 10011), 10001}  # what was paid for is kept, the pinned tweet with it
+    assert state(store, "ada")["api_cursor"] == "10005" and not state(store, "ada")["checked_at"] and not state(store, "bob")["checked_at"]
     assert "limit for twitterapi.io" in caplog.text and "1 account left for the next run" in caplog.text
 
+    api.timelines["ada"] += [api_tweet(10012), api_tweet(10011)]  # posted since that walk began
     api.asked.clear()
     run(store, ["ada", "bob"], api, monkeypatch)
-    assert api.asked == [("ada", "6"), ("ada", "9"), ("bob", "")]  # no page is paid for twice
-    assert saved(store) == {*range(10001, 10011), 20001}
-    assert state(store, "ada")["api_newest"] == 10010 and state(store, "ada")["api_cursor"] is None and state(store, "bob")["checked_at"]
+    # the rest of the walk, without a page of it paid for twice, then what is new, down to where the walk began
+    assert api.asked == [("ada", "10005"), ("ada", "10002"), ("ada", ""), ("ada", "10010"), ("bob", "")]
+    assert saved(store) == {*range(10001, 10013), 20001}
+    assert state(store, "ada")["api_newest"] == 10012 and state(store, "ada")["api_cursor"] is None and state(store, "bob")["checked_at"]
+
+
+def test_each_page_is_saved_before_the_next_is_asked_for(store: Store, monkeypatch, caplog):
+    api = Twitterapi({"ada": [api_tweet(tid) for tid in range(10010, 10000, -1)]})
+    api.refused.add(("ada", "10005"))
+    with caplog.at_level(logging.ERROR):
+        run(store, ["ada"], api, monkeypatch)
+    assert "@ada: twitterapi.io failed" in caplog.text and saved(store) == set(range(10005, 10011))
+    assert state(store, "ada")["api_cursor"] == "10005" and state(store, "ada")["api_top"] == 10010
+    api.refused.clear()
+    api.asked.clear()
+    run(store, ["ada"], api, monkeypatch)
+    assert api.asked[:2] == [("ada", "10005"), ("ada", "10002")] and saved(store) == set(range(10001, 10011))
+
+
+def test_a_timeline_that_ends_by_repeating_its_last_page_is_finished(store: Store, monkeypatch):
+    api = Twitterapi({"ada": [api_tweet(tid) for tid in range(10005, 10000, -1)]}, repeats_at_the_end=True)
+    run(store, ["ada"], api, monkeypatch, api_dollars=100 * ONE_PAGE)
+    assert api.asked == [("ada", ""), ("ada", "10003"), ("ada", "10001r1")]  # not page after page until the money is gone
+    assert saved(store) == set(range(10001, 10006))
+    assert state(store, "ada")["api_newest"] == 10005 and state(store, "ada")["api_cursor"] is None and state(store, "ada")["checked_at"]
+    api.asked.clear()
+    run(store, ["ada"], api, monkeypatch)
+    assert api.asked == [("ada", "")]
 
 
 def test_an_account_twitterapi_does_not_have_holds_up_nothing(store: Store, monkeypatch, caplog):
     api = Twitterapi({"bob": [api_tweet(20001, "bob")]})
     with caplog.at_level(logging.WARNING):
         run(store, ["gone", "bob"], api, monkeypatch)
-    assert saved(store) == {20001} and "@gone: twitterapi.io says: user not found" in caplog.text
+    assert saved(store) == {20001} and caplog.text.count("@gone: twitterapi.io says: user not found") == 1
 
 
 def test_a_place_twitterapi_no_longer_takes_starts_the_walk_again(store: Store, monkeypatch):
     api = Twitterapi({"ada": [api_tweet(tid) for tid in range(10004, 10000, -1)]})
     accounts._remember(store, "ada", api_cursor="expired", api_top=10004)
     run(store, ["ada"], api, monkeypatch)
-    assert api.asked == [("ada", "expired"), ("ada", ""), ("ada", "3")] and saved(store) == {10001, 10002, 10003, 10004}
+    assert api.asked == [("ada", "expired"), ("ada", ""), ("ada", "10002")] and saved(store) == {10001, 10002, 10003, 10004}
 
 
 # -- Scry, stood in for by its own queries ---------------------------------------------------------

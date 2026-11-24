@@ -4,9 +4,10 @@ The lists sit in the same folders as the tweet files (tweetdb.py). Each run of t
 takes what is new since the run before, from whichever of these is turned on:
 
 1. twitterapi.io, when TWITTERAPI_IO_KEY is set: the account's timeline, replies included, newest
-   first, 20 tweets a page. It bills per tweet, so a walk stops where the last finished walk began,
-   a walk that was cut short carries on from its last page, and a run stops once it has spent
-   about --twitterapi-max-dollars.
+   first, 20 tweets a page, read the way fetch_tweets.py reads it. It bills per tweet, so each page is
+   saved before the next is asked for, a walk stops where the last finished walk began, a walk
+   that was cut short carries on from its last page and then takes what has been posted since,
+   and a run stops once it has spent about --twitterapi-max-dollars.
 2. Scry, when it has a key: the tweets its archive holds for the account, some of them deleted
    since, oldest first. Tweets already saved aren't asked for again, and a run stops asking once
    Scry has cost --scry-tweets-max-dollars.
@@ -20,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
@@ -38,7 +41,7 @@ NOT_ACCOUNTS = {"home", "i", "search", "explore", "settings", "notifications", "
 STATE = ("checked_at", "api_newest", "api_cursor", "api_top", "scry_after", "scry_count")
 API_DOLLARS = 5.0
 TWEET_NANODOLLARS = 150_000  # twitterapi.io: $0.15 per 1,000 tweets, and a request costs at least one tweet
-PAGES_PER_SAVE = 10  # timeline pages written to disk at a time
+PROGRESS_EVERY = 30.0  # seconds between lines saying how far a long walk has got
 SCRY_HANDLES = 200  # usernames looked up at once
 SCRY_PAGE = 1000  # tweet ids listed at once: about 25 KB, inside what Scry lets out per query
 
@@ -136,19 +139,37 @@ def _tweets(found) -> list[dict]:
     return [t for t in found or [] if isinstance(t, dict) and str(t.get("id") or "").isdigit()]
 
 
+def _day(tweet: dict) -> str:
+    """The day a tweet was posted, for saying how far back a walk has got."""
+    try:
+        return datetime.strptime(tweet.get("createdAt") or "", "%a %b %d %H:%M:%S %z %Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return str(tweet.get("createdAt") or "an unknown date")
+
+
 async def _timeline(store: Store, saver: Saver, session: aiohttp.ClientSession, budget: Budget, handle: str) -> bool:
-    """Save the account's tweets from twitterapi.io, newest first, down to where a finished walk
-    began. False if it had to stop before that."""
+    """Save the account's tweets from twitterapi.io. False if it had to stop before the end."""
+    done, from_top = await _walk(store, saver, session, budget, handle)
+    if done and not from_top:  # that finished a walk an earlier run began: now what has been posted since it began
+        done, _ = await _walk(store, saver, session, budget, handle)
+    return done
+
+
+async def _walk(store: Store, saver: Saver, session: aiohttp.ClientSession, budget: Budget, handle: str) -> tuple[bool, bool]:
+    """One walk down the timeline, newest first: from the top, or from where a walk that was cut short
+    stopped, down to where the last finished walk began. Each page is saved before the next is asked
+    for. Returns (whether it got that far, whether it set out from the top)."""
     state = _state(store, handle)
     newest, top, cursor = state["api_newest"] or 0, state["api_top"] or 0, state["api_cursor"] or ""
-    held: list[dict] = []
-    seen, pages, read, saved, restarted = {cursor}, 0, 0, 0, False
+    cursors, sent, pinned = {cursor}, set(), set()  # sent: the tweets this walk has been sent
+    read = saved = 0
+    restarted, from_top = False, not cursor
+    said_at = time.monotonic()
 
-    def keep(done: bool = False) -> None:
-        """Write what's been read since the last time, then where the walk is."""
-        nonlocal saved, held
-        saved += saver.save(held, "tweet:twitterapi")
-        held = []
+    def keep(page: list[dict], done: bool = False) -> None:
+        """Write a page, then where the walk is."""
+        nonlocal saved
+        saved += saver.save(page, "tweet:twitterapi")
         if done:
             _remember(store, handle, api_newest=max(newest, top) or None, api_cursor=None, api_top=None)
         else:
@@ -158,52 +179,53 @@ async def _timeline(store: Store, saver: Saver, session: aiohttp.ClientSession, 
     def said() -> str:
         return f"{saved:,} tweets saved from twitterapi.io, of {read:,} it sent"
 
-    try:
-        while True:
-            if budget.spent:
-                keep()
-                log.warning("twitter: @%s: reached the $%g limit for twitterapi.io after %s; the next run carries on",
-                            handle, budget.dollars, said())
-                return False
-            try:
-                data = await _api_get(session, "/twitter/user/last_tweets",
-                                      {"userName": handle, "includeReplies": "true", "cursor": cursor})
-            except aiohttp.ClientResponseError as e:
-                if not cursor or restarted or e.status not in (400, 404):
-                    raise
-                log.info("twitter: @%s: twitterapi.io no longer takes the place the last run stopped at; starting from the newest", handle)
-                cursor, restarted = "", True
-                continue
-            if not isinstance(data, dict):
-                raise ValueError("twitterapi.io sent something that isn't a page of tweets")
-            if data.get("status") == "error":  # no such account, or one twitterapi.io can't read
-                budget.charge(0)
-                keep()
-                log.warning("twitter: @%s: twitterapi.io says: %s", handle, data.get("msg") or data.get("message") or "error")
-                return True
-            body = data.get("data") if isinstance(data.get("data"), dict) else data
-            tweets = _tweets(body.get("tweets"))
-            page = [*tweets, *_tweets([body.get("pin_tweet")])]
-            budget.charge(len(page))
-            read += len(page)
-            held += page
-            top = max([top, *(int(t["id"]) for t in tweets)])
-            following = data.get("next_cursor") or ""
-            if (not tweets or not data.get("has_next_page") or not following or following in seen
-                    or (newest and all(int(t["id"]) <= newest for t in tweets))):  # the last finished walk has the rest
-                break
-            seen.add(following)
-            cursor = following
-            pages += 1
-            if pages % PAGES_PER_SAVE == 0:
-                keep()
-            await asyncio.sleep(PAGE_DELAY)
-    except BaseException:  # stopped, or the connection failed: what was read is paid for, so it's kept
-        keep()
-        raise
-    keep(done=True)
-    log.info("twitter: @%s: %s", handle, said())
-    return True
+    while True:
+        if budget.spent:
+            log.warning("twitter: @%s: reached the $%g limit for twitterapi.io after %s; the next run carries on",
+                        handle, budget.dollars, said())
+            return False, from_top
+        try:
+            data = await _api_get(session, "/twitter/user/last_tweets",
+                                  {"userName": handle, "includeReplies": "true", **({"cursor": cursor} if cursor else {})})
+        except aiohttp.ClientResponseError as e:
+            if not cursor or restarted or e.status not in (400, 404):
+                raise
+            log.warning("twitter: @%s: twitterapi.io no longer takes the place the last run stopped at, so the walk starts "
+                        "again from the newest tweet, and pages it had read are paid for again", handle)
+            cursor, restarted, from_top = "", True, True
+            continue
+        if not isinstance(data, dict):
+            raise ValueError("twitterapi.io sent something that isn't a page of tweets")
+        if data.get("status") == "error":  # no such account, or one twitterapi.io can't read
+            budget.charge(0)
+            log.warning("twitter: @%s: twitterapi.io says: %s", handle, data.get("msg") or data.get("message") or "error")
+            return True, True
+        body = data.get("data") if isinstance(data.get("data"), dict) else data
+        tweets = _tweets(body.get("tweets"))
+        # the pinned tweet comes with every page: it's kept once, in case the walk never gets down to it
+        pin = [t for t in _tweets([body.get("pin_tweet")]) if t["id"] not in pinned and not saver.has(t["id"])]
+        pinned.update(t["id"] for t in pin)
+        ids = {int(t["id"]) for t in tweets}
+        fresh = ids - sent
+        sent |= ids
+        budget.charge(len(tweets) + len(pin))
+        read += len(tweets)
+        top = max([top, *ids])
+        following = data.get("next_cursor") or ""
+        if tweets and not fresh:  # as fetch_tweets.py found: at the end, the same page can come back under a new cursor
+            log.info("twitter: @%s: twitterapi.io sent the same tweets again, so that's the end of the timeline", handle)
+        if (not fresh or not data.get("has_next_page") or not following or following in cursors
+                or (newest and max(ids) <= newest)):  # the last finished walk has the rest
+            keep([*tweets, *pin], done=True)
+            log.info("twitter: @%s: %s", handle, said())
+            return True, from_top
+        cursors.add(following)
+        cursor = following
+        keep([*tweets, *pin])
+        if time.monotonic() - said_at >= PROGRESS_EVERY:
+            said_at = time.monotonic()
+            log.info("twitter: @%s: %s so far, back to %s", handle, said(), _day(tweets[-1]))
+        await asyncio.sleep(PAGE_DELAY)
 
 
 # -- Scry ----------------------------------------------------------------------------------------
