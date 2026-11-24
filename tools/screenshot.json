@@ -1,0 +1,529 @@
+{
+ "window": {
+  "width": 900,
+  "scale": 2,
+  "locale": "en-US",
+  "timezone": "UTC",
+  "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+  "fonts": {
+   "sans-serif": "Ubuntu Sans",
+   "monospace": "DejaVu Sans Mono"
+  }
+ },
+ "config": {
+  "backups": [
+   "/home/baran/Downloads/tab-backups"
+  ],
+  "local": [
+   "/home/baran/Downloads/pdfs",
+   "/home/baran/Documents/ebooks"
+  ],
+  "saved": [
+   "/home/baran/git/moewe-saved"
+  ],
+  "tweets": [
+   "/home/baran/git/twitterapi",
+   "/home/baran/Downloads/twitter-exports"
+  ],
+  "options": {
+   "lanes": [
+    "twitter"
+   ],
+   "retry_failed": true,
+   "render": true,
+   "cookies": "/home/baran/Downloads/cookies.txt",
+   "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+   "keep_raw_pdfs": true,
+   "refetch_comments": true,
+   "refetch_stackexchange": true,
+   "refetch_arxiv_pdfs": true,
+   "scry_youtube_dollars": 10,
+   "youtube_delay_min": 20,
+   "youtube_delay_max": 50,
+   "youtube_block_wait": 15
+  }
+ },
+ "config_shown": {
+  "ocr_langs": [
+   "eng"
+  ],
+  "defaults": {
+   "workers": 8,
+   "pdf_at_once": 16
+  }
+ },
+ "scans": {
+  "backups": {
+   "/home/baran/Downloads/tab-backups": "4 bookmark files, 12 Session Buddy files, 1 text file"
+  },
+  "local": {
+   "/home/baran/Downloads/pdfs": "146 readable (146 pdf)",
+   "/home/baran/Documents/ebooks": "32 readable (21 epub, 6 pdf, 3 mobi, 2 azw3), 2 other files skipped"
+  },
+  "saved": {
+   "/home/baran/git/moewe-saved": "130 HTML files"
+  },
+  "tweets": {
+   "/home/baran/git/twitterapi": "3 databases, 1 archive, 196,058 tweets",
+   "/home/baran/Downloads/twitter-exports": "2 Twitter exports, 3 bookmarks files, 2,656 tweets"
+  },
+  "cookies": {
+   "/home/baran/Downloads/cookies.txt": "7,210 cookies for 1,193 sites"
+  }
+ },
+ "state": {
+  "documents": 229970,
+  "chars": 933600000,
+  "lanes": {
+   "twitter": {
+    "pending": 2885,
+    "ok": 201025
+   },
+   "generic": {
+    "pending": 991,
+    "ok": 19861,
+    "thin": 534,
+    "failed": 645
+   },
+   "github": {
+    "ok": 3019,
+    "thin": 154,
+    "failed": 73
+   },
+   "arxiv": {
+    "ok": 2984
+   },
+   "youtube": {
+    "pending": 724,
+    "ok": 639,
+    "thin": 73,
+    "failed": 3
+   },
+   "stackexchange": {
+    "ok": 741,
+    "failed": 4
+   },
+   "reddit": {
+    "ok": 669,
+    "failed": 2
+   },
+   "localfile": {
+    "ok": 198,
+    "thin": 1,
+    "failed": 176
+   },
+   "lesswrong": {
+    "ok": 225
+   },
+   "singlefile": {
+    "ok": 128
+   },
+   "hackernews": {
+    "ok": 73,
+    "failed": 1
+   },
+   "skip": {
+    "skipped": 3492
+   }
+  },
+  "scholar": {
+   "pending": 991,
+   "ok": 86,
+   "failed": 1
+  },
+  "arxiv_full_text": {
+   "ok": 2979,
+   "thin": 5
+  },
+  "review": {
+   "to_review": 1970,
+   "scored_total": 229970,
+   "fine": 9,
+   "bad": 0,
+   "ocr": 0,
+   "refetch": 0,
+   "unfixable": 0,
+   "choose": 0,
+   "fixed": 16
+  },
+  "job": {
+   "name": "Archive",
+   "step": "Checking for garbage",
+   "state": "done",
+   "active": false,
+   "started": 1795559392.0,
+   "finished": 1795560507.0,
+   "progress": null
+  },
+  "failures": {
+   "total": 885,
+   "finished": 230855,
+   "reasons": [
+    {
+     "reason": "file_missing",
+     "count": 176,
+     "run": 0,
+     "hosts": [
+      [
+       "local file",
+       176
+      ]
+     ]
+    },
+    {
+     "reason": "http_404",
+     "count": 152,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "not_found",
+     "count": 61,
+     "run": 0,
+     "hosts": [
+      [
+       "github.com",
+       38
+      ]
+     ]
+    },
+    {
+     "reason": "dns",
+     "count": 59,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "unavailable",
+     "count": 2,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_403",
+     "count": 123,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_401",
+     "count": 40,
+     "run": 0,
+     "hosts": [
+      [
+       "inv.nadeko.net",
+       31
+      ]
+     ]
+    },
+    {
+     "reason": "http_400",
+     "count": 23,
+     "run": 0,
+     "hosts": [
+      [
+       "watermark02.silverchair.com",
+       19
+      ]
+     ]
+    },
+    {
+     "reason": "http_405",
+     "count": 5,
+     "run": 0,
+     "hosts": [
+      [
+       "ui.adsabs.harvard.edu",
+       4
+      ]
+     ]
+    },
+    {
+     "reason": "http_419",
+     "count": 3,
+     "run": 0,
+     "hosts": [
+      [
+       "news.ycombinator.com",
+       3
+      ]
+     ]
+    },
+    {
+     "reason": "http_402",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_424",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "redirects",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "timeout",
+     "count": 77,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "host_down",
+     "count": 61,
+     "run": 0,
+     "hosts": [
+      [
+       "sci-hub.se",
+       40
+      ]
+     ]
+    },
+    {
+     "reason": "ssl",
+     "count": 22,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "connect",
+     "count": 3,
+     "run": 0,
+     "hosts": [
+      [
+       "sci-hub.do",
+       2
+      ]
+     ]
+    },
+    {
+     "reason": "http_500",
+     "count": 2,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_502",
+     "count": 2,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_429",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_501",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "http_503",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "no_text",
+     "count": 27,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "non_text:image/jpeg",
+     "count": 23,
+     "run": 0,
+     "hosts": [
+      [
+       "pbs.twimg.com",
+       21
+      ]
+     ]
+    },
+    {
+     "reason": "non_text:image/png",
+     "count": 10,
+     "run": 0,
+     "hosts": [
+      [
+       "pbs.twimg.com",
+       8
+      ]
+     ]
+    },
+    {
+     "reason": "non_text:application/json",
+     "count": 4,
+     "run": 0,
+     "hosts": [
+      [
+       "api.llama.fi",
+       3
+      ]
+     ]
+    },
+    {
+     "reason": "VideoUnplayable",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "non_text:application/blank",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "non_text:application/javascript",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    },
+    {
+     "reason": "pdf_error:PdfiumError",
+     "count": 1,
+     "run": 0,
+     "hosts": []
+    }
+   ],
+   "run": {
+    "started": 1795559392.0,
+    "finished": 1795560507.0,
+    "done": 1115,
+    "failed": 0
+   }
+  },
+  "keys": {
+   "Scry": true,
+   "GitHub": true,
+   "twitterapi.io": true,
+   "Stack Exchange": false
+  },
+  "out": "/home/baran/git/osiris/data"
+ },
+ "cleanup": {
+  "report": {
+   "mode": "clean",
+   "at": "2026-11-10T09:40:00Z",
+   "finished": true,
+   "changed": 1781,
+   "checked": 34029
+  },
+  "kept": 1779
+ },
+ "log": [
+  "22:29:52 --- Extracting URLs from /home/baran/Downloads/tab-backups",
+  "22:29:55 --- Listed 178 local files",
+  "22:29:55 --- Importing saved pages",
+  "22:29:57 --- Importing tweet files",
+  "22:30:21 --- Archiving",
+  "22:30:22 INFO re-queued 1115 failed URLs",
+  "22:30:40 INFO twitter: 80 tweets asked of Scry so far",
+  "22:31:06 INFO twitter: 160 tweets asked of Scry so far",
+  "22:31:32 INFO twitter: 240 tweets asked of Scry so far",
+  "22:31:58 INFO twitter: 320 tweets asked of Scry so far",
+  "22:32:24 INFO twitter: 400 tweets asked of Scry so far",
+  "22:32:50 INFO twitter: 480 tweets asked of Scry so far",
+  "22:33:16 INFO twitter: 560 tweets asked of Scry so far",
+  "22:33:42 INFO twitter: 640 tweets asked of Scry so far",
+  "22:34:08 INFO twitter: 720 tweets asked of Scry so far",
+  "22:34:34 INFO twitter: 800 tweets asked of Scry so far",
+  "22:35:00 INFO twitter: 880 tweets asked of Scry so far",
+  "22:35:26 INFO twitter: 960 tweets asked of Scry so far",
+  "22:35:52 INFO twitter: 1040 tweets asked of Scry so far",
+  "22:36:18 INFO twitter: 1120 tweets asked of Scry so far",
+  "22:36:44 INFO twitter: 1200 tweets asked of Scry so far",
+  "22:37:10 INFO twitter: 1280 tweets asked of Scry so far",
+  "22:37:36 INFO twitter: 1360 tweets asked of Scry so far",
+  "22:38:02 INFO twitter: 1440 tweets asked of Scry so far",
+  "22:38:28 INFO twitter: 1520 tweets asked of Scry so far",
+  "22:38:54 INFO twitter: 1600 tweets asked of Scry so far",
+  "22:39:20 INFO twitter: 1680 tweets asked of Scry so far",
+  "22:39:46 INFO twitter: 1760 tweets asked of Scry so far",
+  "22:40:12 INFO twitter: 1840 tweets asked of Scry so far",
+  "22:40:38 INFO twitter: 1920 tweets asked of Scry so far",
+  "22:41:04 INFO twitter: 2000 tweets asked of Scry so far",
+  "22:41:30 INFO twitter: 2080 tweets asked of Scry so far",
+  "22:41:56 INFO twitter: 2160 tweets asked of Scry so far",
+  "22:42:22 INFO twitter: 2240 tweets asked of Scry so far",
+  "22:42:48 INFO twitter: 2320 tweets asked of Scry so far",
+  "22:43:14 INFO twitter: 2400 tweets asked of Scry so far",
+  "22:43:40 INFO twitter: 2480 tweets asked of Scry so far",
+  "22:44:06 INFO twitter: 2560 tweets asked of Scry so far",
+  "22:44:32 INFO twitter: 2640 tweets asked of Scry so far",
+  "22:44:58 INFO twitter: 2720 tweets asked of Scry so far",
+  "22:45:24 INFO twitter: 2800 tweets asked of Scry so far",
+  "22:45:50 INFO twitter: 2880 tweets asked of Scry so far",
+  "22:46:16 INFO twitter: 2960 tweets asked of Scry so far",
+  "",
+  "22:48:14 lane             total  pending       ok     thin   failed  skipped",
+  "22:48:14 twitter         203910     2885   201025        0        0        0",
+  "22:48:14 arxiv             2984        0     2984        0        0        0",
+  "22:48:14 stackexchange      745        0      741        0        4        0",
+  "22:48:14 reddit             671        0      669        0        2        0",
+  "22:48:14 hackernews          74        0       73        0        1        0",
+  "22:48:14 lesswrong          225        0      225        0        0        0",
+  "22:48:14 github            3246        0     3019      154       73        0",
+  "22:48:14 localfile          375        0      198        1      176        0",
+  "22:48:14 generic          22031      991    19861      534      645        0",
+  "22:48:14 youtube           1439      724      639       73        3        0",
+  "22:48:14 singlefile         128        0      128        0        0        0",
+  "22:48:14 skip              3492        0        0        0        0     3492",
+  "",
+  "22:48:14 229970 documents, 933.6M characters of text",
+  "",
+  "22:48:14 reasons:",
+  "22:48:14      1904  skipped  x_non_status",
+  "22:48:14       702  skipped  github_account",
+  "22:48:14       534  thin     thin",
+  "22:48:14       431  skipped  media:jpg",
+  "22:48:14       229  skipped  private_app",
+  "22:48:14       176  failed   file_missing",
+  "22:48:14       154  thin     readme_only",
+  "22:48:14       152  failed   http_404",
+  "22:48:14       123  failed   http_403",
+  "22:48:14       118  skipped  youtube_other",
+  "22:48:14        77  failed   timeout",
+  "22:48:14        73  thin     no_transcript",
+  "22:48:14        61  failed   host_down",
+  "22:48:14        61  failed   not_found",
+  "22:48:14        59  failed   dns",
+  "22:48:14        57  skipped  local",
+  "22:48:14        40  failed   http_401",
+  "22:48:14        31  skipped  arxiv_other",
+  "22:48:14        27  failed   no_text",
+  "22:48:14        23  failed   http_400",
+  "22:48:14        23  failed   non_text:image/jpeg",
+  "22:48:14        22  failed   ssl",
+  "22:48:14        20  skipped  bad_url",
+  "22:48:14        10  failed   non_text:image/png",
+  "22:48:14         5  failed   http_405",
+  "22:48:14 --- Checking for garbage",
+  "22:48:16 INFO review: checking 229970 documents",
+  "22:48:21 INFO review: 142037 of 229970 checked, 735 scored",
+  "22:48:27   229970  documents",
+  "22:48:27     1161  scored",
+  "22:48:27        0  missing",
+  "22:48:27        0  text changed",
+  "22:48:27        0  fix did nothing",
+  "22:48:27        0  to choose",
+  "22:48:27     1970  to review",
+  "22:48:27   229970  scored total",
+  "22:48:27        9  fine",
+  "22:48:27        0  bad",
+  "22:48:27        0  ocr",
+  "22:48:27        0  refetch",
+  "22:48:27        0  unfixable",
+  "22:48:27        0  choose",
+  "22:48:27       16  fixed"
+ ]
+}

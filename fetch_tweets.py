@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+Deprecated. osiris now takes an account's tweets itself: put usernames in a .txt file,
+one per line, in a folder listed under Tweets on its page, or pass the file to
+`osiris run --twitter-accounts`. This script is no longer kept up, and osiris still
+imports the databases it wrote.
+
 Fetch all tweets (including replies) from a Twitter account via twitterapi.io.
 Stores in SQLite inside a directory named after the username.
 
@@ -683,7 +688,8 @@ def fetch_all(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch all tweets (incl. replies) from a Twitter account "
+        description="Deprecated: osiris now does this itself with a list of usernames. "
+                    "Fetch all tweets (incl. replies) from a Twitter account "
                     "via twitterapi.io",
     )
     parser.add_argument("username", help="Twitter screen name (without @)")

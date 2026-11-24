@@ -458,7 +458,7 @@ This downloads or reads every PDF again, whatever its status.
 | [Community Archive](https://www.community-archive.org) uploads, one `.json` file per account | The same as the export, which holds the same data. Tweets posted in Communities are included |
 | SQLite databases written by `fetch_tweets.py`, with a `tweets` table | Every tweet. A retweet keeps the original tweet's full text, as twitterapi.io's do |
 
-`fetch_tweets.py` in this folder is a separate script that saves one account's tweets from twitterapi.io to a SQLite database. It reads `TWITTERAPI_IO_KEY` from the environment or from `.env`.
+`fetch_tweets.py` in this folder is deprecated. It is a separate script that saves one account's tweets from twitterapi.io to a SQLite database, which a list of usernames now does inside osiris. It reads `TWITTERAPI_IO_KEY` from the environment or from `.env`.
 
 Folders are searched, subfolders included, for `.zip`, `.json`, `.html`, `.htm`, `.db`, `.sqlite` and `.sqlite3` files, and a file that is none of these kinds is skipped. Files are read a tweet at a time, so their size doesn't matter. On the page, add the folders under **Tweets**. Each run imports them before archiving, so the tweets they hold aren't looked up in Scry or twitterapi.io.
 
@@ -518,3 +518,19 @@ Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 15
 ```
 
 One test prints a page to PDF with Chrome, and is skipped if there's none.
+
+## The screenshot
+
+`screenshot.png` is the picture of the Archive tab that `README.md` shows. This takes it again from the page as it is now:
+
+```sh
+.venv/bin/python tools/screenshot.py
+```
+
+The picture shows the same archive every time, on any machine. Its folders, settings, numbers and log come from `tools/screenshot.json`, and nothing is read from your own archive or settings. To change what a box or a table shows, change that file. A setting the page has gained since shows its default. The command warns about any name in the file that the server no longer knows, and a test does the same.
+
+The page is drawn in a window 900 px wide at two pixels to the pixel, so the picture is 1800 pixels wide. It ends as far under the last line as the first card is under the tabs. Two runs give the same file, byte for byte.
+
+It needs Playwright's Chromium, which `pip install -e .[render]` and `playwright install chromium` set up, and the two fonts the file names, Ubuntu Sans and DejaVu Sans Mono. An Ubuntu 24.04 desktop has both. Elsewhere, `--fonts FOLDER` adds a folder of font files. The command stops without writing anything if the browser drew the page in other fonts.
+
+GitHub serves the file unchanged but shows it 838 px wide, so every browser shrinks it. The picture's text is antialiased in grey for that reason, since the coloured fringes of ordinary desktop text turn into coloured speckle when shrunk. `--lcd` brings the fringes back. `--wide 1676` makes the picture 1676 pixels wide with the same page in it, which GitHub shows pixel for pixel on a 2x screen and exactly halved on a 1x one, and that is sharper than 1800.
