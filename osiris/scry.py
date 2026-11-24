@@ -20,7 +20,9 @@ MAX_EXPOSURE_NANODOLLARS = 500_000_000  # $0.50
 
 
 class ScryError(Exception):
-    pass
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code  # Scry's own name for what went wrong, such as query_resource_limit_exceeded
 
 
 def sql_list(values: Iterable[str]) -> str:
@@ -60,5 +62,5 @@ class ScryClient:
                     names = [c["name"] for c in data["columns"]]
                     return [dict(zip(names, row)) for row in data["rows"]]
                 error = data.get("error") or data
-                raise ScryError(f"{error.get('code')}: {error.get('message')}")
+                raise ScryError(f"{error.get('code')}: {error.get('message')}", error.get("code"))
         raise ScryError("scry unreachable")

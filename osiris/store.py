@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS input_files (  -- tab backups whose URLs are all in t
     name    TEXT,
     read_at TEXT
 );
+CREATE TABLE IF NOT EXISTS twitter_accounts (  -- accounts whose every tweet is wanted (accounts.py), by lowercase username
+    handle     TEXT PRIMARY KEY,
+    checked_at TEXT,     -- when a run last got to the end of what its sources have
+    api_newest INTEGER,  -- twitterapi.io: the newest tweet of a walk that finished; the next walk stops there
+    api_cursor TEXT,     -- twitterapi.io: where a walk that was cut short carries on
+    api_top    INTEGER,  -- twitterapi.io: the newest tweet that unfinished walk has seen
+    scry_after INTEGER,  -- Scry: every tweet it has up to this id has been taken
+    scry_count INTEGER   -- Scry: how many tweets it had up to there, to notice older ones turning up later
+);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",

@@ -16,7 +16,7 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import arxiv, clean, cookies, extract, fixes, review, safety, tuning, youtube
+from . import accounts, arxiv, clean, cookies, extract, fixes, review, safety, tuning, twitter, youtube
 from .arxiv import run_arxiv
 from .doi import doi_of, run_doi_pass
 from .forums import lesswrong_from_scry, run_hackernews, run_lesswrong
@@ -99,7 +99,8 @@ async def _run_lanes(store: Store, args: argparse.Namespace, lanes: list[str],
     reporter = asyncio.create_task(_report(store))
     stop_on_signals()
     jobs = {
-        "twitter": lambda: run_twitter(store, use_scry=not args.no_scry_tweets),
+        "twitter": lambda: run_twitter(store, use_scry=not args.no_scry_tweets, accounts=args.accounts,
+                                       scry_dollars=args.scry_tweets_max_dollars, api_dollars=args.twitterapi_max_dollars),
         "arxiv": lambda: run_arxiv(store, pool, args.keep_raw_pdfs, full_text=not args.no_arxiv_fulltext,
                                    refetch_pdfs=args.refetch_arxiv_pdfs,
                                    scry_dollars=args.scry_arxiv_max_dollars if args.scry_arxiv else None),
@@ -188,6 +189,16 @@ def cmd_run(args: argparse.Namespace) -> None:
     if args.chrome_profile:
         refuse_real_chrome_profile(args.chrome_profile)
     tuning.apply_arguments(args)
+    lists = [Path(p).expanduser() for p in args.twitter_accounts]
+    if missing := [p for p in lists if not p.exists()]:
+        sys.exit(f"not found: {', '.join(map(str, missing))}")
+    for path in lists:
+        if path.is_file():  # named outright, so it has to be a list; in a folder, other .txt files are passed over
+            try:
+                accounts.read_list(path)
+            except ValueError as e:
+                sys.exit(f"{path} isn't a list of usernames, one per line: {e}")
+    args.accounts = accounts.listed(lists)  # none while carrying out fixes, which are for their own documents only
     lanes = [lane for lane in (args.only or LANES) if lane not in args.skip]
     refresh_lanes = [lane for lane in REFRESH_LANES.get(args.refresh_pdfs, ()) if lane in lanes]
     if args.refresh_pdfs and not refresh_lanes:
@@ -358,6 +369,7 @@ async def _run_fixes(store: Store, args: argparse.Namespace) -> None:
     billed = os.environ.pop(BILLED_KEY, None)  # tweets cost money only through the fix that says so
     # these widen a run to documents nobody queued
     args.refetch_arxiv_pdfs = args.refetch_comments = args.refetch_stackexchange = False
+    args.accounts = []
     try:
         ocr_langs: dict[str, list[str]] = {}
         wanted = []
@@ -403,7 +415,7 @@ async def _fix(store: Store, args: argparse.Namespace, method: str, docs: list[t
             return
         os.environ[BILLED_KEY] = billed
         try:
-            await run_twitter(store, use_scry=False)
+            await run_twitter(store, use_scry=False, api_dollars=args.twitterapi_max_dollars)
         finally:
             os.environ.pop(BILLED_KEY, None)
         return
@@ -683,6 +695,17 @@ def main() -> None:
     run.add_argument("--contact", help="email/URL appended to the User-Agent sent to Wikimedia sites")
     run.add_argument("--no-scry-tweets", action="store_true",
                      help="don't look tweets up in Scry: only twitterapi.io, if keyed, and otherwise they stay pending")
+    run.add_argument("--scry-tweets-max-dollars", type=float, default=twitter.SCRY_DOLLARS, metavar="N",
+                     help="stop taking tweets from Scry once a run has spent this much on them; the rest wait for the "
+                          "next run (default %(default)s)")
+    run.add_argument("--twitter-accounts", action="append", default=[], metavar="PATH",
+                     help="also save every tweet of the accounts in this list: a .txt file of usernames, one per line, "
+                          "or a folder searched for such files (repeatable). They come from twitterapi.io if "
+                          f"{BILLED_KEY} is set, and from Scry if it has a key and isn't turned off; with neither, "
+                          "they're skipped. Each run takes what's new")
+    run.add_argument("--twitterapi-max-dollars", type=float, default=accounts.API_DOLLARS, metavar="N",
+                     help="stop taking accounts' tweets from twitterapi.io once a run has spent about this much; the "
+                          "next run carries on (default %(default)s)")
     tuning.add_arguments(run)
     run.set_defaults(func=cmd_run)
 
@@ -693,9 +716,11 @@ def main() -> None:
     imp.add_argument("--worker-mem-mb", type=int, default=1536, help="memory cap per extraction process (0 = none)")
     imp.set_defaults(func=cmd_import)
 
-    tweets = sub.add_parser("import-tweets", help="store tweets from fetch_tweets.py's SQLite databases and Community"
-                            " Archive JSON files as markdown; tweets already saved are skipped")
-    tweets.add_argument("paths", nargs="+", help="directories (searched recursively for .db/.sqlite/.sqlite3/.json) or files")
+    tweets = sub.add_parser("import-tweets", help="store tweets from fetch_tweets.py's SQLite databases, Community Archive "
+                            "JSON files, Twitter's export zips and bookmark exports as markdown; tweets already saved "
+                            "are skipped")
+    tweets.add_argument("paths", nargs="+",
+                        help="directories (searched recursively for .db/.sqlite/.sqlite3/.json/.zip/.html) or files")
     tweets.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     tweets.set_defaults(func=cmd_import_tweets)
 

@@ -27,7 +27,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import cleanup, cookies, fixes, review, search, tuning, tweetdb
+from . import accounts, cleanup, cookies, fixes, review, search, tuning, tweetdb, twitter
 from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
@@ -77,7 +77,8 @@ DEFAULT_CONFIG = {
                 "scry_arxiv": False, "scry_arxiv_dollars": 5, "scry_youtube": False, "scry_youtube_dollars": 1,
                 "scry_crawl": False, "scry_crawl_dollars": 1, "log_font_px": 10,
                 "contact": "", "youtube_pace_updated": True, "youtube_delay_min": DEFAULT_DELAY[0], "youtube_delay_max": DEFAULT_DELAY[1],
-                "scry_twitter": True, "billed_twitter": False, "advanced_open": True, "picker_dirs": {},
+                "scry_twitter": True, "billed_twitter": False, "scry_twitter_dollars": twitter.SCRY_DOLLARS,
+                "twitterapi_dollars": accounts.API_DOLLARS, "advanced_open": True, "picker_dirs": {},
                 "host_limits": [{"pattern": BUILT_IN_HOST_LIMIT, "at_once": 1, "seconds": 20}], "scholar_pace_updated": True,
                 **tuning.FLAG_DEFAULTS, **{knob.option: knob.default for knob in tuning.KNOBS},
                 "retry_hosts": []},  # sites whose failed URLs the next archive run tries again
@@ -450,8 +451,9 @@ def _chosen_lanes(options: dict) -> list[str]:
 REFRESH_LANES = {"web": ("generic",), "local": ("localfile",), "both": ("generic", "localfile")}
 
 
-def _plan(lanes: list[str], options: dict) -> dict:
-    """What a run will fetch, as far as its time left depends on it."""
+def _plan(lanes: list[str], options: dict, handles: list[str] = ()) -> dict:
+    """What a run will fetch, as far as its time left depends on it. `handles`: the accounts whose
+    tweets it takes, each counted as done once the run has got to the end of them."""
     low = _number(options, "youtube_delay_min", float, 0, DEFAULT_DELAY[0])
     high = _number(options, "youtube_delay_max", float, 0, DEFAULT_DELAY[1])
     fallbacks = [name for name, on in (("impersonate", options.get("impersonate", True)), ("render", options.get("render")),
@@ -461,7 +463,8 @@ def _plan(lanes: list[str], options: dict) -> dict:
         and not ocr_unavailable(str(options.get("ocr_lang") or "eng"))
     return {"lanes": lanes, "full_text": bool(options.get("arxiv_fulltext", True)), "youtube_each": (low + high) / 2,
             "refresh": [lane for lane in REFRESH_LANES.get(options.get("refresh") or "", ()) if lane in lanes],
-            "fallbacks": fallbacks, "ocr": bool(ocr)}
+            "fallbacks": fallbacks, "ocr": bool(ocr),
+            "accounts": sorted({h.lower() for h in handles}) if "twitter" in lanes else [], "started": _iso(time.time())}
 
 
 def _fallbacks_left(db: sqlite3.Connection, passes: list[str]) -> int:
@@ -502,6 +505,8 @@ def _progress(out: Path, plan: dict, full_text_left: int, refreshed: set[str] = 
                     " AND refreshed_pdf(url, content_type) AND instr(COALESCE(tried, ''), ?) = 0",
                     (lane, f",{REFRESH}")).fetchone()[0]
         fallbacks = _fallbacks_left(db, plan.get("fallbacks", []))
+        checked = dict(db.execute("SELECT handle, checked_at FROM twitter_accounts")) if plan.get("accounts") else {}
+        accounts_left = sum((checked.get(handle) or "") < plan["started"] for handle in plan.get("accounts", ()))
         ocr_lanes = [lane for lane in OCR_LANES if lane in plan["lanes"]] if plan.get("ocr") else []
         ocr = db.execute(  # ocr.candidates, counted
             f"SELECT COUNT(DISTINCT doc_key) FROM urls WHERE lane IN ({','.join('?' * len(ocr_lanes))})"
@@ -520,6 +525,8 @@ def _progress(out: Path, plan: dict, full_text_left: int, refreshed: set[str] = 
         elif lane == "localfile":  # its PDFs are read again alongside the waiting files
             stages.append({"source": lane, "stage": lane, "left": left + refresh.get(lane, 0), "each": None})
         else:
+            if lane == "twitter" and plan.get("accounts"):  # taken first, then the tweets that are waiting
+                stages.append({"source": lane, "stage": "accounts", "left": accounts_left, "each": None})
             stages.append({"source": lane, "stage": lane, "left": left, "each": plan["youtube_each"] if lane == "youtube" else None})
             if lane == "generic":  # then, one after the other: PDFs read again, the fallbacks, and OCR
                 if lane in refresh:
@@ -686,11 +693,16 @@ def _scan_folder(path: Path, kind: str) -> dict:
         return {"ok": False, "summary": "Folder not found"}
     if kind == "tweets":
         found = [c for c in map(tweetdb.count_tweets, tweetdb.find_files([path])) if c is not None]
-        if not found:
-            return {"ok": False, "summary": "No tweet databases or archives here"}
+        handles = accounts.listed([path], quiet=True)
+        if not found and not handles:
+            return {"ok": False, "summary": "No tweet files or lists of accounts here"}
         kinds = Counter(kind for kind, _ in found)
-        files = " and ".join(f"{kinds[k]:,} {k}{'' if kinds[k] == 1 else 's'}" for k in ("database", "archive") if kinds[k])
-        return {"ok": True, "summary": f"{files}, {sum(n for _, n in found):,} tweets"}
+        parts = [f"{kinds[k]:,} {name}{'' if kinds[k] == 1 else 's'}" for k, name in tweetdb.KINDS.items() if kinds[k]]
+        if found:
+            parts.append(f"{sum(n for _, n in found):,} tweets")
+        if handles:
+            parts.append(f"{len(handles):,} account{'' if len(handles) == 1 else 's'} listed")
+        return {"ok": True, "summary": ", ".join(parts)}
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
         sessions = len(list(path.glob("session-buddy-*.json")))
@@ -759,6 +771,8 @@ def _run_args(options: dict, url_file: Path, every_lane: bool = False) -> list[s
         args += ["--scry-crawl-max-dollars", f"{_number(options, 'scry_crawl_dollars', float, 0, 1):g}"]
     if options.get("refetch_comments"):
         args += ["--refetch-comments-days", f"{_number(options, 'refetch_comments_days', float, 0, 0):g}"]
+    if (dollars := _number(options, "scry_twitter_dollars", float, 0, twitter.SCRY_DOLLARS)) != twitter.SCRY_DOLLARS:
+        args += ["--scry-tweets-max-dollars", f"{dollars:g}"]
     if options.get("pdf_at_once") not in ("", None):
         args += ["--pdf-at-once", str(_number(options, "pdf_at_once", int, 1, 1))]
     for option, flag in (("arxiv_fulltext", "--no-arxiv-fulltext"), ("impersonate", "--no-impersonate"), ("doi", "--no-doi"),
@@ -840,6 +854,11 @@ async def start_archive(request: web.Request) -> web.Response:
     url_file = out / "ui_urls.txt"
     read_files = out / "ui_inputs.txt"  # the tab backups behind this URL list
     run_args = _run_args(options, url_file)
+    # lists of accounts in the tweet folders: the run takes all their tweets (not in _run_args: fixes never do)
+    tweet_folders = [Path(p).expanduser() for p in config["tweets"]]
+    account_args = [arg for folder in tweet_folders for arg in ("--twitter-accounts", str(folder))]
+    account_args += ["--twitterapi-max-dollars", f"{_number(options, 'twitterapi_dollars', float, 0, accounts.API_DOLLARS):g}"]
+    sources_on = (options.get("scry_twitter", True) and load_key()) or (options.get("billed_twitter") and os.environ.get(BILLED_KEY))
 
     async def flow(j: Job) -> None:
         for empty in (url_file, read_files):
@@ -861,10 +880,10 @@ async def start_archive(request: web.Request) -> web.Response:
         if config["saved"]:
             await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
         if config["tweets"]:  # before archiving, so tweets they hold aren't looked up
-            await j.run("Importing tweet databases and archives",
-                        j.osiris("import-tweets", *[str(Path(p).expanduser()) for p in config["tweets"]]))
-        j.plan = _plan(_chosen_lanes(options), options)
-        await j.run("Archiving", j.osiris(*run_args, "--mark-inputs", str(read_files)))
+            await j.run("Importing tweet files", j.osiris("import-tweets", *map(str, tweet_folders)))
+        handles = await asyncio.to_thread(accounts.listed, tweet_folders, True) if sources_on else []
+        j.plan = _plan(_chosen_lanes(options), options, handles)
+        await j.run("Archiving", j.osiris(*run_args, "--mark-inputs", str(read_files), *account_args))
         j.plan = None
         if retried := _retry_hosts(options):  # done: later runs leave those sites alone again
             latest = load_config(out)

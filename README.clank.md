@@ -30,7 +30,7 @@ Optional system and Python extras:
 
 `osiris ui` opens one page with two tabs, **Archive** and **Documents**. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
-- **Archive:** add folders of tab backups, local files, saved pages and tweet databases and archives with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages and tweet databases and archives, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
+- **Archive:** add folders of tab backups, local files, saved pages and tweet files with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports saved pages and tweet files, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. An account in a list of accounts counts as one item, done when the run has taken all its new tweets. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
 - **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them.
 - **Documents:** everything you've saved, with garbage scores and ways to fix each document. Titles are saved as each document is, so they show and can be searched straight away. Two boxes and five filters narrow the list together: a document shows only if it passes every one. The first box wants every word in the title or URL, in any order; `site:example.com` keeps that site and its subdomains, and several `site:` words mean any of them. The second box, **Inside documents**, searches the saved text alone. The filters are source, status, reason and decision, plus a row of tag ticks for the garbage check's tags (block page, encoding, few common words, odd words, symbols, no spaces, repeated lines), as shown on each document. A document shows if any of its tags is ticked; with **All tags** ticked, documents with no tag show too, including ones never checked. All are ticked at first, which leaves nothing out. Clicking **All tags** ticks or unticks every tag, while a single tag never changes it, so All tags with nothing else ticked lists only the untagged documents. The list loads more as you scroll to its end, adding rows below without moving what you're looking at. While a job runs it refreshes itself every 10 seconds and once when the job ends, keeping as many rows as you've loaded and the row at the top of your view in place; the open document isn't redrawn, and a text search without the index isn't repeated, since it reads every file. **All bad** and **All fine** apply to the same filters, and are hidden while the text box is in use. **Review** sorts whatever is listed by garbage score, worst first, keeping your search and filters; the number on it counts documents flagged and not decided yet. See [Finding garbage](#finding-garbage). **Delete…** removes a document's saved text and osiris's copy of its original for good, after asking. Its links stay in the manifest marked `deleted`, so later runs don't fetch them again from your tab backups. Your own files, such as local files and saved pages, are never touched. It waits while a job is running. With `--search-index`, the text box uses the index, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
@@ -53,7 +53,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 - **Access:** the page only answers on this machine and refuses requests from other websites. It has no password, so anything else running on this computer can use it, and it can read your files and start jobs. Originals are served only for files already in the manifest, and saved web pages open sandboxed so their scripts can't run.
 - **One job at a time:** don't run `osiris run` in a terminal while the page is running a job.
 - **YouTube:** the garbage check runs after the archive step, and YouTube can take days. To check sooner, press **Stop**, then **Check for garbage**, or turn YouTube off for that run.
-- **Tweets:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you tick **Allow twitterapi.io** under Advanced, which is billed per tweet. **Look up tweets in Scry** turns Scry off or on for tweets. With both off, tweets wait.
+- **Tweets:** runs from the page ignore `TWITTERAPI_IO_KEY` unless you tick **Allow twitterapi.io** under Advanced, which is billed per tweet. With it ticked, the accounts in your lists also get all their tweets from it, up to the dollar limit next to it. **Look up tweets in Scry** turns Scry off or on for tweets, and it has a dollar limit too. With both off, tweets wait and listed accounts are skipped.
 - **Older imports:** pages imported before this version only recorded a file name, so they have no Original view.
 - **Quitting:** Ctrl-C in the terminal, or closing the terminal, stops the page and any running job, with progress saved.
 
@@ -200,7 +200,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | `osiris review scan` | Scores new and changed documents for probable garbage, and settles the fixes that ran |
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores pages saved with SingleFile |
-| `osiris import-tweets DIR [DIR\|FILE ...]` | Stores tweets from `fetch_tweets.py`'s databases and Community Archive files. See [Tweet databases and archives](#tweet-databases-and-archives) |
+| `osiris import-tweets DIR [DIR\|FILE ...]` | Stores tweets from Twitter's export zips, bookmark exports, Community Archive files and `fetch_tweets.py`'s databases. See [Tweet files and account lists](#tweet-files-and-account-lists) |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
 | `osiris clean` | Repairs text in documents already archived. `--dry-run`, `--undo`. See [Text cleanup](#text-cleanup) |
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
@@ -226,7 +226,8 @@ Common `osiris run` options:
 | `--no-impersonate`, `--no-doi`, `--no-wayback` | Skip a fallback pass |
 | `--workers N`, `--worker-mem-mb N` | Extraction and OCR processes, and the memory cap for each |
 | `--scry-youtube`, `--scry-youtube-max-dollars N` | Take a video's transcript from Scry when it has one, so that video never touches YouTube. Sends your video IDs to Scry. A run stops taking them after spending N dollars (1), and the rest come from YouTube |
-| `--no-scry-tweets` | Don't look tweets up in Scry. They then come from twitterapi.io if keyed, and otherwise stay pending |
+| `--no-scry-tweets`, `--scry-tweets-max-dollars N` | Don't look tweets up in Scry, so that they come from twitterapi.io if keyed and otherwise stay pending. Or stop asking Scry for tweets once a run has spent N dollars on them (1), and leave the rest for the next run |
+| `--twitter-accounts PATH`, `--twitterapi-max-dollars N` | Also save every tweet of the accounts in a list, and stop taking them from twitterapi.io once a run has spent about N dollars (5). See [Every tweet of an account](#every-tweet-of-an-account). Repeatable |
 | `--tries N`, `--max-retry-wait N`, `--site-down-after N`, `--site-refused-after N` | How hard to retry a web page, and when to give up on a site |
 | `--page-timeout N`, `--stall-timeout N`, `--read-timeout N`, `--book-timeout N`, `--ocr-page-timeout N`, `--ocr-document-timeout N` | Time limits in seconds. Raise `--page-timeout` (30) if large PDFs time out |
 | `--arxiv-delay N`, `--wayback-delay N`, `--stackexchange-delay N` | Seconds between requests to those services |
@@ -262,7 +263,7 @@ All keys go in one file, `.env` in the osiris folder. Copy `.env.example` to `.e
 |---|---|---|
 | `SCRY_API_KEY` | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives | Those sources are skipped |
 | `GITHUB_TOKEN` | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos | GitHub URLs stay pending |
-| `TWITTERAPI_IO_KEY` | Tweets Scry lacks, from twitterapi.io, billed per tweet | They're marked `not_in_scry` |
+| `TWITTERAPI_IO_KEY` | Tweets Scry lacks, and every tweet of the accounts in your lists, from twitterapi.io, billed per tweet | Tweets Scry lacks are marked `not_in_scry`, and listed accounts come from Scry alone |
 | `STACKEXCHANGE_KEY` | 10,000 Stack Exchange API calls a day instead of 300 | The lower quota applies |
 | `OPENALEX_API_KEY` | Your own OpenAlex budget | The shared per-IP budget applies |
 
@@ -272,7 +273,7 @@ Each URL goes to the cheapest source that actually returns its text.
 
 | Lane | URLs | How |
 |---|---|---|
-| `twitter` | `x.com/…/status/<id>` | Scry's archive, which also holds some deleted tweets, then twitterapi.io if keyed. A tweet is known by its ID alone, so a link to a saved tweet under a different username isn't fetched again |
+| `twitter` | `x.com/…/status/<id>` | Scry's archive, which also holds some deleted tweets, then twitterapi.io if keyed. A tweet is known by its ID alone, so a link to a saved tweet under a different username isn't fetched again. Scry is asked for 80 tweets at a time, the most it sends in one answer, and a run stops asking once it has spent `--scry-tweets-max-dollars` (1) on tweets. The rest wait for the next run |
 | `arxiv` | `arxiv.org/{abs,pdf,html}/<id>` | Export API, 100 IDs per call, for title, authors and abstract. Once every abstract is in (if any couldn't be fetched, full text waits for the next run), the full text, whichever form of link you saved: arXiv's HTML, or the PDF if there is none. One request every 15 seconds, as arXiv's robots.txt asks, with papers read in the background so a slow one doesn't hold up the next. A large first run takes hours; it's safe to stop and resumes. If this machine is too busy to read a paper's HTML, the next run tries it again before settling for the PDF |
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
@@ -446,16 +447,35 @@ This downloads or reads every PDF again, whatever its status.
 - **X pages:** these are read from X's own tweet markup, so a saved conversation keeps every tweet with its author and date, and any X Article.
 - **Unsupported:** SingleFile's self-extracting ZIP format is reported as `singlefile_zip`. Use the default HTML format.
 
-## Tweet databases and archives
+## Tweet files and account lists
 
-`osiris import-tweets DIR [DIR|FILE ...]` stores the tweets in two kinds of file, one document per tweet in the same format as the `twitter` lane, with `source: tweet:import`:
+`osiris import-tweets DIR [DIR|FILE ...]` stores the tweets in four kinds of file, one document per tweet in the same format as the `twitter` lane, with `source: tweet:import`.
 
-- SQLite databases written by `fetch_tweets.py`, with a `tweets` table. Their retweets keep the original tweet's full text, as twitterapi.io's do.
-- [Community Archive](https://www.community-archive.org) uploads: an account's Twitter archive as one JSON file, with `account` and `tweets` at the top. Tweets posted in Communities are included, and long tweets get their full text. The archive only holds a retweet's `RT @user: …` text, often cut short, so that's what is kept. The file is read a tweet at a time, so its size doesn't matter.
+| File | What is read |
+|---|---|
+| Twitter's own export, as the `.zip` it arrives in | The account's tweets, replies and retweets, with long tweets in full. The zip is read where it is and never unpacked. Likes, messages and deleted tweets are left out, and the export holds no bookmarks |
+| Bookmarks saved with the [twitter-web-exporter](https://github.com/prinsss/twitter-web-exporter) browser extension, as `.json` or `.html` | Each bookmarked tweet with its author, its whole text and the tweet it quotes. Both formats give the same documents, so having both does no harm |
+| [Community Archive](https://www.community-archive.org) uploads, one `.json` file per account | The same as the export, which holds the same data. Tweets posted in Communities are included |
+| SQLite databases written by `fetch_tweets.py`, with a `tweets` table | Every tweet. A retweet keeps the original tweet's full text, as twitterapi.io's do |
 
-Folders are searched for `.db`, `.sqlite`, `.sqlite3` and `.json` files, and files that are neither kind are skipped. On the page, add the folders under **Tweet databases and archives**. Each run imports them before archiving, so the tweets they hold aren't looked up in Scry or twitterapi.io.
+Folders are searched, subfolders included, for `.zip`, `.json`, `.html`, `.htm`, `.db`, `.sqlite` and `.sqlite3` files, and a file that is none of these kinds is skipped. Files are read a tweet at a time, so their size doesn't matter. On the page, add the folders under **Tweets**. Each run imports them before archiving, so the tweets they hold aren't looked up in Scry or twitterapi.io.
 
-Tweets are matched by ID, so a username that changed doesn't matter. A tweet that's already saved, or that you deleted, is left alone. One that's waiting or failed, such as `not_in_scry`, gets the file's text. New tweets join the `twitter` lane, so **Fetch again** works on them. Neither kind of file holds quoted tweets, so those aren't included. Text is kept as the file has it, `t.co` links included. Dates are written in UTC as `2026-09-16 22:18:18`, like Scry's. Running the import again only adds tweets that are new.
+Tweets are matched by ID, so a username that changed doesn't matter. A tweet that's already saved, or that you deleted, is left alone. One that's waiting or failed, such as `not_in_scry`, gets the file's text. New tweets join the `twitter` lane, so **Fetch again** works on them. The export and the Community Archive hold only a retweet's `RT @user: …` text, often cut short, so that's what is kept, and they hold no quoted tweets. Text is kept as the file has it, `t.co` links included. Dates are written in UTC as `2026-09-16 22:18:18`, like Scry's. Running the import again only adds tweets that are new.
+
+### Every tweet of an account
+
+A `.txt` file in the same folders is a list of accounts, one username per line. A line can be `name`, `@name` or a profile link, and `#` starts a comment. `osiris run --twitter-accounts PATH` saves every tweet of those accounts that it can get, where `PATH` is a list or a folder to search for lists. The page passes your **Tweets** folders by itself.
+
+A `.txt` file with a line that isn't a username is left alone as a whole, and the log names the line. That keeps a README in the folder from being looked up at a price.
+
+Where the tweets come from depends on what's turned on.
+
+- twitterapi.io is used when `TWITTERAPI_IO_KEY` is set and, on the page, **Allow twitterapi.io** is ticked. It gives the account's timeline with replies, newest first, for about $0.15 per 1,000 tweets. A run stops once it has spent about `--twitterapi-max-dollars` (5), and the next run carries on from the same place.
+- Scry is used when it has a key and isn't turned off. It gives what its archive holds for the account, which includes tweets deleted since and is rarely all of them. Scry lets out about 2,000 tweets a day for the cost of finding them, which was about $0.03 per 1,000 in a test, and charges more the further a day goes past that. A run stops once it has spent `--scry-tweets-max-dollars` (1) on tweets.
+- With both on, twitterapi.io goes first and Scry adds what it has beyond that.
+- With neither, the accounts are skipped with a warning.
+
+Each run takes only what's new. twitterapi.io is read down to the newest tweet of the last finished walk, and Scry is asked only for tweets that aren't saved yet. How far each account has got is kept in the manifest, so no tweet is paid for twice. These documents have `source: tweet:twitterapi` or `tweet:scry`.
 
 ## Output
 
@@ -463,7 +483,7 @@ Everything goes in `data/`.
 
 | Path | Contents |
 |---|---|
-| `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path |
+| `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path. Also how far each listed account's tweets have been taken |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source, and `raw` when an original was kept) and the markdown body |
 | `corpus.jsonl` | Written by `osiris export` |
 | `review.sqlite` | Garbage scores and your review decisions. An archive's older `audit.sqlite` is renamed to this when it's first opened |

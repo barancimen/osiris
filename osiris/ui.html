@@ -321,7 +321,9 @@ const HELP = {
   ocr_dpi: "How sharply each page is rendered for OCR. 200 suits most books. 300 can help with small print, and is slower.",
   youtube_block_wait: "When YouTube blocks you, the lane stops for this long, and twice as long each time it happens again in a row. The pause survives a restart, and for a day after a block YouTube goes at half speed. Other sources carry on. Set it to 0 to skip a pause, for example after changing network.",
   youtube_block_limit: "After this many blocks in a row, YouTube stops until the next run.",
-  scry_twitter: "Look posts up in Scry's archive first. Turned off, they only come from twitterapi.io if you've allowed it, and otherwise they wait.",
+  scry_twitter: "Look posts up in Scry's archive first, and take the posts it has of the accounts in your lists. Turned off, posts only come from twitterapi.io if you've allowed it, and otherwise they wait.",
+  scry_twitter_dollars: "Scry gives about 2,000 posts a day for the cost of finding them, and charges more the further a day goes past that. Once a run has spent this much on posts, the rest wait for the next run.",
+  twitterapi_dollars: "twitterapi.io charges about $0.15 for 1,000 posts. Once a run has spent about this much on the accounts in your lists, the rest wait, and the next run carries on where this one stopped.",
   refetch_comments: "Fetch your saved Hacker News and LessWrong threads again, to pick up new comments. A document only changes if the new text is at least as long. Stays on until you untick it.",
   refetch_comments_days: "Skip threads fetched more recently than this, so ticking the box above doesn't redo them all every run. Pages saved before these sources existed are always updated. 0 updates every thread.",
   scry_arxiv: "For papers with only their summary so far, take the full text from Scry if it has it, and don't ask arXiv for those. Far faster, but Scry's copy drops formulas and is about a quarter shorter. Your paper IDs are sent to Scry. Papers Scry doesn't have still come from arXiv.",
@@ -342,7 +344,7 @@ const HELP = {
   scry_youtube: "Take a video's transcript from Scry when it has one, so that video never touches YouTube and can't get you blocked. Your video IDs are sent to Scry. Videos it doesn't have still come from YouTube.",
   scry_youtube_dollars: "Transcripts cost more than other data on Scry. The free allowance covers about 55 a day, $1 buys about 300, and $5 about 700, because the price rises as you take more. Once a run has spent this much, the rest come from YouTube.",
   youtube_delay: "How long to wait between videos, picked at random within this range so the requests don't look automated. Going faster makes it more likely YouTube blocks you for a while.",
-  billed_twitter: "Get posts the free archives don't have from twitterapi.io, which charges for each post.",
+  billed_twitter: "Get posts Scry doesn't have from twitterapi.io, which charges for each post. With a list of accounts in your tweet folders, it also fetches every post of those accounts, up to the limit next to it.",
   "retry-sites": "Sites whose failed links the next archive run will try again. Add one from a failed document on the Documents tab.",
   // numbers
   documents: "Pages and files saved as text so far.",
@@ -483,7 +485,7 @@ const SOURCE_HOW = {
   ocr: "read from pictures of the pages (OCR)", transcript: "the video's captions", auto: "made automatically by YouTube",
   manual: "written by people", metadata: "the title and description only", playlist: "the playlist's title and video titles",
   channel: "the channel's title and video titles", api: "from the official API",
-  import: "from a tweet database or archive you imported",
+  import: "from a tweet file you imported",
 };
 const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io"};
 function sourceHelp(source) {
@@ -505,7 +507,7 @@ const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, ebooks, Word files and text. Your files are only read, never changed."},
   {key: "saved", title: "Saved pages", text: "Folders of pages saved with the SingleFile browser extension."},
-  {key: "tweets", title: "Tweet databases and archives", text: "Folders of tweets.db files from fetch_tweets.py and Community Archive .json files. Every such file in them is read, and tweets already saved are skipped."},
+  {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and tweets.db files from fetch_tweets.py. A .txt file of usernames, one per line, gets every tweet of those accounts. Subfolders are read too, and tweets already saved are skipped."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
@@ -697,7 +699,9 @@ function renderOptions() {
         numbers(number("scry_youtube_dollars", "Spend at most this on Scry's transcripts, per run", "$"), row("Seconds between YouTube requests", help("youtube_delay"), "sec", delay("youtube_delay_min", "youtube_delay_max", "Shortest wait"), "to", delay("youtube_delay_max", "youtube_delay_min", "Longest wait")),
           number("youtube_block_wait", "Pause after a block, doubling each time", "min"), number("youtube_block_limit", "Stop after this many blocks in a row"))),
       group("Tweets",
-        ticks(check("scry_twitter", "Look up tweets in Scry"), check("billed_twitter", "Allow twitterapi.io"))),
+        ticks(check("scry_twitter", "Look up tweets in Scry"), check("billed_twitter", "Allow twitterapi.io")),
+        numbers(number("scry_twitter_dollars", "Spend at most this on Scry's tweets, per run", "$"),
+          number("twitterapi_dollars", "Spend at most this on accounts' tweets from twitterapi.io, per run", "$"))),
       group("Papers and forums",
         ticks(check("arxiv_fulltext", "Get the full text of arXiv papers"), check("keep_raw_pdfs", "Keep raw copies of PDFs"),
           check("refetch_comments", "Update Hacker News and LessWrong threads"), check("refetch_stackexchange", "Update Stack Exchange threads"), check("refetch_arxiv_pdfs", "Try arXiv's web version again for papers that used the PDF"), check("scry_arxiv", "Use Scry's copy of arXiv papers when it has one")),
@@ -799,7 +803,7 @@ function renderState(s) {
 /* how far a run is. Sources run side by side, each on its own schedule, so a run lasts as long as its
    slowest source. Stages inside a source (arXiv's abstracts, then its full text) run one after the other. */
 const PACE_WINDOW = 180000;  // how much recent progress a pace is measured over
-const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text", refresh_web: "Web PDFs read again", fallbacks: "Fallbacks for web pages", ocr: "OCR"};
+const STAGE_LABEL = {...LANE_LABEL, arxiv: "arXiv abstracts", full_text: "arXiv full text", refresh_web: "Web PDFs read again", fallbacks: "Fallbacks for web pages", ocr: "OCR", accounts: "Accounts' tweets"};
 const Progress = {stages: {}, job: null};
 function renderProgress(j) {
   const box = $("#run-progress");
