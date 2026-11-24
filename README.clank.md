@@ -453,7 +453,7 @@ This downloads or reads every PDF again, whatever its status.
 
 | File | What is read |
 |---|---|
-| Twitter's own export, as the `.zip` it arrives in | The account's tweets, replies and retweets, with long tweets in full. The zip is read where it is and never unpacked. Likes, messages and deleted tweets are left out, and the export holds no bookmarks |
+| Twitter's own export, as the `.zip` it arrives in | The account's tweets, replies and retweets, with long tweets in full. The zip is read where it is and never unpacked, and an export you unpacked yourself isn't read. Likes, messages and deleted tweets are left out, and the export holds no bookmarks |
 | Bookmarks saved with the [twitter-web-exporter](https://github.com/prinsss/twitter-web-exporter) browser extension, as `.json` or `.html` | Each bookmarked tweet with its author, its whole text and the tweet it quotes. Both formats give the same documents, so having both does no harm |
 | [Community Archive](https://www.community-archive.org) uploads, one `.json` file per account | The same as the export, which holds the same data. Tweets posted in Communities are included |
 | SQLite databases written by `fetch_tweets.py`, with a `tweets` table | Every tweet. A retweet keeps the original tweet's full text, as twitterapi.io's do |
@@ -471,7 +471,7 @@ A `.txt` file with a line that isn't a username is left alone as a whole, and th
 Where the tweets come from depends on what's turned on.
 
 - twitterapi.io is used when `TWITTERAPI_IO_KEY` is set and, on the page, **Allow twitterapi.io** is ticked. It gives the account's timeline with replies, newest first, for about $0.15 per 1,000 tweets. A run stops once it has spent about `--twitterapi-max-dollars` (5), and the next run carries on from the same place.
-- Scry is used when it has a key and isn't turned off. It gives what its archive holds for the account, which includes tweets deleted since and is rarely all of them. Scry lets out about 2,000 tweets a day for the cost of finding them, which was about $0.03 per 1,000 in a test, and charges more the further a day goes past that. A run stops once it has spent `--scry-tweets-max-dollars` (1) on tweets.
+- Scry is used when it has a key and isn't turned off. It gives what its archive holds for the account, which includes tweets deleted since and is rarely all of them. Finding them cost about $0.03 per 1,000 tweets in a test. Scry also meters the data it sends: its allowance covers about 2,000 tweets a day, and its price list charges for a day's data past that at a rising rate, which the test didn't reach. A run stops once it has spent `--scry-tweets-max-dollars` (1) on tweets.
 - With both on, twitterapi.io goes first and Scry adds what it has beyond that.
 - With neither, the accounts are skipped with a warning.
 

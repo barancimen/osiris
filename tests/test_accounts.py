@@ -174,11 +174,12 @@ def test_a_place_twitterapi_no_longer_takes_starts_the_walk_again(store: Store, 
 class Scry:
     """Scry's Twitter relations, answering the queries osiris sends and charging for each."""
 
-    def __init__(self, monkeypatch, price: int = 0, most: int = 1000):
+    def __init__(self, monkeypatch, price: int = 0, most: int = 1000, most_chars: int = 10**9):
         self.handles: dict[str, list[str]] = {}  # lowercase username: the accounts that have posted under it, latest first
         self.users: dict[str, tuple[str, str]] = {}
         self.tweets: dict[int, dict] = {}
         self.price, self.most = price, most  # nanodollars a query, and the most tweets it will send at once
+        self.most_chars = most_chars  # the most text it will send in one answer
         self.asked: list[tuple[str, list[int]]] = []  # the tweets asked for, with the account they were asked of
         self.listed = 0
         monkeypatch.setenv("SCRY_API_KEY", "key")
@@ -210,12 +211,21 @@ class Scry:
         assert m, sql
         ids = numbers(m.group(2))
         assert int(m.group(3)) == len(ids)
-        if len(ids) > self.most:
+        mine = [self.tweets[tid] for tid in ids if tid in self.tweets and (not m.group(1) or self.tweets[tid]["author_id"] == m.group(1))]
+        if piece := re.search(r"substringUTF8\(argMax\((text|article_text), .*?\), (\d+), (\d+)\) AS piece", sql):
+            start, length = int(piece.group(2)) - 1, int(piece.group(3))
+            return [{"piece": t.get(piece.group(1), "")[start : start + length]} for t in mine]
+        whole = " AS text" in sql  # with each tweet's text and article, not only the facts about it
+        if len(ids) > self.most or (whole and sum(len(t["text"]) + len(t.get("article_text", "")) for t in mine) > self.most_chars):
             raise ScryError("query_resource_limit_exceeded: too much", "query_resource_limit_exceeded")
+        if not whole:
+            return [{"id": str(tid), "author_id": t["author_id"], "author_handle": t.get("author_handle", ""), "author_display_name": "",
+                     "created": "2026-06-25 13:14:08.000000", "quoted_id": "0", "article_title": t.get("article_title", "")}
+                    for tid in ids if (t := self.tweets.get(tid)) in mine and t]
         self.asked.append((m.group(1) or "", ids))
         return [{"id": str(tid), "author_id": t["author_id"], "author_handle": t.get("author_handle", ""), "author_display_name": "",
                  "created": "2026-06-25 13:14:08.000000", "text": t["text"], "quoted_id": str(t.get("quoted", 0)),
-                 "article_title": "", "article_text": ""}
+                 "article_title": t.get("article_title", ""), "article_text": t.get("article_text", "")}
                 for tid in ids if (t := self.tweets.get(tid)) and (not m.group(1) or t["author_id"] == m.group(1))]
 
 
@@ -266,6 +276,18 @@ def test_an_answer_scry_calls_too_long_is_asked_for_in_smaller_parts(store: Stor
     scry.account(ADA, "ada", "Ada L", {tid: f"tweet {tid}" for tid in range(10001, 10012)})
     run(store, ["ada"])
     assert saved(store) == set(range(10001, 10012)) and all(len(ids) <= 2 for _, ids in scry.asked)
+
+
+def test_a_tweet_too_long_for_one_answer_comes_in_pieces(store: Store, monkeypatch):
+    monkeypatch.setattr(twitter, "SCRY_PIECE", 100)
+    article = "".join(f"Paragraph {n} of a long article, with ünïcödé in it.\n" for n in range(40))
+    scry = Scry(monkeypatch, most_chars=150)
+    scry.account(ADA, "ada", "Ada L", {10001: "short", 10002: {"text": "My article", "article_title": "On length", "article_text": article},
+                                      10003: "x" * 300, 10004: "short again"})
+    run(store, ["ada"])
+    assert saved(store) == {10001, 10002, 10003, 10004}
+    assert doc(store, 10002)[1] == "**Ada L (@ada)**\n\nMy article\n\n## On length\n\n" + article.rstrip()
+    assert doc(store, 10003)[1].endswith("\n\n" + "x" * 300)  # a length that is exactly a number of pieces
 
 
 def test_with_both_turned_on_scry_adds_what_twitterapi_did_not_have(store: Store, monkeypatch):

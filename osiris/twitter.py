@@ -41,13 +41,15 @@ SCRY_REFUSALS = 3  # single tweets refused in a row before Scry is left alone fo
 # The newest observation of each tweet, from the raw relation: twitter.tweets_latest does the same
 # fold but reads every column, which cost 13 times as much for the same tweets. A tweet's whole text
 # and its author's name can be on different observations, so each column takes its own best one.
-SCRY_COLUMNS = ("toString(tweet_id) AS id, toString(any(author_id)) AS author_id,"
-                " argMax(author_handle, (author_handle != '', version)) AS author_handle,"
-                " argMax(author_display_name, (author_display_name != '', version)) AS author_display_name,"
-                " toString(argMax(original_timestamp, version)) AS created, argMax(text, version) AS text,"
-                " toString(argMax(quoted_tweet_id, version)) AS quoted_id,"
-                " argMax(article_title, (article_title != '', version)) AS article_title,"
-                " argMax(article_text, (article_text != '', version)) AS article_text")
+SCRY_FACTS = ("toString(tweet_id) AS id, toString(any(author_id)) AS author_id,"
+              " argMax(author_handle, (author_handle != '', version)) AS author_handle,"
+              " argMax(author_display_name, (author_display_name != '', version)) AS author_display_name,"
+              " toString(argMax(original_timestamp, version)) AS created,"
+              " toString(argMax(quoted_tweet_id, version)) AS quoted_id,"
+              " argMax(article_title, (article_title != '', version)) AS article_title")
+SCRY_TEXTS = {"text": "argMax(text, version)", "article_text": "argMax(article_text, (article_text != '', version))"}
+SCRY_COLUMNS = SCRY_FACTS + "".join(f", {found} AS {name}" for name, found in SCRY_TEXTS.items())
+SCRY_PIECE = 6000  # characters of one long text asked for at once: under 35 KB in any script
 
 
 async def _api_get(session: aiohttp.ClientSession, path: str, params: dict) -> dict:
@@ -177,10 +179,13 @@ class ScryTweets:
                 if len(batch) > 1:  # too much text for one answer: ask for less
                     self.batch = len(batch) // 2
                     continue
-                self.refused += 1
-                if self.refused >= SCRY_REFUSALS:  # it isn't the size of one tweet, then
-                    raise
-                log.warning("twitter: Scry won't send tweet %s, which is too long for one answer; skipped", batch[0])
+                try:  # one tweet too long for an answer, as an X article can be
+                    found.update((r["id"], r) for r in await self._in_pieces(batch[0], where))
+                except ScryError as again:
+                    self.refused += 1
+                    if again.code != SCRY_TOO_MUCH or self.refused >= SCRY_REFUSALS:  # it isn't the size of one tweet, then
+                        raise
+                    log.warning("twitter: Scry won't send tweet %s; skipped", batch[0])
                 todo = todo[1:]
                 continue
             self.refused = 0
@@ -188,6 +193,19 @@ class ScryTweets:
             found.update((r["id"], r) for r in got)
             todo = todo[len(batch):]
         return found, todo
+
+    async def _in_pieces(self, tweet_id: str, where: str) -> list[dict]:
+        """A tweet too long for one answer: everything but its text and its article, then those a piece at a time."""
+        one = f"FROM twitter.tweets WHERE {where}tweet_id IN ({tweet_id}) GROUP BY tweet_id LIMIT 1"
+        rows = await self.client.query(f"SELECT {SCRY_FACTS} {one}", max_seconds=120)
+        for name, found in SCRY_TEXTS.items() if rows else ():
+            pieces: list[str] = []
+            while not pieces or len(pieces[-1]) == SCRY_PIECE:
+                got = await self.client.query(
+                    f"SELECT substringUTF8({found}, {len(pieces) * SCRY_PIECE + 1}, {SCRY_PIECE}) AS piece {one}", max_seconds=120)
+                pieces.append(got[0]["piece"] if got else "")
+            rows[0][name] = "".join(pieces)
+        return rows
 
 
 async def _from_scry(scry: ScryTweets, ids: list[str],
