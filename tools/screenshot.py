@@ -10,10 +10,11 @@ summaries and log are laid over what the server answers. So the picture shows th
 any machine, and the page around it is whatever osiris/ui.html is now. Nothing is read from your
 own archive or settings.
 
-The picture is the whole Archive tab in a window 900 px wide, drawn at two pixels to the pixel,
-which makes it 1800 pixels wide. It ends as far under the last line as the first card is under the
-header. Text is antialiased in grey: the coloured fringes a desktop browser gives text turn into
-coloured speckle when GitHub draws the picture smaller than it is.
+The picture is the whole Archive tab in a window 900 px wide, drawn 1676 pixels wide. GitHub's
+README column is 838 px wide, so it shows that width pixel for pixel on a 2x screen and exactly
+halved on a 1x one. The picture ends as far under the last line as the first card is under the
+header. Text is antialiased in grey, because the coloured fringes a desktop browser gives text
+turn into coloured speckle when GitHub draws the picture smaller than it is.
 
 It needs Playwright's Chromium, as `osiris run --render` does, and the fonts screenshot.json
 names. It stops without writing anything if the browser drew the page in other fonts or the page
@@ -226,7 +227,7 @@ async def run(args: argparse.Namespace) -> None:
             address = f"http://127.0.0.1:{runner.addresses[0][1]}/"
             await save_config(address, data["config"])
             window = data["window"]
-            png = await take(address, window, args.wide / window["width"] if args.wide else window["scale"], conf, args.lcd)
+            png = await take(address, window, (args.wide or window["picture_width"]) / window["width"], conf, args.lcd)
         finally:
             await runner.cleanup()
     from PIL import Image
@@ -242,9 +243,8 @@ def main() -> None:
     parser.add_argument("--data", default=str(DATA), help="the archive to show (default: screenshot.json beside this script)")
     parser.add_argument("--page", help="another copy of ui.html to take the picture of, such as an older one to compare with")
     parser.add_argument("--wide", type=int, metavar="PIXELS",
-                        help="how many pixels wide to make the picture (default: 1800). The window stays 900 px wide, so "
-                             "the page looks the same. GitHub's README column is 838 px wide: 1676 is drawn there as it "
-                             "is on a 2x screen and halved exactly on a 1x one, which is sharper than 1800")
+                        help="how many pixels wide to make the picture (default: 1676, twice the 838 px of GitHub's "
+                             "README column). The window stays 900 px wide, so the page looks the same")
     parser.add_argument("--fonts", metavar="FOLDER", help="a folder of font files to use as well as the installed ones")
     parser.add_argument("--lcd", action="store_true", help="antialias text for an LCD's coloured subpixels, as a desktop browser does")
     asyncio.run(run(parser.parse_args()))
