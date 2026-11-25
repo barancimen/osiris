@@ -1,0 +1,38 @@
+#!/bin/sh
+# Takes screenshot.png again on every fifth commit, so the picture README.md shows keeps up with the page.
+#
+# Git doesn't copy hooks along with a clone. To turn this one on in a clone, run this once in its top folder:
+#
+#     ln -s ../../tools/pre-commit .git/hooks/pre-commit
+#
+# The picture is of the page as the files are now, staged or not. The commit goes ahead whether or not the
+# picture could be taken.
+
+every=5
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+number=$(( $(git rev-list --count HEAD 2>/dev/null || echo 0) + 1 ))
+[ $(( number % every )) -eq 0 ] || exit 0
+
+# `git commit FILE` commits from a temporary index. A picture added to that one would be committed but then
+# be missing from the real index, which would put the old picture back in the next commit.
+case ${GIT_INDEX_FILE##*/} in
+  next-index-*)
+    echo "pre-commit: commit $number is due a new screenshot.png, but a commit of named files can't take one along" >&2
+    exit 0 ;;
+esac
+
+python=.venv/bin/python
+[ -x "$python" ] || python=python3
+limit=
+command -v timeout >/dev/null 2>&1 && limit="timeout -s KILL 300"
+new=$(git rev-parse --git-dir)/screenshot-new.png
+
+echo "pre-commit: this is commit $number, so screenshot.png is being taken again" >&2
+if $limit "$python" tools/screenshot.py --out "$new" && mv -f "$new" screenshot.png; then
+  git add screenshot.png
+else
+  rm -f "$new"
+  echo "pre-commit: screenshot.png could not be taken again, and the commit goes ahead without it" >&2
+fi
+exit 0

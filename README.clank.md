@@ -534,3 +534,11 @@ The page is drawn in a window 900 px wide, and the picture is 1676 pixels wide. 
 It needs Playwright's Chromium, which `pip install -e .[render]` and `playwright install chromium` set up, and the two fonts the file names, Ubuntu Sans and DejaVu Sans Mono. An Ubuntu 24.04 desktop has both. Elsewhere, `--fonts FOLDER` adds a folder of font files. The command stops without writing anything if the browser drew the page in other fonts.
 
 GitHub serves the file unchanged but shows it 838 px wide. The picture is twice that width, so GitHub shows it pixel for pixel on a 2x screen and exactly halved on a 1x one, which keeps the text sharp. `--wide PIXELS` makes it another width with the same page in it. The picture's text is antialiased in grey, since the coloured fringes of ordinary desktop text turn into coloured speckle when shrunk. `--lcd` brings the fringes back.
+
+`tools/pre-commit` is a git hook that takes the picture again on every fifth commit and adds it to that commit. Git doesn't copy hooks along with a clone, so turn it on once in each clone, from the repo's top folder:
+
+```sh
+ln -s ../../tools/pre-commit .git/hooks/pre-commit
+```
+
+The hook counts every commit in the branch's history, so the fifth ones are commits 110, 115 and so on. Such a commit takes about 15 seconds longer. The picture is of the page as the files are at that moment, staged or not. If the page hasn't changed, the picture comes out as the same file and the commit doesn't include it. If the picture can't be taken, for example because Playwright or a font is missing, the hook says so and the commit goes ahead. A commit of named files, as in `git commit FILE`, can't take a picture along, so one that falls on a fifth commit leaves the picture for the next fifth one.
