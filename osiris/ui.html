@@ -506,8 +506,7 @@ const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", you
 const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "hackernews", "lesswrong", "stackexchange", "arxiv", "twitter"];
 const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
-  {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files and text. Your files are only read, never changed."},
-  {key: "saved", title: "Saved pages", text: "Folders of pages saved with the SingleFile browser extension."},
+  {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files, text and web pages, including pages saved with the SingleFile browser extension. Your files are only read, never changed."},
   {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A .txt file of usernames, one per line, gets every tweet of those accounts."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
@@ -552,7 +551,7 @@ function renderArchive() {
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
-  for (const key of ["backups", "local", "saved", "tweets"]) for (const p of config[key]) scanFolder(key, p);
+  for (const key of ["backups", "local", "tweets"]) for (const p of config[key]) scanFolder(key, p);
   checkCookies();
 }
 

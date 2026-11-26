@@ -74,10 +74,10 @@ def test_the_page_is_sent_the_log_and_the_failures_once(tmp_path: Path, warnings
 
 def test_folders_in_the_data_get_its_summaries_and_others_the_server_s(tmp_path: Path, warnings: list[str]):
     async def scan(client):
-        shown = await (await client.get("/api/scan", params={"kind": "saved", "path": "/home/baran/git/moewe-saved"})).json()
-        real = await (await client.get("/api/scan", params={"kind": "saved", "path": str(tmp_path / "none")})).json()
+        shown = await (await client.get("/api/scan", params={"kind": "local", "path": "/home/baran/git/moewe-saved"})).json()
+        real = await (await client.get("/api/scan", params={"kind": "local", "path": str(tmp_path / "none")})).json()
         return shown, real
 
     shown, real = with_page(tmp_path, DATA, scan)
-    assert shown == {"ok": True, "summary": "130 HTML files"}
+    assert shown == {"ok": True, "summary": "130 readable (130 html)"}
     assert real["ok"] is False

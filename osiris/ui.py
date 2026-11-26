@@ -27,7 +27,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import accounts, cleanup, cookies, fixes, review, search, tuning, tweetdb, twitter
+from . import accounts, cleanup, cookies, fixes, review, search, singlefile, tuning, tweetdb, twitter
 from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
@@ -68,7 +68,7 @@ NUMBER_FLAGS = (("concurrency", "--concurrency", int, 1), ("per_host", "--per-ho
                 ("challenge_wait", "--challenge-wait", float, 0))
 BUILT_IN_HOST_LIMIT = "scholar.google.*"  # `osiris run` always has a rule for this one, so it's edited rather than removed
 DEFAULT_CONFIG = {
-    "backups": [], "local": [], "saved": [], "tweets": [], "last_run": None,  # when the latest archive run started and ended
+    "backups": [], "local": [], "tweets": [], "last_run": None,  # when the latest archive run started and ended
     "options": {"lanes": list(LANES), "forum_lanes_offered": True, "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
                 "review_after": True, "cookies": "", "user_agent": "", "user_agent_edit": False, "render": False,
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
@@ -361,9 +361,11 @@ def load_config(out: Path) -> dict:
         saved = json.loads(config_path(out).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return config
-    for key in ("backups", "local", "saved", "tweets"):
+    for key in ("backups", "local", "tweets"):
         if isinstance(saved.get(key), list):
             config[key] = [str(p) for p in saved[key]]
+    if isinstance(saved.get("saved"), list):  # saved pages had folders of their own before local files took them too
+        config["local"] += [str(p) for p in saved["saved"] if str(p) not in config["local"]]
     if isinstance(saved.get("last_run"), dict):
         config["last_run"] = saved["last_run"]
     options = saved.get("options", {})
@@ -620,7 +622,7 @@ async def set_config(request: web.Request) -> web.Response:
     out = request.app["out"]
     body = await request.json()
     config = load_config(out)
-    for key in ("backups", "local", "saved", "tweets"):
+    for key in ("backups", "local", "tweets"):
         if isinstance(body.get(key), list):
             config[key] = [str(p) for p in body[key]]
     config["options"].update({k: v for k, v in body.get("options", {}).items() if k in config["options"]})
@@ -711,19 +713,15 @@ def _scan_folder(path: Path, kind: str) -> dict:
             return {"ok": False, "summary": "No bookmarks_*.html, session-buddy-*.json or .txt files here"}
         return {"ok": True, "summary": f"{_files(bookmarks, 'bookmark')}, {_files(sessions, 'Session Buddy')}"
                 + (f", {_files(lists, 'text')}" if lists else "")}
-    readable, other, html = Counter(), 0, 0
+    readable, other = Counter(), 0
     for root, dirs, names in os.walk(path):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for name in names:
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            if ext in ("html", "htm"):
-                html += 1
             if ext in LOCAL_READABLE:
-                readable[ext] += 1
+                readable["html" if ext == "htm" else ext] += 1
             else:
                 other += 1
-    if kind == "saved":
-        return {"ok": bool(html), "summary": f"{_files(html, 'HTML')}" if html else "No HTML files here"}
     total = sum(readable.values())
     if not total:
         return {"ok": False, "summary": "No readable files here"}
@@ -833,15 +831,20 @@ def _host_limits(options: dict) -> list[str]:
     return rules
 
 
-def _write_local_urls(folders: list[str], out_file) -> int:
-    n = 0
+def _write_local_urls(folders: list[str], out_file) -> tuple[int, int]:
+    """Lists the files in these folders as file:// links, except web pages, which are read as saved
+    pages. Returns how many files were listed and how many web pages were left for that."""
+    listed = pages = 0
     for folder in folders:
         for root, dirs, names in os.walk(Path(folder).expanduser()):
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             for name in names:
+                if Path(name).suffix.lower() in singlefile.SUFFIXES:
+                    pages += 1
+                    continue
                 out_file.write(Path(root, name).resolve().as_uri() + "\n")
-                n += 1
-    return n
+                listed += 1
+    return listed, pages
 
 
 async def start_archive(request: web.Request) -> web.Response:
@@ -875,10 +878,11 @@ async def start_archive(request: web.Request) -> web.Response:
         if config["local"]:
             j.step = "Listing local files"
             with open(url_file, "a", encoding="utf-8") as f:
-                n = await asyncio.to_thread(_write_local_urls, config["local"], f)
-            j.log(f"--- Listed {n:,} local files")
-        if config["saved"]:
-            await j.run("Importing saved pages", j.osiris("import", *[str(Path(p).expanduser()) for p in config["saved"]]))
+                listed, pages = await asyncio.to_thread(_write_local_urls, config["local"], f)
+            j.log(f"--- Listed {listed:,} local files" + (f" and {pages:,} web pages" if pages else ""))
+            if pages:  # filed by the address SingleFile recorded, if there's one, so they meet the same page from the web
+                folders = [str(p) for p in (Path(f).expanduser() for f in config["local"]) if p.is_dir()]
+                await j.run("Importing saved web pages", j.osiris("import", *folders))
         if config["tweets"]:  # before archiving, so tweets they hold aren't looked up
             await j.run("Importing tweet files", j.osiris("import-tweets", *map(str, tweet_folders)))
         handles = await asyncio.to_thread(accounts.listed, tweet_folders, True) if sources_on else []

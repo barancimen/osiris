@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import html
 import logging
+import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -220,16 +221,33 @@ def _store_page(store: Store, path: Path, sha: str, res: dict) -> str:
     return outcome if ok else f"{outcome} (under {extract.MIN_CHARS} characters)"
 
 
+def html_files(paths: list[Path]) -> list[Path]:
+    """The .html and .htm files named, and those in the folders named and their subfolders. Hidden
+    folders are left out, as the web page leaves them out of a folder of local files."""
+    found = set()
+    for p in paths:
+        if p.is_file():
+            found.add(p)
+        for root, dirs, names in os.walk(p):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            found.update(Path(root, name) for name in names)
+    return sorted(f for f in found if f.suffix.lower() in SUFFIXES and f.is_file())
+
+
 async def run_import(store: Store, paths: list[Path], pool: extract.WorkerPool, workers: int) -> None:
-    files = sorted({f for p in paths for f in ([p] if p.is_file() else p.rglob("*"))
-                    if f.is_file() and f.suffix.lower() in SUFFIXES})
+    files = html_files(paths)
     log.info("%d HTML files found", len(files))
     imported = store.imported_files()
+    # web pages an earlier version read from a folder of local files: they keep that document
+    local = {key for (key,) in store.db.execute("SELECT doc_key FROM urls WHERE lane = 'localfile'")}
     slots = asyncio.Semaphore(workers + 1)
     outcomes: Counter = Counter()
     failures: list[tuple[Path, str]] = []
 
     async def one(path: Path) -> None:
+        if local and route(path.resolve().as_uri()).doc_key in local:
+            outcomes["already archived as a local file"] += 1
+            return
         async with slots:
             try:
                 sha = await asyncio.to_thread(file_sha1, path)

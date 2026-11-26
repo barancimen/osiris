@@ -16,9 +16,7 @@
   ],
   "local": [
    "/home/baran/Downloads/pdfs",
-   "/home/baran/Documents/ebooks"
-  ],
-  "saved": [
+   "/home/baran/Documents/ebooks",
    "/home/baran/git/moewe-saved"
   ],
   "tweets": [
@@ -58,10 +56,8 @@
   },
   "local": {
    "/home/baran/Downloads/pdfs": "146 readable (146 pdf)",
-   "/home/baran/Documents/ebooks": "32 readable (21 epub, 6 pdf, 3 mobi, 2 azw3), 2 other files skipped"
-  },
-  "saved": {
-   "/home/baran/git/moewe-saved": "130 HTML files"
+   "/home/baran/Documents/ebooks": "32 readable (21 epub, 6 pdf, 3 mobi, 2 azw3), 2 other files skipped",
+   "/home/baran/git/moewe-saved": "130 readable (130 html)"
   },
   "tweets": {
    "/home/baran/git/twitterapi": "3 databases, 1 archive, 196,058 tweets",
@@ -422,8 +418,8 @@
  },
  "log": [
   "22:29:52 --- Extracting URLs from /home/baran/Downloads/tab-backups",
-  "22:29:55 --- Listed 178 local files",
-  "22:29:55 --- Importing saved pages",
+  "22:29:55 --- Listed 178 local files and 130 web pages",
+  "22:29:55 --- Importing saved web pages",
   "22:29:57 --- Importing tweet files",
   "22:30:21 --- Archiving",
   "22:30:22 INFO re-queued 1115 failed URLs",
