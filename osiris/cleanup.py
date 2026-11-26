@@ -161,7 +161,7 @@ def _producer(store: Store, did: str) -> str | None:
         if raw_path and raw_path.endswith(".pdf"):
             paths.append(store.out / raw_path)
         for path in paths:
-            if path.is_file():
+            if path.is_file() and path.suffix.lower() == ".pdf":  # a local file has its type's extension, and a DjVu file has no Producer
                 try:
                     pdf = pdfium.PdfDocument(str(path))
                     try:
