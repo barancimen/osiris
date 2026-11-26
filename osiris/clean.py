@@ -71,8 +71,9 @@ class Result:
 
 
 def is_pdf_source(source: str | None) -> bool:
-    """Text from a PDF's text layer or from OCR of one: pdf, pdf:wayback, file:pdf, pdf:ocr, ..."""
-    return bool(source) and (source.startswith("pdf") or source.startswith("file:pdf"))
+    """Text from a PDF's or DjVu file's text layer or from OCR of one: pdf, pdf:wayback, file:pdf,
+    pdf:ocr, file:djvu, file:djvu:ocr, ..."""
+    return bool(source) and source.startswith(("pdf", "file:pdf", "file:djvu"))
 
 
 def from_chrome(producer: str | None) -> bool:

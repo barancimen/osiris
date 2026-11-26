@@ -1,11 +1,12 @@
-"""Read PDFs that have no text layer, usually scans.
+"""Read PDFs and local DjVu files that have no text layer, usually scans.
 
 `osiris run` does this on its own once its generic and local-file lanes are done, and `osiris ocr`
 does it alone. OCR takes seconds per page, so a long scan must not hold up anything else. It works
 through PDFs recorded with no usable text: a local file is read where it is and never changed, and
 a web PDF is downloaded again, since only its text was kept, to a temporary file that is then
-deleted. Each PDF is tried once, unless --retry is given. The unit of work is a page, so every core
-stays busy even when only one long book is left.
+deleted. A DjVu file's pages are drawn by DjVuLibre's ddjvu (see djvu.py). Each file is tried once,
+unless --retry is given. The unit of work is a page, so every core stays busy even when only one
+long book is left.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import aiohttp
 
-from . import extract
+from . import djvu, extract
 from .localfile import candidate_paths
 from .route import doc_id
 from .store import Store
@@ -39,6 +40,9 @@ DOC_SECONDS_PER_PAGE = 30  # a book too long for DOC_TIMEOUT gets this long for 
 RENDER_SECONDS = 60  # on top of PAGE_TIMEOUT, for drawing a page before tesseract sees it
 TRIED = "ocr"
 LANES = ("generic", "localfile")  # the lanes whose PDFs can come back with no text
+# the manifest rows OCR can read: PDFs from either lane, and DjVu files on this computer
+READABLE = ("(content_type = 'application/pdf' OR lower(url) LIKE '%.pdf%'"
+            " OR (lane = 'localfile' AND (lower(url) LIKE '%.djvu' OR lower(url) LIKE '%.djv')))")
 
 
 def _page_text(image: bytes, lang: str, orient: bool = False) -> str:
@@ -54,12 +58,14 @@ def _page_text(image: bytes, lang: str, orient: bool = False) -> str:
 
 
 def pdf_info(path: str) -> dict:
-    """Runs in an OCR worker: how many pages to read, and what the PDF says about itself."""
+    """Runs in an OCR worker: how many pages to read, and what the PDF or DjVu file says about itself."""
     import pypdfium2 as pdfium
 
     signal.alarm(PAGE_TIMEOUT)
     pdf = None
     try:
+        if djvu.is_djvu(path):
+            return djvu.info(path)
         pdf = pdfium.PdfDocument(path)
         meta = pdf.get_metadata_dict(skip_empty=True)
         return {"pages": len(pdf), "title": meta.get("Title"), "author": meta.get("Author")}
@@ -84,12 +90,16 @@ def read_page(path: str, index: int, lang: str, orient: bool = False) -> dict:
     started = time.monotonic()
     pdf = None
     try:
-        pdf = pdfium.PdfDocument(path)
-        page = pdf[index]
-        buffer = BytesIO()
-        page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
-        page.close()
-        text = _page_text(buffer.getvalue(), lang, orient)
+        if djvu.is_djvu(path):
+            image = djvu.render_page(path, index, DPI, RENDER_SECONDS)
+        else:
+            pdf = pdfium.PdfDocument(path)
+            page = pdf[index]
+            buffer = BytesIO()
+            page.render(scale=DPI / 72, grayscale=True).to_pil().save(buffer, "PNG")
+            page.close()
+            image = buffer.getvalue()
+        text = _page_text(image, lang, orient)
     except subprocess.TimeoutExpired:
         text = ""  # one bad page shouldn't cost the rest of the book
     except Exception as e:
@@ -143,7 +153,7 @@ def candidates(store: Store, retry: bool = False, lanes: Iterable[str] = LANES) 
         "SELECT doc_key, MIN(url), MAX(final_url), lane, COALESCE(MAX(chars), 0) FROM urls"
         f" WHERE lane IN ({', '.join('?' * len(lanes))})"
         " AND ((status = 'failed' AND reason = 'no_text') OR status = 'thin')"
-        f" AND (content_type = 'application/pdf' OR lower(url) LIKE '%.pdf%'){tried}"
+        f" AND {READABLE}{tried}"
         " GROUP BY doc_key ORDER BY MIN(rowid)",
         lanes,
     ).fetchall()
@@ -186,7 +196,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
     """With `forced` (doc keys, the fixes you asked for), only those are read, and any text that differs
     from the document's replaces it: review kept the earlier version, and you choose between them."""
     todo = forced_rows(store, forced) if forced is not None else candidates(store, retry, lanes)[:limit]
-    log.info("ocr: %d PDFs with no usable text, language %s, %d pages at a time", len(todo), lang, workers)
+    log.info("ocr: %d PDFs and DjVu files with no usable text, language %s, %d pages at a time", len(todo), lang, workers)
     if not todo:
         return
     orient = await asyncio.to_thread(can_orient)
@@ -232,6 +242,9 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
                 if path is None:
                     outcome["file_missing"] = outcome.get("file_missing", 0) + 1
                     return  # not tried: it may just be on another machine
+                if djvu.is_djvu(path) and djvu.missing():
+                    outcome[djvu.MISSING] = outcome.get(djvu.MISSING, 0) + 1
+                    return  # not tried either: it can be once DjVuLibre is installed
             else:
                 temp = path = store.tmp_dir / f"{uuid.uuid4().hex}.pdf"
                 problem = await _download(session, final_url or url, temp)
@@ -261,7 +274,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
             store.commit()
             return
         meta = {"url": url, "final_url": final_url if final_url != url else None,
-                "source": "file:pdf:ocr" if lane == "localfile" else "pdf:ocr",
+                "source": f"file:{'djvu' if djvu.is_djvu(path) else 'pdf'}:ocr" if lane == "localfile" else "pdf:ocr",
                 "title": res.get("title"), "author": res.get("author")}
         written = store.write_doc(doc_key, meta, text)
         ok = written >= extract.MIN_CHARS

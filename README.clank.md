@@ -24,6 +24,7 @@ Optional system and Python extras:
 | For | Install |
 |---|---|
 | OCR of scanned PDFs | `apt install tesseract-ocr` (plus `tesseract-ocr-tur` etc. for other languages), or `brew install tesseract` |
+| DjVu files | `apt install djvulibre-bin`, or `brew install djvulibre` |
 | `--render` | `.venv/bin/pip install -e .[render]`, then `playwright install chromium` |
 
 ## Web interface
@@ -186,7 +187,7 @@ If the web page is updating the index at the time, `osiris search` waits for it 
 
 Nothing in osiris deletes, moves or changes your local files, tab backups or saved pages. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
 
-- **Guard:** every osiris process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`osiris/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium only reads.
+- **Guard:** every osiris process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`osiris/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium and DjVuLibre's tools only read.
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
 - **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
 
@@ -331,6 +332,7 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 | Type | Extensions | How |
 |---|---|---|
 | PDF | `.pdf` | pypdfium2, then OCR if there's no text |
+| DjVu | `.djvu`, `.djv` | The text layer, read with DjVuLibre's `djvutxt`, then OCR if there's none |
 | Ebook | `.epub`, `.mobi`, `.azw`, `.azw3` | EPUB in spine order. Kindle files are unpacked with KindleUnpack first |
 | Word | `.docx` | mammoth, then markdownify |
 | Web page | `.html`, `.htm`, `.xhtml` | Same reader as saved pages |
@@ -339,6 +341,7 @@ Run this lane from a home connection, because YouTube blocks most datacenter IPs
 - **Paths:** the list holds `file:///path/to/My%20Paper.pdf`, one per line. `file:///C:/…` is also looked up under `/mnt/c/…` for WSL.
 - **Other formats:** these are `skipped` with `local_other`, and are picked up automatically if a later version supports them. Newer `.kfx` files and old binary `.doc` files aren't supported.
 - **DRM:** books under DRM are `failed` with `drm_protected` and aren't worked around.
+- **DjVu:** reading DjVu files needs DjVuLibre's command-line tools (`apt install djvulibre-bin`). Without them a DjVu file is `failed` with `djvulibre_missing`, and the run's log says what to install. Once they're installed, `--retry-failed` reads it. A DjVu file's text layer is usually the OCR of the scan it was made from, so it gets the same repairs as a PDF's text. A DjVu book kept as one file per page with an index file, which is rare, comes out twice: whole from the index file, and a page at a time from the others.
 - **Missing files:** a file that isn't there is `failed` with `file_missing`. Run on the machine that has it, or use `--retry-failed` once it's back.
 - **Text that isn't UTF-8:** UTF-8 and files with a byte-order mark are read as such. Anything else is tried in each common legacy encoding, such as Windows cp1252 English with curly quotes, cp1254 Turkish or cp1251 Russian. A reading is kept only if it's beyond doubt: it has no control characters, symbols where letters belong or words mixing scripts, and no other reading is as plausible. When readings tie, the archive's vocabulary decides, by a clear margin only. Otherwise undecodable bytes become `�`, which the garbage check flags, rather than wrong letters that look right. Web pages served as plain text are read the same way, after any charset the server declares.
 
@@ -394,16 +397,16 @@ Files of any size are accepted. What's left to stop a runaway file is each worke
 
 ### OCR
 
-`osiris run` reads PDFs with no usable text with [tesseract](https://github.com/tesseract-ocr/tesseract), both web and local. It starts once the generic and local-file lanes finish, so a long scan holds up nothing, and it doesn't wait for YouTube.
+`osiris run` reads PDFs with no usable text with [tesseract](https://github.com/tesseract-ocr/tesseract), both web and local, and DjVu files on this computer that have no text layer. It starts once the generic and local-file lanes finish, so a long scan holds up nothing, and it doesn't wait for YouTube.
 
 - **Scope:** it covers only the lanes in that run. `--only localfile` leaves web PDFs alone, and `--only youtube` does no OCR.
 - **Earlier PDFs:** it also works through PDFs left from earlier runs, so the first run after installing tesseract can take a while.
 - **Files:** local files are read in place and never changed. Web PDFs are downloaded again to a temporary file, which is then deleted.
 - **Speed:** the work is split by page, with `--workers` pages read at once, so every core stays busy even on a single long book.
 - **Tries:** each PDF is tried once. Ctrl-C stops at once, and the PDF in progress is tried again next run.
-- **Results:** text is kept only if there's more of it than before, with `source: pdf:ocr` or `file:pdf:ocr`.
+- **Results:** text is kept only if there's more of it than before, with `source: pdf:ocr`, `file:pdf:ocr` or `file:djvu:ocr`.
 - **Languages:** `--ocr-lang eng+tur` sets them, after installing their packs. The default is English. List only what you need, since each extra language is slower and can lower accuracy.
-- **Missing tesseract:** if tesseract or a language pack is missing, the run logs a warning and carries on, and those PDFs wait without using up their try.
+- **Missing tesseract:** if tesseract or a language pack is missing, the run logs a warning and carries on, and those PDFs wait without using up their try. A DjVu file waits the same way while DjVuLibre is missing.
 - **Sideways and upside-down pages:** each page's orientation is found first (tesseract's `--psm 1`), so scanned slides and rotated pages come out as text. Upright pages read the same, about a second slower each. This needs tesseract's `osd` data, which most installs include (`apt install tesseract-ocr-osd` otherwise); without it the run says so and reads pages as they are. PDFs OCR'd before this, upside down, keep their garbled text until you press **OCR it** on them.
 - **Pictures of letters:** some old TeX papers draw every letter as a numbered picture, so reading them gives codes instead of text. A PDF whose text is more than 5% control characters is treated as having no text, so OCR reads it.
 - **Limitation:** a PDF with a few readable pages and many scanned ones counts as having text, so it isn't picked up.

@@ -45,7 +45,7 @@ GITHUB_RESERVED = {"about", "account", "apps", "codespaces", "collections", "con
                    "site", "sponsors", "stars", "team", "topics", "trending", "users", "watching"}
 
 # local files osiris can read; anything else (images, /etc/hostname, ...) stays out
-LOCAL_READABLE = {"pdf", "html", "htm", "xhtml", "txt", "md", "markdown", "rst", "tex", "org",
+LOCAL_READABLE = {"pdf", "djvu", "djv", "html", "htm", "xhtml", "txt", "md", "markdown", "rst", "tex", "org",
                   "docx", "epub", "mobi", "azw", "azw3"}
 
 # Logged-in chat apps: conversations are private and the pages are JS shells.

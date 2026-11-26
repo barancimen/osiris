@@ -475,7 +475,7 @@ const SOURCE_WHAT = {
   hackernews: "The discussion and its comments", lesswrong: "The post and its comments",
   stackexchange: "The question with its answers and comments", youtube: "From YouTube", fulltext: "The paper's summary and full text",
 };
-const FILE_KIND = {pdf: "A PDF on this computer", text: "A text file on this computer", html: "A web page saved on this computer",
+const FILE_KIND = {pdf: "A PDF on this computer", djvu: "A DjVu file on this computer", text: "A text file on this computer", html: "A web page saved on this computer",
                    docx: "A Word document on this computer", epub: "An ebook on this computer", kindle: "A Kindle ebook on this computer"};
 const SOURCE_HOW = {
   arxiv: "the paper's full text from arXiv, after its summary",
@@ -506,7 +506,7 @@ const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", you
 const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "hackernews", "lesswrong", "stackexchange", "arxiv", "twitter"];
 const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
-  {key: "local", title: "Local files", text: "Folders of PDFs, ebooks, Word files and text. Your files are only read, never changed."},
+  {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files and text. Your files are only read, never changed."},
   {key: "saved", title: "Saved pages", text: "Folders of pages saved with the SingleFile browser extension."},
   {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A .txt file of usernames, one per line, gets every tweet of those accounts."},
 ];
@@ -654,7 +654,7 @@ function renderOptions() {
       numbers(row("Refresh PDFs", help("refresh"), "", h("select", {"aria-label": "Refresh PDFs", onchange: e => setOption("refresh", e.target.value)},
         [["", "No, only new ones"], ["web", "Web PDFs"], ["local", "Local PDFs"], ["both", "Web and local"]].map(([v, l]) => h("option", {value: v, selected: o.refresh === v}, l)))))),
     group("Scanned PDFs",
-      ticks(check("ocr", "Read scanned PDFs with OCR")),
+      ticks(check("ocr", "Read scanned PDFs and DjVu files with OCR")),
       numbers(words("ocr_lang", "OCR languages"), number("ocr_dpi", "Page sharpness for OCR", "DPI"))),
     o.retry_hosts.length > 0 && h("div", {class: "retry-list", title: help("retry-sites")},
       h("span", {class: "hint"}, o.retry_failed ? "Every failed URL is tried again, including on" : "Next run tries failed URLs again on"),
@@ -1009,6 +1009,8 @@ const REASONS = [
   [/^too_large$/, "It was too big to read: either it didn't fit in memory, or an older version of osiris turned it down for its size. Trying again may work."],
   [/^non_text:/, "It isn't a page or a document but an image, video or other file, so it wasn't downloaded."],
   [/^(pdf_error|not_a_pdf)/, "The PDF couldn't be read."],
+  [/^djvulibre_missing$/, "Reading DjVu files needs DjVuLibre. On Debian or Ubuntu, install it with apt install djvulibre-bin, then run with Try failed URLs again ticked."],
+  [/^djvu_error$/, "The DjVu file couldn't be read."],
   [/^drm_protected$/, "The book is under DRM, which osiris doesn't work around."],
   [/^file_missing$/, "The file isn't at its saved path on this machine."],
   [/^file_unreadable$/, "The file couldn't be opened."],
@@ -1030,7 +1032,7 @@ const REASON_GROUPS = [
   ["Gone, or in no archive", "The page, file or post no longer exists, or the archives that keep copies don't have it.", /^(http_(404|410)|dns|not_found|not_in_scry|unavailable|file_missing)$/],
   ["Connection or server trouble", "The site was slow, down or overloaded. These often work when tried again later.", /^(http_(429|5\d\d)|host_down|timeout|connect|payload|socket_timeout|no_network|ssl|api_error|youtube_request_failed|list_error)$/],
   ["Refused, or needs a login", "The site turned osiris away. Cookies, the headless browser or a page saved with SingleFile can often get these.", /^(http_\d+|challenge|redirects|bot_check)$/],
-  ["Nothing readable came out", "It was fetched, but no text could be taken from it.", /^(no_text|non_text:.*|pdf_error.*|not_a_pdf.*|drm_protected|no_transcript|too_large|extract_crashed|extract_timeout|huge_tree|ocr_timeout|file_unreadable|[A-Z]\w+)$/],
+  ["Nothing readable came out", "It was fetched, but no text could be taken from it.", /^(no_text|non_text:.*|pdf_error.*|not_a_pdf.*|djvu_error|drm_protected|no_transcript|too_large|extract_crashed|extract_timeout|huge_tree|ocr_timeout|file_unreadable|[A-Z]\w+)$/],
   ["Something else", "Anything that doesn't fit the other groups.", /^/],
 ];
 const REASON_NAMES = {bot_check: "YouTube's bot check", dns: "Domain name not found", ssl: "Secure connection failed", not_in_scry: "Not in Scry", host_down: "Site stopped answering", timeout: "Timed out", connect: "Couldn't connect", payload: "Download broke off", redirects: "Too many redirects"};
@@ -1528,7 +1530,7 @@ const Docs = {
     return h("div", {class: "decide-row"},
       d.decision === "fixed" && h("span", {style: "flex-basis:100%"}, `${d.note || "A fix changed this text"}. Check it, then mark it Fine, or try another fix.`),
       btn("Fine", "fine"), btn("Bad", "bad"),
-      btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs: OCR reads pictures of a PDF's pages.", () => $("#ocr-lang")?.value, usual),
+      btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs and DjVu files: OCR reads pictures of their pages.", () => $("#ocr-lang")?.value, usual),
       d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
       btn("Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
       ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),

@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import documents, extract
+from . import djvu, documents, extract
 from .singlefile import saved_page_to_doc
 from .store import REFRESH, RefreshProgress, Store
 
@@ -40,6 +40,7 @@ def text_to_doc(path: str) -> dict:
 # extension -> (name used in `source`, reader); route.LOCAL_READABLE lists the same extensions
 READERS = {
     "pdf": ("pdf", extract.pdf_to_doc),
+    **dict.fromkeys(("djvu", "djv"), ("djvu", djvu.djvu_to_doc)),
     **dict.fromkeys(("html", "htm", "xhtml"), ("html", saved_page_to_doc)),
     **dict.fromkeys(("txt", "md", "markdown", "rst", "tex", "org"), ("text", text_to_doc)),
     "docx": ("docx", documents.docx_to_doc),
@@ -57,6 +58,9 @@ async def run_localfile(store: Store, pool: extract.WorkerPool, workers: int,
     todo += refresh
     if todo:
         log.info("localfile: %d local files", len(todo))
+        if any(djvu.is_djvu(urlsplit(url).path) for _, url, _ in todo) and djvu.missing():
+            log.warning("localfile: %s. Until then they fail with %s, and retrying failed items reads them",
+                        djvu.INSTALL, djvu.MISSING)
     slots = asyncio.Semaphore(workers + 1)
 
     async def one(doc_key: str, url: str, keep: int | None) -> None:

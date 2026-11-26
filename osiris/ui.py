@@ -37,7 +37,7 @@ from .store import (REFRESH, REFRESH_FINISHED, TMP_DIR, Store, fill_missing_titl
 from .arxiv import ABSTRACT_ONLY_CHARS, BATCH as ARXIV_BATCH, DELAY as ARXIV_DELAY, FULLTEXT, FULLTEXT_DELAY
 from .doi import doi_of
 from .generic import BLOCKED, NOT_FOR_WAYBACK
-from .ocr import LANES as OCR_LANES, TRIED as OCR_TRIED, unavailable as ocr_unavailable
+from .ocr import LANES as OCR_LANES, READABLE as OCR_READABLE, TRIED as OCR_TRIED, unavailable as ocr_unavailable
 from .youtube import DEFAULT_DELAY
 
 log = logging.getLogger(__name__)
@@ -511,7 +511,7 @@ def _progress(out: Path, plan: dict, full_text_left: int, refreshed: set[str] = 
         ocr = db.execute(  # ocr.candidates, counted
             f"SELECT COUNT(DISTINCT doc_key) FROM urls WHERE lane IN ({','.join('?' * len(ocr_lanes))})"
             " AND ((status = 'failed' AND reason = 'no_text') OR status = 'thin')"
-            " AND (content_type = 'application/pdf' OR lower(url) LIKE '%.pdf%') AND instr(COALESCE(tried, ''), ?) = 0",
+            f" AND {OCR_READABLE} AND instr(COALESCE(tried, ''), ?) = 0",
             (*ocr_lanes, f",{OCR_TRIED}")).fetchone()[0] if ocr_lanes else 0
     finally:
         db.close()
