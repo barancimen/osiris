@@ -599,7 +599,14 @@ def _ocr_langs() -> list[str]:
         listed = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    return [lang for lang in listed.split()[1:] if re.fullmatch(r"[A-Za-z_]+", lang) and lang != "osd"]
+    return langs_listed(listed)
+
+
+def langs_listed(listed: str) -> list[str]:
+    """The languages in what `tesseract --list-langs` prints: one per line, after a heading line that
+    says how many there are, and where tesseract 5 keeps them."""
+    names = [line.strip() for line in listed.splitlines()[1:]]
+    return [lang for lang in names if re.fullmatch(r"[A-Za-z_]+", lang) and lang != "osd"]
 
 
 def _has_browser() -> bool:

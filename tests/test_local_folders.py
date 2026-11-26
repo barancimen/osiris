@@ -69,3 +69,24 @@ def test_the_import_skips_hidden_folders_and_pages_already_archived_as_local_fil
     meta, body = store.read_doc(doc_id(web.doc_key))  # the saved copy fills in the page the web refused
     store.close()
     assert rows == {old.url: "ok", web.url: "ok"} and meta["source"] == "singlefile" and "subscriber" in body
+
+
+def test_pages_that_share_a_canonical_link_stay_apart(tmp_path: Path):
+    folder = tmp_path / "files"
+    folder.mkdir()
+    for name, topic in (("one.html", "gardening in the north"), ("two.html", "repairing old clocks")):
+        (folder / name).write_text(f"""<html><head><title>{topic}</title><link rel="canonical" href="https://blog.example.com/"></head>
+<body><article><p>{('A long paragraph about ' + topic + '. ') * 30}</p></article></body></html>""")
+    store = Store(tmp_path / "data")
+    asyncio.run(singlefile.run_import(store, [folder], InProcessPool(), 1))
+    keys = [key for (key,) in store.db.execute("SELECT doc_key FROM urls")]
+    bodies = [store.read_doc(doc_id(key))[1] for key in keys]
+    store.close()
+    assert len(keys) == 2 and all(key.startswith("file:") for key in keys)
+    assert sorted("gardening" in body for body in bodies) == [False, True]
+
+
+def test_the_ocr_languages_are_read_from_tesseract_4_and_5_alike():
+    four = "List of available languages (3):\neng\nosd\ntur\n"
+    five = 'List of available languages in "/usr/share/tesseract-ocr/5/tessdata/" (3):\neng\nosd\ntur\n'
+    assert ui.langs_listed(four) == ui.langs_listed(five) == ["eng", "tur"]

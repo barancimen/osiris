@@ -445,7 +445,7 @@ This downloads or reads every PDF again, whatever its status.
 
 The `.html` and `.htm` files in the web page's local folders are stored as saved pages, and `osiris import DIR [DIR|FILE ...]` does the same from the command line. They're usually pages saved with the [SingleFile](https://github.com/gildas-lormeau/SingleFile) browser extension. Subfolders are searched too, except hidden ones, and the originals are left alone. These documents appear as the `singlefile` lane, with `source: singlefile`, or `source: html_file` for a page SingleFile didn't save.
 
-- **URL and date:** these come from the comment SingleFile writes at the top of the file, and the date becomes `fetched_at`. A file with no comment uses its `<link rel=canonical>`, and failing that is stored under a `file:` key.
+- **URL and date:** these come from the comment SingleFile writes at the top of the file, and the date becomes `fetched_at`. A file without that comment, such as a page a browser saved, is stored under a `file:` key of its own, since a site can give many pages the same canonical link. Its canonical link is kept as its `url`.
 - **Dedup:** URLs go through the same dedup as `osiris run`, and imported URLs are never queued for fetching. A saved copy replaces a failed or pending entry, and replaces an archived document only when it has more text. Complete Stack Exchange, Reddit, Hacker News and LessWrong documents are always kept.
 - **Skipped sites:** URLs `osiris run` skips on purpose, such as GitHub, chat apps and X profiles, are stored, since you saved them deliberately.
 - **Re-running:** files are tracked by content hash, so only new or changed files are read. Files that failed are tried again.

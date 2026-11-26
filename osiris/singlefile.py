@@ -193,7 +193,8 @@ def saved_page_to_doc(path: str) -> dict:
 def _store_page(store: Store, path: Path, sha: str, res: dict) -> str:
     """Write the document unless the archive already has a better one; returns the outcome."""
     text, saved_url = res["text"], res["url"]
-    r = route(saved_url) if saved_url else None
+    # only SingleFile's comment says where this page came from: a site can give many pages one canonical link
+    r = route(saved_url) if saved_url and res["singlefile"] else None
     if r is None or r.reason == "bad_url":  # no origin, or a file:// or browser-internal one
         url = key = None
         row = None
