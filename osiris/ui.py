@@ -875,6 +875,8 @@ async def start_archive(request: web.Request) -> web.Response:
     account_args = [arg for folder in tweet_folders for arg in ("--twitter-accounts", str(folder))]
     account_args += ["--twitterapi-max-dollars", f"{_number(options, 'twitterapi_dollars', float, 0, accounts.API_DOLLARS):g}"]
     sources_on = (options.get("scry_twitter", True) and load_key()) or (options.get("billed_twitter") and os.environ.get(BILLED_KEY))
+    # the Local files box covers everything read from your folders: local files, saved pages, tweet files and AI chats
+    local_on = "localfile" in _chosen_lanes(options)
 
     async def flow(j: Job) -> None:
         for empty in (url_file, read_files):
@@ -888,7 +890,7 @@ async def start_archive(request: web.Request) -> web.Response:
             with open(url_file, "a", encoding="utf-8") as f:
                 f.write(part.read_text(encoding="utf-8"))
             part.unlink(missing_ok=True)
-        if config["local"]:
+        if config["local"] and local_on:
             j.step = "Listing local files"
             with open(url_file, "a", encoding="utf-8") as f:
                 listed, pages = await asyncio.to_thread(_write_local_urls, config["local"], f)
@@ -896,9 +898,9 @@ async def start_archive(request: web.Request) -> web.Response:
             if pages:  # filed by the address SingleFile recorded, if there's one, so they meet the same page from the web
                 folders = [str(p) for p in (Path(f).expanduser() for f in config["local"]) if p.is_dir()]
                 await j.run("Importing saved web pages", j.osiris("import", *folders))
-        if config["tweets"]:  # before archiving, so tweets they hold aren't looked up
+        if config["tweets"] and local_on:  # before archiving, so tweets they hold aren't looked up
             await j.run("Importing tweet files", j.osiris("import-tweets", *map(str, tweet_folders)))
-        if config["chats"]:
+        if config["chats"] and local_on:
             await j.run("Importing AI chats", j.osiris("import-chats", *(str(Path(p).expanduser()) for p in config["chats"])))
         handles = await asyncio.to_thread(accounts.listed, tweet_folders, True) if sources_on else []
         j.plan = _plan(_chosen_lanes(options), options, handles)

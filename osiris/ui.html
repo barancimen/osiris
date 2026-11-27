@@ -414,7 +414,7 @@ const HELP = {
 };
 const LANE_HELP = {
   generic: "Ordinary web pages, and PDFs on the web.",
-  localfile: "PDFs, DjVu files, ebooks, Word documents and text files from your Local files folders, and from file:// links in your tab backups. They're only read, never changed. Saved web pages in those folders are imported even when this is unticked.",
+  localfile: "Everything in your Local files, Tweets and AI chats folders, and files that file:// links in your tab backups point to. They're only read, never changed.",
   youtube: "Video captions, plus the titles in playlists and channels. It goes slowly on purpose, so YouTube doesn't block you.",
   github: "A repository's description and README, and gists.",
   reddit: "Reddit posts with their comments.",
@@ -422,7 +422,7 @@ const LANE_HELP = {
   lesswrong: "LessWrong and Alignment Forum posts in full, with every comment.",
   stackexchange: "Questions with all their answers and comments, from Stack Overflow and its sister sites.",
   arxiv: "arXiv papers: title, authors, summary and the full text.",
-  twitter: "Posts on X linked from your tab backups, from archives that keep copies of them, and every post of the accounts in an accounts.txt. Tweet files in your Tweets folders are imported even when this is unticked.",
+  twitter: "Posts on X linked from your tab backups, from archives that keep copies of them, and every post of the accounts in an accounts.txt. Tweet files come in under Local files.",
   singlefile: "Web pages you saved yourself, with the SingleFile extension or your browser.",
   chat: "Conversations from Claude's, ChatGPT's and DeepSeek's exports, and sessions from Claude Code's, pi's and omp's logs.",
   skip: "Links left alone on purpose, like chat links, profiles and image files.",
@@ -511,11 +511,11 @@ const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and a more.txt with one link per line.",
    hover: "A run fetches the links in them, for each kind of link ticked under Sources below."},
   {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word documents, text files and saved web pages. Your files are only read, never changed.",
-   hover: "A run reads the files while Local files is ticked under Sources. Saved web pages, such as SingleFile's, are imported at the start of every run, whatever is ticked."},
+   hover: "A run reads them while Local files is ticked under Sources. Web pages, such as SingleFile's, are imported as saved pages."},
   {key: "tweets", title: "Tweets", text: "Folders of tweet files: Twitter's export as its .zip, twitter-web-exporter's .json or .html, Community Archive .json files and SQLite files. Add an accounts.txt, one username per line, to get every tweet of those accounts.",
-   hover: "The files are imported at the start of every run, whatever is ticked under Sources. The accounts in accounts.txt are only collected while X (Twitter) is ticked."},
+   hover: "A run imports them while Local files is ticked under Sources. The accounts in accounts.txt are collected while X (Twitter) is ticked."},
   {key: "chats", title: "AI chats", text: "Folders of Claude's, ChatGPT's and DeepSeek's exports, and of Claude Code's, pi's and omp's session logs.",
-   hover: "Imported at the start of every run, whatever is ticked under Sources. Files from the Claude Conversation Exporter extension work too. For sessions, add ~/.claude, ~/.pi and ~/.omp, or a backup holding them. Each conversation is one document, which a newer copy updates."},
+   hover: "A run imports them while Local files is ticked under Sources. Files from the Claude Conversation Exporter extension work too. For sessions, add ~/.claude, ~/.pi and ~/.omp, or a backup holding them. Each conversation is one document, which a newer copy updates."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
@@ -656,7 +656,7 @@ function renderOptions() {
     group("Sources",
       h("div", {class: "chips", role: "group", "aria-label": "Sources to include"}, RUN_LANES.map(lane => h("label", {class: "chip", title: LANE_HELP[lane]},
         h("input", {type: "checkbox", checked: o.lanes.includes(lane), onchange: e => setOption("lanes", e.target.checked ? [...o.lanes, lane] : o.lanes.filter(l => l !== lane))}), LANE_LABEL[lane]))),
-      h("p", {class: "hint"}, "Saved web pages, tweet files and AI chats in your folders are imported in every run, whatever is ticked.")),
+      h("p", {class: "hint"}, "Local files covers all your folders except tab backups: local files, saved web pages, tweet files and AI chats.")),
     group("Retries and checks",
       ticks(check("retry_failed", "Try failed URLs again"), check("review_after", "Check for garbage afterwards")),
       numbers(row("Refresh PDFs", help("refresh"), "", h("select", {"aria-label": "Refresh PDFs", onchange: e => setOption("refresh", e.target.value)},
