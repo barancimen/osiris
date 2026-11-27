@@ -582,7 +582,7 @@ async def state(request: web.Request) -> web.Response:
         **table,
         "review": counts,
         "job": {"name": job.name, "step": job.step, "state": job.state, "active": job.active, "count": job.count,
-                "lines": lines, "started": job.started, "finished": job.finished,
+                "since": since, "lines": lines, "started": job.started, "finished": job.finished,
                 "progress": _job_progress(job, out, table) if job.active and job.plan else None},
         "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,

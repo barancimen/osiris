@@ -123,6 +123,11 @@ td.zero { color: var(--line-strong); }
 .tool-row { display: flex; gap: 4px 6px; align-items: center; flex-wrap: wrap; }
 .tool-row select, .tool-row input { min-width: 0; flex: 1; }
 .tool-row select { min-width: 8.5em; }  /* wrap to a new line rather than cut off the choice */
+.past-box { position: relative; flex: 1; min-width: 0; display: flex; }
+.past { position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 20; max-height: 16em; overflow-y: auto; padding: 2px 0;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); }
+.past-item { padding: 3px 7px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.past-item:hover, .past-item[aria-selected=true] { background: var(--accent-soft); }
 .rows { flex: 1; overflow-y: auto; min-height: 0; }
 .row { display: block; width: 100%; background: none; text-align: left; border: 0; border-bottom: 1px solid var(--line); padding: 4px 10px; cursor: pointer; }
 .row:hover { background: var(--sunk); }
@@ -778,14 +783,17 @@ function renderState(s) {
   renderProgress(s.job);
 
   const j = s.job;
-  const newLog = j.count < logSeen || jobKey !== j.started;
-  if (newLog) { logSeen = 0; jobKey = j.started; if ($("#log")) $("#log").textContent = ""; }
-  if (j.lines.length && $("#log")) {
-    const log = $("#log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
-    log.append(j.lines.join("\n") + "\n");
-    if (atEnd) log.scrollTop = log.scrollHeight;
+  if (jobKey !== j.started || j.count < logSeen) {  // another job, or its log started over: show it from its start
+    jobKey = j.started; logSeen = 0; if ($("#log")) $("#log").textContent = "";
   }
-  logSeen = j.count;
+  if (j.since === logSeen) {  // lines that follow the ones shown; a reply counted from elsewhere is passed over
+    if (j.lines.length && $("#log")) {
+      const log = $("#log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      log.append(j.lines.join("\n") + "\n");
+      if (atEnd) log.scrollTop = log.scrollHeight;
+    }
+    logSeen = j.count;
+  } else tick();
   if ($("#progress-title")) {
     $("#progress-title").textContent = j.state === "idle" ? "Nothing running" : (j.active ? j.step || j.name : j.name);
     const pill = JOB_PILL[j.state];
@@ -867,9 +875,17 @@ function duration(sec) {
   return hours >= 48 ? Math.round(hours / 24) + " days" : `${hours} h ${min} min`;
 }
 
-async function tick() {
-  if (document.hidden) return;  // nobody's looking; the log catches up on the next tick
-  try { renderState(await api(`/api/state?since=${logSeen}&failures=${Failures.version}`)); } catch (e) { /* the next tick retries */ }
+// One request at a time, each asking for the lines after the last one shown. Sent side by side, while the
+// server is slow to answer, they brought the same lines back twice and out of order.
+let ticking = Promise.resolve(), tickWaiting = false;
+function tick() {
+  if (document.hidden || tickWaiting) return ticking;  // nobody's looking, or one is already waiting its turn
+  tickWaiting = true;
+  ticking = ticking.then(async () => {
+    tickWaiting = false;
+    try { renderState(await api(`/api/state?since=${logSeen}&failures=${Failures.version}`)); } catch (e) { /* the next tick retries */ }
+  });
+  return ticking;
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 
@@ -1293,6 +1309,57 @@ function statusPill(d) {
 
 /* ---- review tab ---- */
 /* ---- documents tab: browsing, searching and reviewing in one list ---- */
+// Past searches under a search box, as wide as the box. The browser's own list can't be made that wide, so
+// the page keeps its own, in this browser only: the last 20 searches of each box, newest first.
+const PastSearches = {
+  MAX: 20, SHOWN: 8,
+  key: id => "osiris-past-searches-" + id,
+  load(id) {
+    try { const list = JSON.parse(localStorage.getItem(this.key(id)) || "[]"); return Array.isArray(list) ? list.filter(x => typeof x === "string") : []; }
+    catch (e) { return []; }
+  },
+  save(id, term) {
+    term = term.trim();
+    if (!term) return;
+    try { localStorage.setItem(this.key(id), JSON.stringify([term, ...this.load(id).filter(x => x !== term)].slice(0, this.MAX))); }
+    catch (e) { /* not kept, as in a private window */ }
+  },
+  // `input` gets the list; `search` runs a search for what's in it. Returns what goes in the page instead of `input`.
+  attach(input, search) {
+    input.autocomplete = "off";
+    const menu = h("div", {class: "past", role: "listbox", hidden: true});
+    let shown = [], at = -1;
+    const hide = () => { menu.hidden = true; at = -1; };
+    const mark = () => [...menu.children].forEach((item, i) => item.setAttribute("aria-selected", String(i === at)));
+    const show = () => {
+      const typed = input.value.trim().toLowerCase();
+      shown = this.load(input.id).filter(t => t.toLowerCase() !== typed && t.toLowerCase().includes(typed)).slice(0, this.SHOWN);
+      at = -1;
+      menu.replaceChildren(...shown.map(t => h("div", {class: "past-item", role: "option", title: t, onmousedown: e => { e.preventDefault(); pick(t); }}, t)));
+      menu.hidden = !shown.length;
+    };
+    const pick = term => { input.value = term; input.dispatchEvent(new Event("input")); hide(); this.save(input.id, term); search(); };
+    input.addEventListener("focus", show);
+    input.addEventListener("input", e => { if (e.isTrusted) show(); });
+    input.addEventListener("blur", () => { hide(); this.save(input.id, input.value); });
+    input.addEventListener("keydown", e => {  // before the box's own Enter, which would search for what's typed
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (menu.hidden) show();
+        if (!shown.length) return;
+        e.preventDefault();
+        at = e.key === "ArrowDown" ? Math.min(at + 1, shown.length - 1) : Math.max(at - 1, -1);
+        mark();
+      } else if (e.key === "Enter") {
+        if (!menu.hidden && at >= 0) { e.preventDefault(); e.stopImmediatePropagation(); pick(shown[at]); }
+        else { hide(); this.save(input.id, input.value); }
+      } else if (e.key === "Escape" && !menu.hidden) {
+        e.preventDefault(); hide();  // only the list closes; a second Escape clears the box as usual
+      }
+    }, true);
+    return h("div", {class: "past-box"}, input, menu);
+  },
+};
+
 // With the search index (osiris ui --search-index), typing searches titles, URLs and text, best match
 // first. Documents with no text aren't in it, so for failed and waiting ones the box filters the plain
 // list by URL and title. Without the index, the box filters by URL and title, and "Inside documents"
@@ -1324,16 +1391,16 @@ const Docs = {
       h("div", {class: "list-pane"},
         h("div", {class: "list-tools"},
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-q", placeholder: "Title or URL words, site:example.com", "aria-label": "Search titles and URLs", title: help("doc-search"),
-              oninput: e => { this.q = e.target.value; soon(); }, onkeydown: now}),
+            PastSearches.attach(h("input", {type: "search", id: "doc-q", placeholder: "Title or URL words, site:example.com", "aria-label": "Search titles and URLs", title: help("doc-search"),
+              oninput: e => { this.q = e.target.value; soon(); }, onkeydown: now}), () => { clearTimeout(timer); refresh(); }),
             h("button", {class: "btn", id: "doc-review", style: "flex:none", "aria-pressed": this.garbage, title: help("review-sort"), onclick: () => { this.garbage = !this.garbage; refresh(); }},
               "Review", " ", h("span", {class: "count", id: "doc-review-count", hidden: true}))),
           h("div", {class: "tool-row"},
-            h("input", {type: "search", id: "doc-text", placeholder: indexed ? "Inside documents" : "Inside documents, then press Enter", "aria-label": "Search inside documents",
+            PastSearches.attach(h("input", {type: "search", id: "doc-text", placeholder: indexed ? "Inside documents" : "Inside documents, then press Enter", "aria-label": "Search inside documents",
               title: help(indexed ? "doc-text-indexed" : "doc-text"), oninput: e => {
                 this.text = e.target.value; clearTimeout(timer);
                 if (indexed) timer = setTimeout(refresh, 250); else if (!this.text.trim()) refresh();  // emptied: back to the list
-              }, onkeydown: now})),
+              }, onkeydown: now}), () => { clearTimeout(timer); refresh(); })),
           h("div", {class: "tool-row"},
             h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile", "chat"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
             h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),

@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Iterable
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import aiohttp
 
@@ -191,6 +192,23 @@ async def _download(session: aiohttp.ClientSession, url: str, path: Path) -> str
     return None
 
 
+READING: dict[str, list] = {}  # address of a file being read with OCR: [its name, pages read, pages]
+COUNT = [0, 0]  # files read with OCR so far this run, and to read
+
+
+def progress() -> str:
+    """What OCR is reading now, for a run's progress line, or "" while it isn't reading anything."""
+    if not READING:
+        return ""
+    files = "; ".join(f"{name}, {done:,} of {pages:,} pages read" for name, done, pages in READING.values())
+    return f"OCR: {files}; {COUNT[0]:,} of {COUNT[1]:,} files done"
+
+
+def _name(url: str) -> str:
+    name = unquote(urlsplit(url).path).rstrip("/").rsplit("/", 1)[-1] or url
+    return name if len(name) <= 60 else name[:59] + "…"
+
+
 async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: bool = False, limit: int | None = None,
                   lanes: Iterable[str] = LANES, forced: list[str] | None = None) -> None:
     """With `forced` (doc keys, the fixes you asked for), only those are read, and any text that differs
@@ -204,17 +222,22 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
         log.info("ocr: tesseract has no osd data, so sideways or upside-down pages will come out garbled. "
                  "On Debian/Ubuntu: apt install tesseract-ocr-osd")
     pool = extract.WorkerPool(workers, mem_mb)
+    READING.clear()
+    COUNT[:] = [0, len(todo)]
     open_pdfs = asyncio.Semaphore(workers)  # downloaded or being read
     page_slots = asyncio.Semaphore(workers)  # one core each; first come first served, so PDFs finish in turn
     outcome: dict[str, int] = {}
     finished = 0
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"}
 
-    async def read(path: Path) -> dict:
+    async def read(path: Path, url: str) -> dict:
         async with page_slots:
             info = await pool.run(pdf_info, str(path))
         if "pages" not in info:
             return {"text": "", "error": info.get("error")}
+        log.info("ocr: reading %s, %d page%s, file %d of %d", _name(url), info["pages"], "s" * (info["pages"] != 1),
+                 COUNT[0] + len(READING) + 1, COUNT[1])
+        READING[url] = [_name(url), 0, info["pages"]]
         spent, problem = 0.0, None  # seconds of work, which is what the limit is on: waiting for a core doesn't count
         limit = max(DOC_TIMEOUT, info["pages"] * DOC_SECONDS_PER_PAGE)
 
@@ -225,13 +248,17 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
                     problem = "ocr_timeout"  # what's read by then is kept
                     return ""
                 res = await pool.run(read_page, str(path), index, lang, orient)
+            READING[url][1] += 1
             spent += res.get("seconds", 0.0)
             problem = problem or res.get("error")
             return res.get("page") or ""
 
-        pages = await asyncio.gather(*(page(i) for i in range(info["pages"])))
-        async with page_slots:
-            return await pool.run(pages_to_doc, pages, info.get("title"), info.get("author"), problem)
+        try:
+            pages = await asyncio.gather(*(page(i) for i in range(info["pages"])))
+            async with page_slots:
+                return await pool.run(pages_to_doc, pages, info.get("title"), info.get("author"), problem)
+        finally:
+            READING.pop(url, None)
 
     async def one(session: aiohttp.ClientSession, doc_key: str, url: str, final_url: str | None, lane: str, chars: int) -> None:
         nonlocal finished
@@ -255,13 +282,14 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
                         store.mark_tried(doc_key, TRIED)
                     return
             try:
-                res = await read(path)
+                res = await read(path, url)
             finally:
                 if temp is not None:  # only ever a download of ours, never one of your files
                     temp.unlink(missing_ok=True)
         store.mark_tried(doc_key, TRIED)
         text = (res.get("text") or "").strip()
         finished += 1
+        COUNT[0] = finished
         if forced is not None:
             old = store.read_doc(doc_id(doc_key))
             improved = bool(text) and (old is None or text != old[1].strip())
@@ -293,6 +321,7 @@ async def run_ocr(store: Store, lang: str, workers: int, mem_mb: int, retry: boo
     else:
         pool.shutdown()
     finally:
+        READING.clear()
         store.commit()
         for key, n in sorted(outcome.items(), key=lambda kv: -kv[1]):
             print(f"{n:>7}  {key}")

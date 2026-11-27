@@ -23,7 +23,7 @@ from .forums import lesswrong_from_scry, run_hackernews, run_lesswrong
 from .generic import DEFAULT_HOST_RULES, HostRule, run_generic
 from .github import run_github
 from .localfile import run_localfile
-from .ocr import DEFAULT_LANG as OCR_LANG, LANES as OCR_LANES, run_ocr, unavailable as ocr_unavailable
+from .ocr import DEFAULT_LANG as OCR_LANG, LANES as OCR_LANES, progress as ocr_progress, run_ocr, unavailable as ocr_unavailable
 from .reddit import run_reddit
 from .route import route
 from .env import load_env
@@ -54,7 +54,7 @@ def lane_counts(store: Store) -> dict[str, Counter]:
     return counts
 
 
-def downloaded_since(store: Store, since: str) -> Counter:
+def saved_since(store: Store, since: str) -> Counter:
     """Documents saved since a moment, by source, each counted once however many links lead to it."""
     return Counter(dict(store.db.execute("SELECT lane, COUNT(DISTINCT doc_key) FROM urls WHERE status IN ('ok', 'thin')"
                                          " AND updated_at >= ? GROUP BY lane", (since,))))
@@ -65,11 +65,12 @@ async def _report(store: Store) -> None:
     since, start, last_total = now_iso(), loop.time(), 0
     while True:
         await asyncio.sleep(REPORT_EVERY)
-        got = downloaded_since(store, since)
+        got = saved_since(store, since)
         total = sum(got.values())
         so_far = ", ".join(f"{lane} {got[lane]}" for lane in LANES if got[lane]) or "nothing yet"
-        log.info("downloaded this run: %s | %.1f/s, %.0fs elapsed", so_far, (total - last_total) / REPORT_EVERY,
-                 loop.time() - start)
+        reading = ocr_progress()
+        log.info("done this run: %s | %.1f/s, %.0fs elapsed%s", so_far, (total - last_total) / REPORT_EVERY,
+                 loop.time() - start, f" | {reading}" if reading else "")
         last_total = total
 
 
