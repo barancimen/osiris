@@ -516,7 +516,7 @@ If a site changes its format, the parts osiris doesn't know are left out and nam
 
 ### Sessions with coding agents
 
-The same command, and the same **AI chats** folders, also store your sessions with the coding agents Claude Code, pi and omp, one document per session. Give it the folders where they keep their logs, or copies of them:
+The same command, and the same **AI chats** folders, also store your sessions with the coding agents Claude Code, pi and omp, one document per session. Give it the folders where they keep their logs, or copies of them, or a folder holding those. Hidden folders are skipped as elsewhere, except `.claude`, `.claude-<name>`, `.pi` and `.omp`, which are searched for their `.jsonl` logs alone.
 
 | Agent | Folder |
 |---|---|

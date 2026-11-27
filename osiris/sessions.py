@@ -38,6 +38,7 @@ SUFFIX = ".jsonl"
 HEAD = 64  # lines read to tell what a file is
 PASTE_WORDS = 2000  # a longer paste or attachment becomes one line saying what it was
 NOTE_CHARS = 300  # a note before a tool call, on one line and no longer than this, is left out
+AGENT_FOLDER = re.compile(r"\.(claude(-[\w.-]+)?|pi|omp)")  # hidden folders searched inside a folder you add
 LOG_NAME = re.compile(r"\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d+Z_[0-9a-f-]{36}")  # how pi and omp name a session's log
 OMP_ONLY = {"title", "title_change", "session_init", "mode_change", "service_tier_change", "model_usage", "call"}
 

@@ -379,14 +379,22 @@ def _kind(value) -> str | None:
 # -- files ----------------------------------------------------------------------------------------
 
 def find_files(paths: list[Path]) -> list[Path]:
-    """The files given, and the JSON and zip files in the folders given and their subfolders, hidden ones left out."""
-    from .sessions import side_file
+    """The files given, and the JSON, JSONL and zip files in the folders given and their subfolders. Hidden
+    folders are left out, except the ones Claude Code, pi and omp keep their sessions in, where only the
+    .jsonl logs are read."""
+    from .sessions import AGENT_FOLDER, side_file
     found = set()
     for p in paths:
         for f in [p] if p.is_file() else p.rglob("*"):
-            if f.is_file() and f.suffix.lower() in SUFFIXES and not any(part.startswith(".") for part in f.parts[len(p.parts):]) \
-                    and not (f.suffix.lower() == ".jsonl" and side_file(f)):
-                found.add(f)
+            suffix = f.suffix.lower()
+            if not f.is_file() or suffix not in SUFFIXES:
+                continue
+            hidden = [part for part in f.parts[len(p.parts):] if part.startswith(".")]
+            if hidden and (suffix != ".jsonl" or not all(AGENT_FOLDER.fullmatch(part) for part in hidden)):
+                continue
+            if suffix == ".jsonl" and side_file(f):
+                continue
+            found.add(f)
     return sorted(found)
 
 
