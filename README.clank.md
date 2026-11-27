@@ -294,7 +294,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | `generic` | Everything else | Async fetch, then trafilatura for pages and pypdfium2 for PDFs, then the fallback passes |
 | `skip` | See below | Recorded, not fetched |
 
-`skip` covers GitHub user, organization and site pages, other YouTube pages (search, feeds, Watch Later, Liked), unreadable local files, links to chats (ChatGPT, Claude, DeepSeek, Grok), X profiles, media files and local hosts.
+`skip` covers GitHub user, organization and site pages, other YouTube pages (search, feeds, Watch Later, Liked), unreadable local files, links to chats (ChatGPT, Claude, Gemini, DeepSeek, Grok), X profiles and searches, media files and local hosts. [Skipped](#skipped) lists each reason.
 
 All links into one GitHub repo share one document, so a link to a file or issue stores the repo's README, not that file or issue.
 
@@ -362,17 +362,26 @@ Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdow
 - Hosts are served round-robin, with at most `--per-host` (4) requests in flight per host and `--concurrency` (64) overall, and cooldowns on 429 and 5xx responses. `Retry-After` is honored.
 - `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue, each wait varied by up to a quarter either way. The default is `scholar.google.*=1:20`, since Scholar shows CAPTCHAs after bursts (see [Google Scholar](#google-scholar)). Hosts in a group share the pace, but each is judged on its own: after 3 connection failures in a row, DNS included, only that host's remaining links are skipped as `host_down`.
 - The `Content-Type` is checked before the body is read, so non-text responses are dropped unread.
-- A host is skipped after 5 straight refusals (403, or 429 after retries) or 3 connection failures.
+- Timeouts, dropped connections, downloads that broke off, 429s and server errors (500, 502, 503, 504 and Cloudflare's 520 to 524) are tried up to 3 times (**Tries per page**), waiting longer each time, up to 60 seconds or what `Retry-After` asks.
+- When one site refuses 5 links in a row (403, or 429 after its retries), its remaining links are marked `http_403` or `http_429` without being requested. When it fails to connect 3 times in a row (DNS, connection, TLS or timeout), its remaining links are marked `host_down` the same way. Links marked like this have no HTTP status in the manifest, and the fallback passes still try them. **Skip a site after this many refusals in a row** and **Skip a site after this many dropped connections in a row** under **When a page fails** change the numbers.
 
 **Fallback passes**
 
-These run over what's still failed or thin, cheapest first. Each keeps a result only if it beats the previous one, and each URL gets each pass once, as recorded in the manifest's `tried` column.
+These run after the first pass in every run that includes web pages, in the order below, each over what the ones before it couldn't fix. A thin document goes to every pass, whatever its reason. A failed one goes only to the passes that take its reason. Each pass keeps a result only if it has more text than what's saved.
 
-1. **impersonate:** curl_cffi with Chrome's TLS fingerprint, for 403s, resets and thin pages.
-2. **render** (`--render`, opt-in): headless Chromium, for pages that need JavaScript and for bot-challenge pages, which it waits out for `--challenge-wait` seconds. Never for Google Scholar, which answered it with its block page four times in five. It costs a few hundred MB of RAM per page, so `--render-concurrency` defaults to 2.
-3. **doi:** failed paper links are matched by DOI, covering dead sci-hub mirrors, publisher `/doi/` pages, and nature.com and JSTOR IDs. Title, authors and abstract come from Scry's OpenAlex snapshot, then the OpenAlex API.
-4. **wayback:** the newest successful Wayback Machine capture, 4 requests at a time.
-5. **crawl** (`--scry-crawl`, opt-in, **Use Scry's copy of the page** under Advanced): the text Scry's web crawler last read from the page, under any of its http/https and www spellings, looked up 50 pages per query. It needs a Scry key, sends those pages' addresses to Scry, and stops once the run has spent `--scry-crawl-max-dollars` (1) on it. In one test, three pages found cost $0.006.
+| Pass | Option on the page | Failed reasons it takes | What it does |
+|---|---|---|---|
+| `impersonate` | **Try again looking like Chrome**, on by default | `http_403`, `http_429`, `http_503`, `connect`, `ssl`, `payload`, `no_text` | Downloads again with curl_cffi and Chrome's TLS fingerprint, with your cookies |
+| `render` | **Use a headless browser for blocked pages** (`--render`), off by default. Needs Playwright and its Chromium | The same as `impersonate`, but never links ending in `.pdf` or Google and Scholar links, since Google answered the browser with its block page four times in five | Opens the page in headless Chromium with your cookies, user agent and Chrome profile copy, and waits up to **Wait for a bot check to clear** (`--challenge-wait`, 15) seconds for a bot-check page to clear. It needs a few hundred MB of RAM per page, so it opens 2 at a time |
+| `doi` | **Look papers up by DOI**, on by default | Any, for links whose address holds a DOI, a nature.com article ID or a JSTOR ID, which covers dead sci-hub mirrors and publisher `/doi/` pages | Saves the paper's title, authors and abstract from Scry's OpenAlex copy, then the OpenAlex API. That's `ok` with an abstract, and `thin` with reason `no_abstract` without one. It never gets the full text |
+| `wayback` | **Use the Wayback Machine**, on by default | Any except `non_text:…`, `too_large`, `bad_url` and `bug:…` | Saves the newest capture that answered 200, 4 requests at a time, a second apart |
+| `crawl` | **Use Scry's copy of the page** (`--scry-crawl`), off by default. Needs a Scry key | The same as `wayback` | Saves the text Scry's web crawler last read from the page, under any of its http/https and www spellings, 50 pages per query. It sends those pages' addresses to Scry and stops once the run has spent `--scry-crawl-max-dollars` (1) on it, and the pages it didn't reach wait for the next run. In one test, three pages found cost $0.006 |
+
+- A pass is recorded in the manifest's `tried` column once it has dealt with a link, and doesn't take it again. So a pass you turn on later, such as the headless browser, works through the old failures it takes in the next run, with nothing else to do.
+- When all have run, a failed link stays failed until **Try failed URLs again** (`--retry-failed`), **Retry this site next run** (`--retry-host`) or **Fetch again**. Each clears `tried`, so every pass runs again. The first two put failed links back only, not thin ones.
+- The rules above for skipping a site after 5 refusals or 3 connection failures apply inside each pass too. There the site's remaining links count as tried by that pass without being requested.
+- A pass that can't start, such as the headless browser when Chromium isn't installed, is skipped with one error in the log, and its links keep their turn for a later run.
+- OCR comes after these, for PDFs only. See [OCR](#ocr).
 
 ### Google Scholar
 
@@ -381,6 +390,8 @@ Scholar rations automated requests. Past some number it answers with an "unusual
 - **Pace:** one request at a time, about 20 seconds apart (15 to 25). Settings saved with the earlier default of 8 seconds move to 20 by themselves; a value you set yourself is kept.
 - **Block pages:** Google's block page ("unusual traffic", or "Verifying your request… Please wait while we verify your session"), a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
 - **No headless browser:** the browser pass and the browser fix method skip Scholar. Your cookies with the plain download work better.
+- Scholar links still waiting usually mean a block page stopped Scholar's turn before they were reached. If Google blocks the first Scholar request of every run, each run asks for one link and no Scholar link ever arrives. Opening that link in your own browser shows whether Google is asking this connection to prove it's human.
+- Since 2026-11-10 a 403 from Google counts as a block and leaves the link waiting, so Scholar links failed with `http_403` were recorded by earlier versions, mostly marked without being requested after 5 refusals in a row. They stay failed until **Retry this site next run** for `scholar.google.com`, or **Try failed URLs again**.
 - **Profiles:** a profile's list of works is asked for 100 at a time (`cstart=0&pagesize=100`), not the 20 Scholar shows unless you click Show more. Profiles saved before this have 20; fetch one again to get the longer list.
 
 ### Browser session
@@ -396,6 +407,121 @@ This helps with Scholar, Medium and other logged-in or bot-walled sites:
 - `--chrome-profile DIR` makes `--render` use a copy of your Chrome profile directory.
 
 The cookie file holds live sessions, so keep it private.
+
+## Why documents are waiting, failed or thin
+
+This section is for working out why documents aren't saved and what can still be done about them. The page's [LLM summary](#web-interface) sends the whole README to DeepSeek with the counts, so this is also what it goes by.
+
+The page and the LLM summary count documents. Several links can lead to one document, such as links to different files in one GitHub repo, and they share one record. `osiris stats` and the end of a run's log count links.
+
+### A document's record
+
+Each link has a row in `data/manifest.sqlite`.
+
+| Column | Meaning |
+|---|---|
+| `status` | `pending` (waiting), `ok` (saved), `thin`, `failed`, `skipped`, or `deleted` (removed with **Delete…** and never fetched again) |
+| `reason` | Why it's failed, thin or skipped. For a failed web page it's what the first download got, and fallback passes that fail too leave it as it was. So `http_403` with `impersonate,wayback` in `tried` means the site refused the first download, and neither the Chrome-like download nor the Wayback Machine got the page either. Only a pass that saves text, or **Fetch again**, writes a new reason |
+| `http_status` | The site's answer to the download that set the reason. It's empty for failures with no HTTP answer, such as `timeout` or `dns`, and for links marked without being requested, as with `host_down` and with the links marked after a site refused 5 in a row. For failures, only web pages and GitHub record it |
+| `final_url` | Where the download ended up after redirects. Another site there, such as a login or consent page, usually means a login wall or a paywall |
+| `content_type` | What the site said it sent, such as `text/html` or `application/pdf` |
+| `tried` | What has been done to it already, as a list: the fallback passes `impersonate`, `render`, `doi`, `wayback` and `crawl` (see [Generic lane](#generic-lane)), `ocr` (OCR has read it), `fulltext` (arXiv's full text was looked for), `html_checked` and `html_busy` (arXiv's HTML was read, or a run was too busy to read it), `comments` (a Stack Exchange thread was fetched with its comments) and `refresh` (a PDF refresh that hasn't finished) |
+| `attempts` | How many times an outcome was recorded for it, over all runs. A fallback pass that fails records nothing, so this isn't the number of downloads |
+| `updated_at` | When an outcome was last recorded. A fallback pass that fails doesn't change it |
+| `chars` | Characters of text saved |
+
+### Waiting
+
+A waiting document hasn't been fetched or read yet. These are the usual causes.
+
+- The run hasn't reached it yet, or was stopped. Starting again carries on.
+- Its source isn't ticked under **What to archive**, or isn't in `--only`. Local files, saved pages, tweet files and AI chats are only read while **Local files** is ticked.
+- GitHub links wait while there's no `GITHUB_TOKEN`, or the token is refused.
+- Tweets wait while **Look up tweets in Scry** and **Allow twitterapi.io** are both off, or neither key is set, and once a run has spent the dollar limit next to **Look up tweets in Scry**.
+- YouTube videos wait after a block, through pauses of 30 to 240 minutes, and the lane stops for the run after 5 blocks in a row. At about 240 videos an hour, a long list takes days. See [YouTube](#youtube).
+- Google Scholar links wait after a block page, until the next run. See [Google Scholar](#google-scholar).
+- arXiv full text waits until every abstract is in, comes one paper every 15 seconds, and stops for the run if arXiv can't be reached several times in a row or the Scry dollar limit is reached. The page's **arXiv full text** row counts papers as waiting until their full text has been looked for, though they're saved with their abstract.
+- Stack Exchange questions wait once the day's API quota runs out, 300 calls without `STACKEXCHANGE_KEY`, until the next day.
+- Web pages queued for **Fetch again** in the headless browser wait if the browser can't start.
+
+### Thin
+
+A thin document is saved and exported, but with less than 200 characters of text (**--thin-under**), or with only part of what was wanted. Thin web pages get every fallback pass, and thin PDFs get OCR. **Try failed URLs again** doesn't put thin documents back, but **Fetch again** does.
+
+| Reason | Meaning |
+|---|---|
+| `short` | Under 200 characters. For a web page that's usually a login wall, a consent or cookie page, a paywall, a bot check, or a JavaScript app that shows nothing without a browser. For a PDF it's usually a scan with no text layer, which OCR reads |
+| `no_abstract` | The DOI pass found the paper but no abstract, so it has the title and authors only |
+| `no_readme` | A GitHub repo with no README |
+| `no_transcript` | A YouTube video with no captions. It has the title and channel |
+| `no_videos` | A YouTube playlist or channel that listed no videos |
+
+A document the DOI pass saved is `ok` but holds only the abstract, not the paper.
+
+### Failed
+
+"Passes left" names the fallback passes that take the reason, which run if they're on and haven't run on the link yet. All five are `impersonate`, `render` (not for PDFs or Google), `doi` (only for links with a DOI), `wayback` and `crawl`. Once they have run, a failed document isn't tried again by itself, so "trying later" means **Try failed URLs again** or **Retry this site next run** in a later run, or **Fetch again** for one document.
+
+| Reason | Meaning | Passes left | What else can help |
+|---|---|---|---|
+| `http_403` | The site refused the download, usually a bot wall or a login | All five | A cookies file with the matching **Browser user agent**, the headless browser, or saving the page with SingleFile into a Local files folder |
+| `http_401`, `http_402` | The page needs a login or a subscription | `doi`, `wayback`, `crawl` | Cookies, or SingleFile |
+| `http_404`, `http_410` | The page isn't there any more | `doi`, `wayback`, `crawl` | Nothing, unless a copy exists elsewhere. **Can't fix** takes it off the list |
+| `http_429` | Too many requests. Tried 3 times in the first pass | All five | Trying later with **Retry this site next run**, or adding the site to the slower sites under **Speed** |
+| `http_503` | Server overloaded, or a bot check. Tried 3 times in the first pass | All five | Trying later, the headless browser, or cookies |
+| `http_500` to `http_599` other than 503 | Server error. 500, 502, 504 and 520 to 524 are tried 3 times in the first pass | `doi`, `wayback`, `crawl` | Trying later |
+| `http_999`, `http_418`, `http_420` and other codes | The site turns away automated requests. LinkedIn answers 999 | `doi`, `wayback`, `crawl` | SingleFile |
+| `redirects` | Too many redirects, usually a login loop | `doi`, `wayback`, `crawl` | Cookies, or SingleFile |
+| `timeout` | No answer in time (**--page-timeout**, 30 seconds, or 15 seconds with nothing sent). Tried 3 times in the first pass | `doi`, `wayback`, `crawl` | Trying later, or a longer time limit under **Time limits** |
+| `connect`, `payload` | The connection failed, or the download broke off. Tried 3 times in the first pass | All five | Trying later |
+| `ssl` | The secure connection failed, often an expired certificate | All five | Usually nothing |
+| `dns` | The site's name doesn't resolve, so the domain is probably gone | `doi`, `wayback`, `crawl` | Nothing |
+| `host_down` | The site failed to connect 3 times in a row, so its other links were marked without being requested | `doi`, `wayback`, `crawl` | **Retry this site next run** once the site is back, which gives each link a real try |
+| `no_text` | The page loaded but had no readable text: a JavaScript app, or a PDF with no text layer | All five, and OCR for PDFs | The headless browser for pages. A PDF with `ocr` in `tried` was read by OCR with nothing new found |
+| `challenge` | A bot-check page didn't clear in the headless browser, chosen for **Fetch again** | `doi`, `wayback`, `crawl` | Cookies with the user agent they came from, since Cloudflare ties its `cf_clearance` cookie to it, a longer **Wait for a bot check to clear**, or SingleFile |
+| `blocked` | The Wayback Machine's copy, chosen for **Fetch again**, was only Google's block page | `doi`, `wayback`, `crawl` | Nothing |
+| `non_text:<type>` | An image, video, archive or other file that isn't text, so it wasn't downloaded | `doi` | Nothing |
+| `too_large` | Too big to read in memory, or turned down for its size by an older version | `doi` | **Try failed URLs again**, with more **--worker-mem-mb** if needed |
+| `pdf_error:<error>`, `extract_error:<error>` | The PDF or page couldn't be parsed | `doi`, `wayback`, `crawl` | **OCR it** for a PDF |
+| `extract_crashed`, `extract_timeout` | Reading it crashed or took longer than **--read-timeout**, usually a huge or broken file | `doi`, `wayback`, `crawl` | A longer time limit, or more worker memory |
+| `bad_url` | The address isn't valid | None | Nothing |
+| `bug:<error>`, `error:<error>` | Something went wrong in osiris itself. The log has the details | `doi`, and `wayback` and `crawl` for `error:` | Trying again after an update |
+| `not_in_scry` | Scry doesn't have the tweet, and twitterapi.io wasn't used | None | **Allow twitterapi.io** with `TWITTERAPI_IO_KEY`, billed per tweet, then **Try failed URLs again** or **Fetch again** from twitterapi.io. Or import your own tweet files |
+| `not_found` | The source says it doesn't exist: an unknown arXiv ID, a deleted or private GitHub repo, a deleted Hacker News item, LessWrong post or Stack Exchange question, or a tweet twitterapi.io doesn't have because it was deleted or is protected | None | Nothing |
+| `api_error`, `bad_response:<error>`, `network` | Stack Exchange's, Hacker News', LessWrong's or GitHub's API failed or couldn't be reached | None | Trying later |
+| `bot_check` | YouTube refused this video while others went through | None | Trying later |
+| `unavailable` | The YouTube video or list is private, removed or otherwise unavailable | None | Nothing |
+| `youtube_request_failed`, `list_error` | YouTube's answer was an error | None | Trying later |
+| A name in CamelCase, such as `AgeRestricted` or `VideoUnplayable` | YouTube wouldn't give this video's captions | None | Trying later sometimes works. **Use Scry's transcripts first** may have it |
+| `file_missing` | The local file isn't at its path on this machine, usually because the archive was moved or the drive isn't mounted | None | Running where the file is, then **Try failed URLs again** |
+| `file_unreadable` | The local file couldn't be opened | None | Checking its permissions |
+| `drm_protected` | The ebook is under DRM | None | Nothing |
+| `djvulibre_missing`, `djvu_error` | DjVuLibre isn't installed, or the DjVu file couldn't be read | None | `apt install djvulibre-bin`, then **Try failed URLs again** |
+
+### Skipped
+
+Skipped links are left alone on purpose and are never fetched. None needs doing anything about.
+
+| Reason | Links |
+|---|---|
+| `x_non_status` | X pages that aren't a single post: profiles, searches, lists, home. An account's every tweet comes from a list of accounts instead (see [Every tweet of an account](#every-tweet-of-an-account)) |
+| `private_app` | Links to your own chats on ChatGPT, Claude, Gemini, DeepSeek or Grok, which need your login. Chat exports bring them in (see [AI chats](#ai-chats)) |
+| `youtube_other` | YouTube pages that aren't a video, playlist or channel, such as search, feeds, Watch Later and Liked |
+| `arxiv_other` | arXiv addresses that aren't a paper osiris can name, such as author pages and listings |
+| `github_account`, `github_other` | GitHub user and organization pages, and GitHub's own pages |
+| `media:<extension>` | Images, video, audio, archives and installers, judged by the address's extension |
+| `local`, `local_other` | Addresses on your own network, and local files in a format osiris can't read |
+| `bad_url` | Addresses that aren't valid |
+
+### Clues to a cause
+
+- A site whose failed links mostly have no HTTP status refused or dropped the first few, and the rest were marked without being requested. **Retry this site next run** gives each a real try.
+- Many failures from one site with `impersonate` and `wayback` already in `tried` point to a bot wall or a login. Cookies, the headless browser or SingleFile are what's left.
+- A failed link whose `tried` lacks a pass that's on now and takes its reason will get that pass in the next run by itself.
+- Failures that all happened on one day or in one run, across many sites, point to a network problem or a block at the time, and trying again is worth it.
+- Many `file_missing` local files usually mean the archive was moved to another machine, or a drive isn't mounted.
+- Waiting Scholar links mean Scholar is blocking. See [Google Scholar](#google-scholar).
+- `host_down` on sci-hub mirrors, archive.is or archive.ph means those sites were unreachable. The DOI pass covers links with a DOI in them.
 
 ## PDFs
 
@@ -565,6 +691,9 @@ Everything goes in `data/`.
 | `thin` | Under 200 characters, usually a JavaScript app, paywall or bot wall, or a paper with no abstract. Still saved and exported |
 | `failed` | No text. `reason` says why |
 | `skipped` | Deliberately not fetched |
+| `deleted` | Removed with **Delete…**, and not fetched again |
+
+[Why documents are waiting, failed or thin](#why-documents-are-waiting-failed-or-thin) explains each reason and what can still be done.
 
 `source` records where the text came from, for example `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `tweet:import`, `chat:claude`, `github:api`, `youtube:transcript:auto` or `file:pdf`.
 
