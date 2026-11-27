@@ -27,7 +27,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import accounts, chats, cleanup, cookies, fixes, review, search, singlefile, tuning, tweetdb, twitter
+from . import accounts, chats, cleanup, cookies, fixes, llm_summary, review, search, singlefile, tuning, tweetdb, twitter
 from .github import load_token
 from .localfile import candidate_paths
 from .report import RunReport
@@ -586,10 +586,54 @@ async def state(request: web.Request) -> web.Response:
                 "progress": _job_progress(job, out, table) if job.active and job.plan else None},
         "failures": None if request.query.get("failures") == str(failures.version) else {**(failures.summary or {}), "version": failures.version, "ready": failures.summary is not None},
         "index": app["index"].status() if app["index"] else None,
-        "keys": {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
-                 "Stack Exchange": bool(os.environ.get("STACKEXCHANGE_KEY"))},
+        "keys": _keys(),
+        "llm_busy": _llm_busy(app),
         "out": str(out),
     })
+
+
+def _keys() -> dict[str, bool]:
+    return {"Scry": bool(load_key()), "GitHub": bool(load_token()), "twitterapi.io": bool(os.environ.get(BILLED_KEY)),
+            "Stack Exchange": bool(os.environ.get("STACKEXCHANGE_KEY")), "DeepSeek": bool(os.environ.get(llm_summary.KEY_ENV))}
+
+
+# -- LLM summary ---------------------------------------------------------------------------------
+
+def _llm_busy(app: web.Application) -> bool:
+    task = app.get("llm_task")
+    return task is not None and not task.done()
+
+
+async def llm_summary_start(request: web.Request) -> web.Response:
+    """Ask for an LLM summary of the archive's state; it's written to the log when it comes."""
+    app = request.app
+    if not _llm_busy(app):
+        app["llm_task"] = asyncio.create_task(_llm_summary(app))
+    return web.json_response({"busy": True})
+
+
+async def _llm_summary(app: web.Application) -> None:
+    out, job = app["out"], app["job"]
+    job.log(f"{llm_summary.START} and issues: {llm_summary.MODEL} is reading the archive's counts, settings and log")
+    try:
+        db = review.connect(out)
+        try:
+            counts = review.counts(db)
+        finally:
+            db.close()
+        extras = {"config": load_config(out), "keys": _keys(), "browser": _has_browser(), "review": counts, "log": list(job.lines),
+                  "job": {"name": job.name, "state": job.state, "step": job.step, "started": job.started, "finished": job.finished}}
+        lines, usage = await llm_summary.summarize(out, extras)
+    except llm_summary.Failed as e:
+        job.log(f"{llm_summary.FAILED}: {e}")
+        return
+    except Exception as e:  # shown in the log: there's nowhere else to read it
+        log.exception("llm summary")
+        job.log(f"{llm_summary.FAILED}: {type(e).__name__}: {e}")
+        return
+    for line in lines:
+        job.log(line)
+    job.log(f"{llm_summary.END} ({usage.get('prompt_tokens', 0):,} tokens read, {usage.get('completion_tokens', 0):,} written)")
 
 
 # -- folders -------------------------------------------------------------------------------------
@@ -1639,6 +1683,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.get("/api/cleanup", cleanup_state),
         web.get("/api/cleanup/report", cleanup_report),
         web.post("/api/job/stop", stop_job),
+        web.post("/api/llm-summary", llm_summary_start),
         web.post("/api/decide", decide),
         web.post("/api/review/choose", choose_version),
         web.post("/api/delete", delete_document),

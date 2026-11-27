@@ -64,6 +64,8 @@ main { flex: 1; min-height: 0; overflow: hidden; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; padding: 4px 14px; }
 .btn.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 .btn.link { background: none; border: 0; color: var(--muted); padding: 0 4px; text-decoration: underline; }
+.log-foot { display: flex; margin-top: 3px; }
+.log-foot .btn.link { font-size: 11px; }
 .btn kbd { font: 12px var(--mono); color: var(--muted); margin-left: 4px; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, .row:focus-visible, .body:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -335,6 +337,7 @@ const HELP = {
   scry_arxiv: "For papers with only their summary so far, take the full text from Scry if it has it, and don't ask arXiv for those. Far faster, but Scry's copy drops formulas and is about a quarter shorter. Your paper IDs are sent to Scry. Papers Scry doesn't have still come from arXiv.",
   scry_arxiv_dollars: "Scry charges for the data it sends beyond a free allowance. Once a run has spent this much on papers, the rest wait for the next run.",
   log_font_px: "How big the text in the log is.",
+  "llm-summary": "DeepSeek's deepseek-flash reads detailed counts of what's waiting, failed, thin and skipped, your settings and the end of this log, and writes a short summary of the main issues and what to do about them here. It works before, during or after a run. DeepSeek gets the counts, sites, reasons and some example links, but no document's text. It takes about a minute, costs 1 or 2 cents, and needs DEEPSEEK_API_KEY in .env.",
   refetch_arxiv_pdfs: "For papers whose full text came from a PDF, look at arXiv's web version again. It's cleaner, so it replaces the PDF text unless it's less than half as long. Each paper is only looked at again until its web version has really been read, so it's safe to leave on.",
   pdf_at_once: "How many PDFs from the web can be downloading or waiting to be read at once. It starts at twice your processor cores. Lower it if your disk is nearly full.",
   refetch_stackexchange: "Fetch your saved Stack Exchange threads again so they include comments. A question deleted since keeps its document.",
@@ -558,7 +561,9 @@ function renderArchive() {
       ),
       h("div", {id: "run-progress", hidden: true}, h("div", {class: "bar"}, h("i", {id: "run-bar"})), h("p", {class: "progress-text", id: "run-text"})),
       h("p", {class: "hint", id: "start-hint", style: "margin-bottom:6px"}, "Already archived URLs and files are skipped, so it's safe to start again at any time."),
-      h("div", {id: "log", tabindex: 0, "aria-label": "Job output", style: `font-size:${config.options.log_font_px}px`})),
+      h("div", {id: "log", tabindex: 0, "aria-label": "Job output", style: `font-size:${config.options.log_font_px}px`}),
+      h("div", {class: "log-foot"}, h("button", {class: "btn link", id: "llm-summary", title: help("llm-summary"),
+        onclick: guarded(() => api("/api/llm-summary", {}).then(tick))}, "LLM summary of current status and issues"))),
     Cleanup.card(),
     Failures.card(),
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
@@ -781,6 +786,7 @@ function renderState(s) {
        : ix.updating && ix.total ? ["Updating the ", term("search index", help("index")), `: ${fmt(ix.done)} of ${fmt(ix.total)} documents checked.`]
        : [`${fmt(ix.documents)} documents in the `, term("search index", help("index")), "."]));
   renderProgress(s.job);
+  if ($("#llm-summary")) $("#llm-summary").disabled = !!s.llm_busy;
 
   const j = s.job;
   if (jobKey !== j.started || j.count < logSeen) {  // another job, or its log started over: show it from its start
