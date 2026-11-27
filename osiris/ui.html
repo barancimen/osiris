@@ -424,7 +424,7 @@ const LANE_HELP = {
   arxiv: "arXiv papers: title, authors, summary and the full text.",
   twitter: "Posts on X (Twitter), from archives that keep copies of them.",
   singlefile: "Pages you saved yourself with the SingleFile browser extension.",
-  chat: "Your conversations with Claude, ChatGPT and DeepSeek, from their exports.",
+  chat: "Your conversations with Claude, ChatGPT and DeepSeek, from their exports, and your sessions with Claude Code, pi and omp, from their logs.",
   skip: "Links left alone on purpose, like chat links, profiles and image files.",
 };
 const VIEW_HELP = {
@@ -488,9 +488,10 @@ const SOURCE_HOW = {
   manual: "written by people", metadata: "the title and description only", playlist: "the playlist's title and video titles",
   channel: "the channel's title and video titles", api: "from the official API",
   import: "from a tweet file you imported", extension: "saved with the Claude Conversation Exporter extension",
+  history: "with your prompts alone, as only its prompt history was imported",
 };
 const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io",
-                  claude: "Claude", chatgpt: "ChatGPT", deepseek: "DeepSeek"};
+                  claude: "Claude", chatgpt: "ChatGPT", deepseek: "DeepSeek", "claude-code": "Claude Code", omp: "omp", pi: "pi"};
 function sourceHelp(source) {
   if (!source) return "";
   let parts = source.split(":"), first;
@@ -510,7 +511,7 @@ const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and a file named more.txt with one link per line. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files, text and web pages, including pages saved with the SingleFile browser extension. Your files are only read, never changed."},
   {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A file named accounts.txt at the top of the folder, with one username per line, gets every tweet of those accounts."},
-  {key: "chats", title: "AI chats", text: "Folders holding Claude's data export with its manifest and zips, conversations saved as .json with the Claude Conversation Exporter extension, and ChatGPT's and DeepSeek's exports. Each conversation is one document, which a newer copy of it updates, so exports that overlap do no harm."},
+  {key: "chats", title: "AI chats", text: "Folders holding Claude's data export with its manifest and zips, conversations saved as .json with the Claude Conversation Exporter extension, ChatGPT's and DeepSeek's exports, and the folders where Claude Code, pi and omp keep their sessions: ~/.claude, ~/.pi/agent/sessions and ~/.omp/agent/sessions. Each conversation or session is one document, which a newer copy of it updates, so exports that overlap do no harm."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
@@ -1534,7 +1535,7 @@ const Docs = {
       btn("Fine", "fine"), btn("Bad", "bad"),
       btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs and DjVu files: OCR reads pictures of their pages.", () => $("#ocr-lang")?.value, usual),
       d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
-      btn("Fetch again", "refetch", ways.length ? "" : d.lane === "chat" ? "A chat can't be fetched. Import a newer export of it instead." : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
+      btn("Fetch again", "refetch", ways.length ? "" : d.lane === "chat" ? "A chat can't be fetched. Import a newer export or session log of it instead." : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
       ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),
       btn("Can't fix", "unfixable"),
       d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo"),

@@ -202,7 +202,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups, saved
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores web pages saved as HTML files, such as SingleFile's. See [Saved pages](#saved-pages) |
 | `osiris import-tweets DIR [DIR\|FILE ...]` | Stores tweets from Twitter's export zips, bookmark exports, Community Archive files and `fetch_tweets.py`'s databases. See [Tweet files and account lists](#tweet-files-and-account-lists) |
-| `osiris import-chats DIR [DIR\|FILE ...]` | Stores conversations from Claude's, ChatGPT's and DeepSeek's exports and the Claude Conversation Exporter extension. See [AI chats](#ai-chats) |
+| `osiris import-chats DIR [DIR\|FILE ...]` | Stores conversations from Claude's, ChatGPT's and DeepSeek's exports and the Claude Conversation Exporter extension, and sessions with Claude Code, pi and omp from their logs. See [AI chats](#ai-chats) |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
 | `osiris clean` | Repairs text in documents already archived. `--dry-run`, `--undo`. See [Text cleanup](#text-cleanup) |
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
@@ -513,6 +513,26 @@ A document holds the branch you were on, with a heading for each turn saying who
 Documents have `source: chat:claude`, `chat:claude:extension`, `chat:chatgpt` or `chat:deepseek`, and the conversation's address, so the Documents tab links to the live chat. **Fetch again** doesn't apply to them. Import a newer export instead. Links to conversations in your tab backups are never fetched, and share the conversation's document once it's imported.
 
 If a site changes its format, the parts osiris doesn't know are left out and named in the log, and a conversation that can't be read is counted and skipped without stopping the rest.
+
+### Sessions with coding agents
+
+The same command, and the same **AI chats** folders, also store your sessions with the coding agents Claude Code, pi and omp, one document per session. Give it the folders where they keep their logs, or copies of them:
+
+| Agent | Folder |
+|---|---|
+| Claude Code | `~/.claude`, and `~/.claude-<name>` for each other profile. The sessions are in `projects/`, and `history.jsonl` holds the prompts you typed |
+| pi | `~/.pi/agent/sessions` |
+| omp | `~/.omp/agent/sessions` |
+
+A session is known by its own ID, so copies of its log make one document. A session that has gone on since it was last imported is written again under the same document, and a log that hasn't changed is skipped. If you rewound or branched, the document follows the branch you were last on.
+
+A document is the conversation between you and the model, with a heading for each turn saying who wrote it, when, in UTC, and which model replied. It has your prompts and what you pasted, the prompts of guests in an omp-serve session, everything the model wrote to you, the plans it showed you for approval, and the questions it asked you, quoted, with your answers. A paste longer than 2,000 words becomes a line saying how long it was and how it began. Reasoning, tool calls and their output, subagents, the text the agent adds to your messages, shell commands you ran and compaction summaries are left out, and so is a one-line note the model writes just before a tool call. Headings inside messages are made third-level, so the second-level headings are only the ones saying who is speaking. The front matter names the folder the session ran in.
+
+Claude Code deletes a session's log after 30 days unless you raise its `cleanupPeriodDays` setting, but your prompts stay in `history.jsonl`. A session whose log was never imported gets a document of your prompts alone, with `source: chat:claude-code:history`, which the log replaces if it turns up. A document is never deleted because its log has gone. A backup made with `rsync --delete` would lose the log, though, so leave that option off for these folders.
+
+Resuming or forking a session can copy it into a new one. A session that holds another whole, from its first message to its last, takes over the shorter one's document, and the shorter one's address leads to it. One that only starts partway through another, as a continued session can, keeps its own.
+
+Session documents have `source: chat:claude-code`, `chat:omp` or `chat:pi`, and an address such as `session://omp/<ID>`, which nothing fetches. pi and omp write the same format, so a log under a folder named `omp` or `.omp` is taken as omp's and one under `pi` or `.pi` as pi's. Keep those folder names in your copies. Subagents' logs, in Claude Code's `subagents/` folders and the folders omp keeps beside each session's log, are skipped.
 
 ## Output
 

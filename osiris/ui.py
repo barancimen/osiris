@@ -716,7 +716,7 @@ def _scan_folder(path: Path, kind: str) -> dict:
     if kind == "chats":
         found = chats.survey([path])
         if not found:
-            return {"ok": False, "summary": "No chat exports here"}
+            return {"ok": False, "summary": "No chat exports or agent sessions here"}
         return {"ok": True, "summary": chats.describe(found)}
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
@@ -1437,7 +1437,7 @@ async def document(request: web.Request) -> web.Response:
     finally:
         db.close()
     url, lane, status, reason, http_status, final_url, chars, tried, *_ = rows[0]
-    local = lane == "localfile" or urlsplit(url).scheme == "file"
+    local = lane == "localfile" or urlsplit(url).scheme not in ("http", "https")  # a file, or a session's made-up address
     return web.json_response({
         "id": did, "meta": meta, "body": body[:MAX_BODY], "truncated": len(body) > MAX_BODY, "length": len(body),
         "urls": [r[0] for r in rows], "url": url, "final_url": final_url, "lane": lane, "status": status,

@@ -45,7 +45,7 @@ EXCLUDE_FILE = "review-exclude.txt"
 DB_FILE = "review.sqlite"
 OLD_NAMES = ("audit.sqlite", "audit-exclude.txt")  # before review was called review everywhere
 CANNOT_REFETCH = {"singlefile": "A saved page can only be imported again",  # lane: why, as the note says
-                  "chat": "A chat can only come from a newer export"}
+                  "chat": "A chat can only come from a newer export or session log"}
 
 # The most frequent words of the languages expected here. Ordinary prose is around 40% these; text
 # from a broken PDF font map is close to none.

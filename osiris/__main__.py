@@ -741,9 +741,10 @@ def main() -> None:
     tweets.set_defaults(func=cmd_import_tweets)
 
     chats = sub.add_parser("import-chats", help="store conversations from Claude's, ChatGPT's and DeepSeek's data "
-                           "exports and the Claude Conversation Exporter extension as markdown, one document per "
-                           "conversation, updated when a newer copy turns up")
-    chats.add_argument("paths", nargs="+", help="directories (searched recursively for .json/.zip) or files")
+                           "exports and the Claude Conversation Exporter extension, and sessions from Claude Code's, "
+                           "pi's and omp's logs, as markdown, one document per conversation, updated when a newer "
+                           "copy turns up")
+    chats.add_argument("paths", nargs="+", help="directories (searched recursively for .json/.jsonl/.zip) or files")
     chats.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     chats.set_defaults(func=cmd_import_chats)
 

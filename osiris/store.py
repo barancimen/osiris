@@ -111,13 +111,24 @@ CREATE TABLE IF NOT EXISTS chat_files (  -- chat exports read through, by chats.
     name    TEXT,
     read_at TEXT
 );
+CREATE TABLE IF NOT EXISTS chat_messages (  -- the messages on each saved session's branch, to tell a copy of one
+    message TEXT NOT NULL,  -- <harness>:<the message's ID in the log>
+    doc_key TEXT NOT NULL,
+    PRIMARY KEY (message, doc_key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS chat_messages_doc_key ON chat_messages(doc_key);
+CREATE TABLE IF NOT EXISTS chat_ends (  -- each saved session's first and last message, as in chat_messages
+    doc_key TEXT PRIMARY KEY,
+    first   TEXT,
+    last    TEXT
+);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
               "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''",
               "title": "ALTER TABLE urls ADD COLUMN title TEXT"}
 
-FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "model", "fetched_at", "raw")
+FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "model", "folder", "fetched_at", "raw")
 DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
