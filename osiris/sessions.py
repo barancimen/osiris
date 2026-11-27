@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator
 from pathlib import Path
 
-from .chats import Chat, Turn, _time
+from .chats import Chat, Turn, _is_file, _time
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def side_file(path: Path) -> bool:
     """A subagent's log, or an omp advisor's, which repeats the session it belongs to: in Claude Code's
     subagents folder, or in the folder omp keeps beside a session's log, named as the log is."""
     folder = path.parent.name
-    return folder == "subagents" or bool(LOG_NAME.fullmatch(folder)) or (path.parent.parent / f"{folder}{SUFFIX}").is_file()
+    return folder == "subagents" or bool(LOG_NAME.fullmatch(folder)) or _is_file(path.parent.parent / f"{folder}{SUFFIX}")
 
 
 def _lines(path: Path) -> Iterator[dict]:

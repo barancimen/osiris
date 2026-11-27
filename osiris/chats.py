@@ -378,6 +378,14 @@ def _kind(value) -> str | None:
 
 # -- files ----------------------------------------------------------------------------------------
 
+def _is_file(path: Path) -> bool:
+    """False for a file that can't be looked at, such as a link into a folder you aren't allowed to read."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def find_files(paths: list[Path]) -> list[Path]:
     """The files given, and the JSON, JSONL and zip files in the folders given and their subfolders. Hidden
     folders are left out, except the ones Claude Code, pi and omp keep their sessions in, where only the
@@ -387,7 +395,7 @@ def find_files(paths: list[Path]) -> list[Path]:
     for p in paths:
         for f in [p] if p.is_file() else p.rglob("*"):
             suffix = f.suffix.lower()
-            if not f.is_file() or suffix not in SUFFIXES:
+            if suffix not in SUFFIXES or not _is_file(f):
                 continue
             hidden = [part for part in f.parts[len(p.parts):] if part.startswith(".")]
             if hidden and (suffix != ".jsonl" or not all(AGENT_FOLDER.fullmatch(part) for part in hidden)):
