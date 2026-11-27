@@ -209,6 +209,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     for stale in store.tmp_dir.glob("*.pdf"):
         if TEMP_DOWNLOAD.fullmatch(stale.name):
             stale.unlink()
+    from .report import RunReport
+    report = None if args.no_summary else RunReport(args.out)  # before failed URLs are queued again
     if args.fixes:
         try:
             uvloop.run(_run_fixes(store, args))
@@ -217,6 +219,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         finally:
             store.commit()
             store.close()
+            if report:
+                print("\n".join(report.finish()))
         return
 
     routes = []
@@ -259,6 +263,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         store.commit()
         print_stats(store)
         store.close()
+        if report:
+            print("\n" + "\n".join(report.finish()))
 
 
 def print_stats(store: Store, failed: bool = False, thin: bool = False) -> None:
@@ -623,6 +629,8 @@ def main() -> None:
     run.add_argument("--fixes", action="store_true",
                      help="instead of the links waiting, carry out the fixes queued on the Documents tab, for those "
                           "documents only, with this run's other options")
+    run.add_argument("--no-summary", action="store_true",
+                     help="don't end with what the run added (the page prints that itself, for the whole job)")
     run.add_argument("--mark-inputs", metavar="FILE",
                      help="once the URLs are queued, record the backup files listed here (from extract_urls.py "
                           "--hashes-out) as read, so that later runs can skip them if they haven't changed")

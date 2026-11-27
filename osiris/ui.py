@@ -30,6 +30,7 @@ from aiohttp import web
 from . import accounts, chats, cleanup, cookies, fixes, review, search, singlefile, tuning, tweetdb, twitter
 from .github import load_token
 from .localfile import candidate_paths
+from .report import RunReport
 from .route import FORUM_LANES, LOCAL_READABLE
 from .scry import load_key
 from .store import (REFRESH, REFRESH_FINISHED, TMP_DIR, Store, fill_missing_titles, md_path, read_doc_file,
@@ -750,7 +751,7 @@ async def scan_folder(request: web.Request) -> web.Response:
 # -- jobs ----------------------------------------------------------------------------------------
 
 def _run_args(options: dict, url_file: Path, every_lane: bool = False) -> list[str]:
-    args = ["run", str(url_file)]
+    args = ["run", str(url_file), "--no-summary"]  # the job sums up what it added itself
     lanes = LANES if every_lane else _chosen_lanes(options)
     if not lanes:
         raise web.HTTPBadRequest(text="Choose at least one kind of source.")
@@ -879,6 +880,14 @@ async def start_archive(request: web.Request) -> web.Response:
     local_on = "localfile" in _chosen_lanes(options)
 
     async def flow(j: Job) -> None:
+        added = await asyncio.to_thread(RunReport, out)  # before the imports, so what they add counts
+        try:
+            await archive(j)
+        finally:
+            for line in await asyncio.to_thread(added.finish):
+                j.log(line)
+
+    async def archive(j: Job) -> None:
         for empty in (url_file, read_files):
             empty.write_text("", encoding="utf-8")
         for folder in config["backups"]:
@@ -972,8 +981,13 @@ def _start_fixes(app: web.Application, keep_log: bool = False) -> None:
         db.close()
 
     async def flow(j: Job) -> None:
-        await j.run("Carrying out fixes", j.osiris(*run_args, "--fixes"))
-        await j.run("Checking the results", j.osiris("review", "scan"))
+        added = await asyncio.to_thread(RunReport, out)
+        try:
+            await j.run("Carrying out fixes", j.osiris(*run_args, "--fixes"))
+            await j.run("Checking the results", j.osiris("review", "scan"))
+        finally:
+            for line in await asyncio.to_thread(added.finish):
+                j.log(line)
 
     # twitterapi.io bills per tweet, so the run only sees that key when you queued a fix that asks for it
     job.start("Fixes", flow, env={} if billed else {BILLED_KEY: None}, keep_log=keep_log)
