@@ -1,6 +1,7 @@
-"""Every tweet of the accounts named in .txt lists, one username per line.
+"""Every tweet of the accounts named in lists, one username per line.
 
-The lists sit in the same folders as the tweet files (tweetdb.py). Each run of the twitter lane
+A list is accounts.txt at the top of a folder of tweet files (tweetdb.py), or a file of any name given
+with --twitter-accounts. Other .txt files in those folders are skipped. Each run of the twitter lane
 takes what is new since the run before, from whichever of these is turned on:
 
 1. twitterapi.io, when TWITTERAPI_IO_KEY is set: the account's timeline, replies included, newest
@@ -36,7 +37,7 @@ from .twitter import KEY_ENV, PAGE_DELAY, Saver, ScryTweets, _api_get, _from_scr
 
 log = logging.getLogger(__name__)
 
-LIST_SUFFIX = ".txt"
+LIST_NAME = "accounts.txt"  # in a folder, the one file read as a list, and only at its top
 LIST_MAX_BYTES = 1 << 20  # a longer file isn't a list of usernames
 LINE = re.compile(r"(?:(?:https?://)?(?:www\.|mobile\.)?(?:x|twitter)\.com/)?@?([A-Za-z0-9_]{1,15})/?(?:\?\S*)?", re.I)
 NOT_ACCOUNTS = {"home", "i", "search", "explore", "settings", "notifications", "messages", "compose", "intent",
@@ -89,12 +90,12 @@ def read_list(path: Path) -> list[str]:
 
 
 def find_lists(paths: list[Path]) -> list[Path]:
-    """The files given, and the .txt files in the folders given, searched recursively."""
+    """The files given, whatever their names, and accounts.txt at the top of each folder given."""
     found = set()
     for p in paths:
-        for f in [p] if p.is_file() else p.rglob(f"*{LIST_SUFFIX}"):
-            if f.is_file() and not any(part.startswith(".") for part in f.parts[len(p.parts):]):
-                found.add(f)
+        f = p if p.is_file() else p / LIST_NAME
+        if f.is_file():
+            found.add(f)
     return sorted(found)
 
 

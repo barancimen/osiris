@@ -58,19 +58,18 @@ def test_a_list_is_usernames_one_per_line(tmp_path: Path):
             accounts.parse_list(f"{line}\n")
 
 
-def test_only_files_that_are_lists_are_read(tmp_path: Path, caplog):
+def test_only_accounts_txt_at_the_top_of_a_folder_is_read(tmp_path: Path, caplog):
     (tmp_path / "sub").mkdir()
-    (tmp_path / "people.txt").write_text("ada\nBob\n")
-    (tmp_path / "sub" / "more.txt").write_text("bob\ncy\n")
-    (tmp_path / "sub" / "README.txt").write_text("This is your Twitter archive.\nOpen Your archive.html to read it.\n")
-    (tmp_path / "typo.txt").write_text("dee\neve adams\nfay\n")
-    (tmp_path / ".hidden").mkdir()
-    (tmp_path / ".hidden" / "x.txt").write_text("gus\n")
+    (tmp_path / "accounts.txt").write_text("ada\nBob\nbob\n")
+    (tmp_path / "people.txt").write_text("cy\n")
+    (tmp_path / "sub" / "accounts.txt").write_text("dee\n")
+    assert accounts.listed([tmp_path]) == ["ada", "Bob"]  # each once, whatever its capitals
+    assert accounts.listed([tmp_path / "people.txt"]) == ["cy"]  # a list named outright can have any name
+    (tmp_path / "accounts.txt").write_text("dee\neve adams\nfay\n")
     with caplog.at_level(logging.INFO):
-        assert accounts.listed([tmp_path]) == ["ada", "Bob", "cy"]  # each once, whatever its capitals
+        assert accounts.listed([tmp_path]) == []
     said = {r.levelname: r.getMessage() for r in caplog.records}
-    assert "README.txt" in said["INFO"] and "typo.txt" in said["WARNING"] and "line 2" in said["WARNING"]
-    assert accounts.listed([tmp_path / "people.txt"]) == ["ada", "Bob"]
+    assert "accounts.txt" in said["WARNING"] and "line 2" in said["WARNING"]
 
 
 # -- twitterapi.io, stood in for by a local server -------------------------------------------------
@@ -426,7 +425,7 @@ def test_the_page_says_what_a_tweet_folder_holds_and_counts_its_accounts(store: 
     folder = tmp_path / "tweets"
     folder.mkdir()
     assert ui._scan_folder(folder, "tweets") == {"ok": False, "summary": "No tweet files or lists of accounts here"}
-    (folder / "people.txt").write_text("ada\nbob\n")
+    (folder / "accounts.txt").write_text("ada\nbob\n")
     (folder / "b.json").write_text(json.dumps([{"id": "20101", "screen_name": "ann", "name": "Ann", "full_text": "hello"}]))
     assert ui._scan_folder(folder, "tweets") == {"ok": True, "summary": "1 bookmarks file, 1 tweets, 2 accounts listed"}
 

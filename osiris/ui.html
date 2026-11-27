@@ -507,9 +507,9 @@ function sourceHelp(source) {
 const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", hackernews: "Hacker News", lesswrong: "LessWrong", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", chat: "AI chats", skip: "Skipped on purpose"};
 const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "hackernews", "lesswrong", "stackexchange", "arxiv", "twitter"];
 const SOURCES = [
-  {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
+  {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and a file named more.txt with one link per line. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files, text and web pages, including pages saved with the SingleFile browser extension. Your files are only read, never changed."},
-  {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A .txt file of usernames, one per line, gets every tweet of those accounts."},
+  {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A file named accounts.txt at the top of the folder, with one username per line, gets every tweet of those accounts."},
   {key: "chats", title: "AI chats", text: "Folders holding Claude's data export with its manifest and zips, conversations saved as .json with the Claude Conversation Exporter extension, and ChatGPT's and DeepSeek's exports. Each conversation is one document, which a newer copy of it updates, so exports that overlap do no harm."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;

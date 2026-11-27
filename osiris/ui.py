@@ -60,6 +60,7 @@ HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 HOST_PATTERN = re.compile(r"[a-z0-9.*?-]+")
 ADDRESS_EVERY = 20  # log lines in the terminal between reminders of the page's address
 STAMPED = re.compile(r"\d\d:\d\d:\d\d ")  # how `osiris` log lines start, so the page doesn't add a second time
+LINK_LIST = "more.txt"  # the one list of links extract_urls.py reads in a tab-backup folder
 TEXT_TYPES = {".txt", ".md", ".markdown", ".rst", ".tex", ".org"}
 HTML_TYPES = {".html", ".htm", ".xhtml"}
 # run options that are numbers: (name, flag, kind, smallest allowed)
@@ -720,11 +721,11 @@ def _scan_folder(path: Path, kind: str) -> dict:
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
         sessions = len(list(path.glob("session-buddy-*.json")))
-        lists = len(list(path.glob("*.txt")))
-        if not bookmarks and not sessions and not lists:
-            return {"ok": False, "summary": "No bookmarks_*.html, session-buddy-*.json or .txt files here"}
+        links = (path / LINK_LIST).is_file()
+        if not bookmarks and not sessions and not links:
+            return {"ok": False, "summary": f"No bookmarks_*.html, session-buddy-*.json or {LINK_LIST} here"}
         return {"ok": True, "summary": f"{_files(bookmarks, 'bookmark')}, {_files(sessions, 'Session Buddy')}"
-                + (f", {_files(lists, 'text')}" if lists else "")}
+                + (f", {LINK_LIST}" if links else "")}
     readable, other = Counter(), 0
     for root, dirs, names in os.walk(path):
         dirs[:] = [d for d in dirs if not d.startswith(".")]

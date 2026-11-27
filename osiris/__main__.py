@@ -193,7 +193,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     if missing := [p for p in lists if not p.exists()]:
         sys.exit(f"not found: {', '.join(map(str, missing))}")
     for path in lists:
-        if path.is_file():  # named outright, so it has to be a list; in a folder, other .txt files are passed over
+        if path.is_file():  # named outright, so it has to be a list; in a folder, only accounts.txt is read
             try:
                 accounts.read_list(path)
             except ValueError as e:
@@ -716,9 +716,9 @@ def main() -> None:
                           "next run (default %(default)s)")
     run.add_argument("--twitter-accounts", action="append", default=[], metavar="PATH",
                      help="also save every tweet of the accounts in this list: a .txt file of usernames, one per line, "
-                          "or a folder searched for such files (repeatable). They come from twitterapi.io if "
-                          f"{BILLED_KEY} is set, and from Scry if it has a key and isn't turned off; with neither, "
-                          "they're skipped. Each run takes what's new")
+                          "or a folder with such a file named accounts.txt at its top (repeatable). They come from "
+                          f"twitterapi.io if {BILLED_KEY} is set, and from Scry if it has a key and isn't turned off; "
+                          "with neither, they're skipped. Each run takes what's new")
     run.add_argument("--twitterapi-max-dollars", type=float, default=accounts.API_DOLLARS, metavar="N",
                      help="stop taking accounts' tweets from twitterapi.io once a run has spent about this much; the "
                           "next run carries on (default %(default)s)")

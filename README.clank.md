@@ -252,7 +252,7 @@ find ~/local_files -type f ! -iname '*.html' ! -iname '*.htm' -print0 | python3 
 
 Web pages are imported as [saved pages](#saved-pages) rather than listed, so a page saved with SingleFile is filed under the address it came from.
 
-`extract_urls.py` rewrites `all_urls.md` each time, so run it first. It reads `bookmarks_*.html`, `session-buddy-*.json` and any `.txt` file directly in the folder, not in subfolders. A `.txt` file is a list you write yourself: one link per line, where only the first word of a line counts and a link without `https://`, such as `example.com/page`, gets it added. Editing a backup file makes the next run read it again, adding only the links that are new. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`. Google's redirect links are replaced by the page they lead to: Scholar's result links (`scholar.google.com/scholar_url?url=…`) and search results (`google.com/url?q=…`), so osiris fetches the paper or page without asking Google. osiris does the same for any such link it's given directly.
+`extract_urls.py` rewrites `all_urls.md` each time, so run it first. It reads `bookmarks_*.html`, `session-buddy-*.json` and `more.txt` directly in the folder, not in subfolders, and skips other `.txt` files. `more.txt` is a list you write yourself: one link per line, where only the first word of a line counts and a link without `https://`, such as `example.com/page`, gets it added. Editing a backup file makes the next run read it again, adding only the links that are new. It keeps web pages and `file://` links, and drops Google except Scholar, Gmail, local servers and browser-internal links such as `chrome://` and `about:`. Google's redirect links are replaced by the page they lead to: Scholar's result links (`scholar.google.com/scholar_url?url=…`) and search results (`google.com/url?q=…`), so osiris fetches the paper or page without asking Google. osiris does the same for any such link it's given directly.
 
 - **Failed URLs:** each gets every fallback pass once and is then left alone until you use `--retry-failed` or `--retry-host`. A pass that couldn't run doesn't count: if the headless browser isn't installed, that pass is skipped with one error and its links wait for a later run.
 - **Routing changes:** every run applies the current routing rules to URLs that aren't archived yet.
@@ -474,9 +474,9 @@ Tweets are matched by ID, so a username that changed doesn't matter. A tweet tha
 
 ### Every tweet of an account
 
-A `.txt` file in the same folders is a list of accounts, one username per line. A line can be `name`, `@name` or a profile link, and `#` starts a comment. `osiris run --twitter-accounts PATH` saves every tweet of those accounts that it can get, where `PATH` is a list or a folder to search for lists. The page passes your **Tweets** folders by itself.
+A file named `accounts.txt` directly in one of these folders is a list of accounts, one username per line. Other `.txt` files are skipped, and so is an `accounts.txt` in a subfolder. A line can be `name`, `@name` or a profile link, and `#` starts a comment. `osiris run --twitter-accounts PATH` saves every tweet of those accounts that it can get, where `PATH` is a list of any name or a folder whose `accounts.txt` is read. The page passes your **Tweets** folders by itself.
 
-A `.txt` file with a line that isn't a username is left alone as a whole, and the log names the line. That keeps a README in the folder from being looked up at a price.
+An `accounts.txt` with a line that isn't a username is left alone as a whole, and the log names the line.
 
 Where the tweets come from depends on what's turned on.
 
