@@ -27,7 +27,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from . import accounts, cleanup, cookies, fixes, review, search, singlefile, tuning, tweetdb, twitter
+from . import accounts, chats, cleanup, cookies, fixes, review, search, singlefile, tuning, tweetdb, twitter
 from .github import load_token
 from .localfile import candidate_paths
 from .route import FORUM_LANES, LOCAL_READABLE
@@ -68,7 +68,7 @@ NUMBER_FLAGS = (("concurrency", "--concurrency", int, 1), ("per_host", "--per-ho
                 ("challenge_wait", "--challenge-wait", float, 0))
 BUILT_IN_HOST_LIMIT = "scholar.google.*"  # `osiris run` always has a rule for this one, so it's edited rather than removed
 DEFAULT_CONFIG = {
-    "backups": [], "local": [], "tweets": [], "last_run": None,  # when the latest archive run started and ended
+    "backups": [], "local": [], "tweets": [], "chats": [], "last_run": None,  # when the latest archive run started and ended
     "options": {"lanes": list(LANES), "forum_lanes_offered": True, "ocr": True, "ocr_lang": "eng", "refresh": "", "retry_failed": False,
                 "review_after": True, "cookies": "", "user_agent": "", "user_agent_edit": False, "render": False,
                 "chrome_profile": "", "keep_raw_pdfs": False, "arxiv_fulltext": True, "workers": "",
@@ -361,7 +361,7 @@ def load_config(out: Path) -> dict:
         saved = json.loads(config_path(out).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return config
-    for key in ("backups", "local", "tweets"):
+    for key in ("backups", "local", "tweets", "chats"):
         if isinstance(saved.get(key), list):
             config[key] = [str(p) for p in saved[key]]
     if isinstance(saved.get("saved"), list):  # saved pages had folders of their own before local files took them too
@@ -629,7 +629,7 @@ async def set_config(request: web.Request) -> web.Response:
     out = request.app["out"]
     body = await request.json()
     config = load_config(out)
-    for key in ("backups", "local", "tweets"):
+    for key in ("backups", "local", "tweets", "chats"):
         if isinstance(body.get(key), list):
             config[key] = [str(p) for p in body[key]]
     config["options"].update({k: v for k, v in body.get("options", {}).items() if k in config["options"]})
@@ -712,6 +712,11 @@ def _scan_folder(path: Path, kind: str) -> dict:
         if handles:
             parts.append(f"{len(handles):,} account{'' if len(handles) == 1 else 's'} listed")
         return {"ok": True, "summary": ", ".join(parts)}
+    if kind == "chats":
+        found = chats.survey([path])
+        if not found:
+            return {"ok": False, "summary": "No chat exports here"}
+        return {"ok": True, "summary": chats.describe(found)}
     if kind == "backups":
         bookmarks = len(list(path.glob("bookmarks_*.html")))
         sessions = len(list(path.glob("session-buddy-*.json")))
@@ -892,6 +897,8 @@ async def start_archive(request: web.Request) -> web.Response:
                 await j.run("Importing saved web pages", j.osiris("import", *folders))
         if config["tweets"]:  # before archiving, so tweets they hold aren't looked up
             await j.run("Importing tweet files", j.osiris("import-tweets", *map(str, tweet_folders)))
+        if config["chats"]:
+            await j.run("Importing AI chats", j.osiris("import-chats", *(str(Path(p).expanduser()) for p in config["chats"])))
         handles = await asyncio.to_thread(accounts.listed, tweet_folders, True) if sources_on else []
         j.plan = _plan(_chosen_lanes(options), options, handles)
         await j.run("Archiving", j.osiris(*run_args, "--mark-inputs", str(read_files), *account_args))

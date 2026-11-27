@@ -1,4 +1,4 @@
-"""CLI: osiris ui | run URLFILE | import PATH | ocr | review | clean | search QUERY | stats | export"""
+"""CLI: osiris ui | run URLFILE | import PATH | import-tweets PATH | import-chats PATH | ocr | review | clean | search QUERY | stats | export"""
 
 from __future__ import annotations
 
@@ -264,7 +264,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 def print_stats(store: Store, failed: bool = False, thin: bool = False) -> None:
     counts = lane_counts(store)
     print(f"\n{'lane':<14}{'total':>8}" + "".join(f"{s:>9}" for s in STATUSES))
-    for lane in (*LANES, "singlefile", "skip"):
+    for lane in (*LANES, "singlefile", "chat", "skip"):
         c = counts.get(lane)
         if c:
             print(f"{lane:<14}{sum(c.values()):>8}" + "".join(f"{c[s]:>9}" for s in STATUSES))
@@ -325,6 +325,22 @@ def cmd_import(args: argparse.Namespace) -> None:
 
 def cmd_import_tweets(args: argparse.Namespace) -> None:
     from .tweetdb import import_files
+
+    paths = [Path(p).expanduser() for p in args.paths]
+    if missing := [p for p in paths if not p.exists()]:
+        sys.exit(f"not found: {', '.join(map(str, missing))}")
+    store = Store(args.out)
+    try:
+        import_files(store, paths)
+    except KeyboardInterrupt:
+        log.warning("interrupted: progress is saved, re-run the same command to resume")
+    finally:
+        store.commit()
+        store.close()
+
+
+def cmd_import_chats(args: argparse.Namespace) -> None:
+    from .chats import import_files
 
     paths = [Path(p).expanduser() for p in args.paths]
     if missing := [p for p in paths if not p.exists()]:
@@ -592,7 +608,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 # The commands that write to the archive, which mark it as busy while they run (see store.archiving).
-WRITERS = (cmd_run, cmd_import, cmd_import_tweets, cmd_ocr, cmd_clean)
+WRITERS = (cmd_run, cmd_import, cmd_import_tweets, cmd_import_chats, cmd_ocr, cmd_clean)
 
 
 def main() -> None:
@@ -724,6 +740,13 @@ def main() -> None:
     tweets.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     tweets.set_defaults(func=cmd_import_tweets)
 
+    chats = sub.add_parser("import-chats", help="store conversations from Claude's, ChatGPT's and DeepSeek's data "
+                           "exports and the Claude Conversation Exporter extension as markdown, one document per "
+                           "conversation, updated when a newer copy turns up")
+    chats.add_argument("paths", nargs="+", help="directories (searched recursively for .json/.zip) or files")
+    chats.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    chats.set_defaults(func=cmd_import_chats)
+
     ocr = sub.add_parser("ocr", help="read PDFs with no text layer (scans) with tesseract; slow, resumable")
     ocr.add_argument("--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
     ocr.add_argument("--lang", default=OCR_LANG, help=f"tesseract languages, e.g. eng+tur (default {OCR_LANG})")
@@ -753,7 +776,7 @@ def main() -> None:
                       help='words that must all appear; "quoted words" together; -word must not appear, '
                            "so quote a query that has one: osiris search 'transformer -attention'")
     find.add_argument("--out", default=DEFAULT_OUT)
-    find.add_argument("--lane", choices=(*LANES, "singlefile"), help="only documents from this lane")
+    find.add_argument("--lane", choices=(*LANES, "singlefile", "chat"), help="only documents from this lane")
     find.add_argument("--limit", type=int, default=20, help="matches to show (default 20)")
     find.add_argument("--json", action="store_true", help="one JSON object per match, for other tools")
     find.set_defaults(func=cmd_search)

@@ -22,7 +22,7 @@ CRAWL_SOURCE = "scry:crawl"
 
 def methods_for(doc_key: str, lane: str, scry: bool, browser: bool) -> list[str]:
     """The ways this document can be fetched again, the usual way first."""
-    if lane == "singlefile":  # nowhere to go back to
+    if lane in ("singlefile", "chat"):  # nowhere to go back to
         return []
     found = ["again"]
     if lane == "generic" and doc_key.startswith(("http://", "https://")):

@@ -424,6 +424,7 @@ const LANE_HELP = {
   arxiv: "arXiv papers: title, authors, summary and the full text.",
   twitter: "Posts on X (Twitter), from archives that keep copies of them.",
   singlefile: "Pages you saved yourself with the SingleFile browser extension.",
+  chat: "Your conversations with Claude, ChatGPT and DeepSeek, from their exports.",
   skip: "Links left alone on purpose, like chat links, profiles and image files.",
 };
 const VIEW_HELP = {
@@ -469,7 +470,7 @@ const term = (text, explanation) => explanation ? h("span", {class: "term", titl
 // where a document's text came from, from its source label (pdf:wayback, file:pdf:ocr, reddit:scry+arctic_shift, ...)
 const SOURCE_WHAT = {
   html: "Text taken from the web page", pdf: "Text taken from a PDF on the web", text: "A plain text file on the web",
-  singlefile: "A page you saved with the SingleFile extension", html_file: "A saved web page",
+  singlefile: "A page you saved with the SingleFile extension", html_file: "A saved web page", chat: "Your conversation",
   doi: "The paper's title, authors and summary, found through its DOI", scry: "Text from Scry's archive", arxiv_abstract: "The paper's title, authors and summary from arXiv",
   github: "The repository's description and README", reddit: "The post and its comments", tweet: "The post",
   hackernews: "The discussion and its comments", lesswrong: "The post and its comments",
@@ -486,9 +487,10 @@ const SOURCE_HOW = {
   ocr: "read from pictures of the pages (OCR)", transcript: "the video's captions", auto: "made automatically by YouTube",
   manual: "written by people", metadata: "the title and description only", playlist: "the playlist's title and video titles",
   channel: "the channel's title and video titles", api: "from the official API",
-  import: "from a tweet file you imported",
+  import: "from a tweet file you imported", extension: "saved with the Claude Conversation Exporter extension",
 };
-const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io"};
+const PROVIDER = {scry: "Scry's archive", arctic_shift: "Arctic Shift", openalex: "OpenAlex", twitterapi: "twitterapi.io",
+                  claude: "Claude", chatgpt: "ChatGPT", deepseek: "DeepSeek"};
 function sourceHelp(source) {
   if (!source) return "";
   let parts = source.split(":"), first;
@@ -502,12 +504,13 @@ function sourceHelp(source) {
 }
 
 /* ---- archive tab ---- */
-const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", hackernews: "Hacker News", lesswrong: "LessWrong", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", skip: "Skipped on purpose"};
+const LANE_LABEL = {generic: "Web pages and PDFs", localfile: "Local files", youtube: "YouTube", github: "GitHub", reddit: "Reddit", hackernews: "Hacker News", lesswrong: "LessWrong", stackexchange: "Stack Exchange", arxiv: "arXiv", twitter: "X (Twitter)", singlefile: "Saved pages", chat: "AI chats", skip: "Skipped on purpose"};
 const RUN_LANES = ["generic", "localfile", "youtube", "github", "reddit", "hackernews", "lesswrong", "stackexchange", "arxiv", "twitter"];
 const SOURCES = [
   {key: "backups", title: "Tab backups", text: "Folders of bookmarks_*.html and session-buddy-*.json files, and .txt files with one link per line. URLs are extracted for you."},
   {key: "local", title: "Local files", text: "Folders of PDFs, DjVu files, ebooks, Word files, text and web pages, including pages saved with the SingleFile browser extension. Your files are only read, never changed."},
   {key: "tweets", title: "Tweets", text: "Folders holding any of these: Twitter's export as the .zip it comes in, bookmarks saved with twitter-web-exporter as .json or .html, Community Archive .json files, and SQLite files. A .txt file of usernames, one per line, gets every tweet of those accounts."},
+  {key: "chats", title: "AI chats", text: "Folders holding Claude's data export with its manifest and zips, conversations saved as .json with the Claude Conversation Exporter extension, and ChatGPT's and DeepSeek's exports. Each conversation is one document, which a newer copy of it updates, so exports that overlap do no harm."},
 ];
 let config = null, lastState = null, logSeen = 0, jobKey = null;
 const scans = {};
@@ -551,7 +554,7 @@ function renderArchive() {
     h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
-  for (const key of ["backups", "local", "tweets"]) for (const p of config[key]) scanFolder(key, p);
+  for (const key of ["backups", "local", "tweets", "chats"]) for (const p of config[key]) scanFolder(key, p);
   checkCookies();
 }
 
@@ -1326,7 +1329,7 @@ const Docs = {
                 if (indexed) timer = setTimeout(refresh, 250); else if (!this.text.trim()) refresh();  // emptied: back to the list
               }, onkeydown: now})),
           h("div", {class: "tool-row"},
-            h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
+            h("select", {"aria-label": "Source", title: help("doc-lane"), onchange: e => { this.lane = e.target.value; this.reason = ""; refresh(); }}, h("option", {value: ""}, "All sources"), [...RUN_LANES, "singlefile", "chat"].map(l => h("option", {value: l, title: LANE_HELP[l]}, LANE_LABEL[l]))),
             h("select", {"aria-label": "Status", id: "doc-status", title: help("doc-status"), onchange: e => { this.status = e.target.value; this.reason = ""; refresh(); }}, [["", "Any status"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["pending", "Waiting"]].map(([v, l]) => h("option", {value: v, title: v ? help("status-" + v) : ""}, l))),
             h("select", {"aria-label": "Why it failed", id: "doc-reason", title: help("doc-reason"), hidden: true, onchange: e => { this.reason = e.target.value; refresh(); }}),
             h("select", {"aria-label": "Decision", id: "doc-decision", title: help("doc-decision"), onchange: e => { this.decision = e.target.value; refresh(); }}, DECISION_FILTERS.map(([v, l]) => h("option", {value: v, title: VIEW_HELP[v] || ""}, l))),
@@ -1531,7 +1534,7 @@ const Docs = {
       btn("Fine", "fine"), btn("Bad", "bad"),
       btn("OCR it", "ocr", d.pdf ? "" : "Only for PDFs and DjVu files: OCR reads pictures of their pages.", () => $("#ocr-lang")?.value, usual),
       d.pdf && langs.length > 1 && h("select", {id: "ocr-lang", style: "flex:none;width:auto", "aria-label": "OCR language", title: help("ocr-lang")}, langs.map(l => h("option", {value: l, selected: l === chosenLang}, l))),
-      btn("Fetch again", "refetch", ways.length ? "" : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
+      btn("Fetch again", "refetch", ways.length ? "" : d.lane === "chat" ? "A chat can't be fetched. Import a newer export of it instead." : "A saved page has nowhere to be fetched from again. Import it again instead.", () => $("#fix-method")?.value, "again"),
       ways.length > 1 && h("select", {id: "fix-method", style: "flex:none;width:auto", "aria-label": "How to fetch it again", title: help("fix-method")}, ways.map(m => h("option", {value: m, selected: m === chosenWay, title: help("method-" + m)}, methodLabel(m, d.lane)))),
       btn("Can't fix", "unfixable"),
       d.decision && h("button", {class: "btn", title: help("decide-undo"), onclick: guarded(() => this.decide(null))}, "Undo"),

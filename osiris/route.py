@@ -49,7 +49,13 @@ LOCAL_READABLE = {"pdf", "djvu", "djv", "html", "htm", "xhtml", "txt", "md", "ma
                   "docx", "epub", "mobi", "azw", "azw3"}
 
 # Logged-in chat apps: conversations are private and the pages are JS shells.
-PRIVATE_APP_HOSTS = {"chatgpt.com", "chat.openai.com", "claude.ai", "grok.com", "gemini.google.com"}
+PRIVATE_APP_HOSTS = {"chatgpt.com", "chat.openai.com", "claude.ai", "grok.com", "gemini.google.com", "chat.deepseek.com"}
+# A link to a conversation is never fetched, but shares the document of the conversation imported from an
+# export (chats.py): host -> (name in the doc key, the conversation's ID in the path)
+CHATGPT_PATH = re.compile(r"^(?:/g/[^/]+)?/c/([0-9a-f-]{36})/?$", re.I)
+CHAT_LINKS = {"claude.ai": ("claude", re.compile(r"^/chat/([0-9a-f-]{36})/?$", re.I)),
+              "chatgpt.com": ("chatgpt", CHATGPT_PATH), "chat.openai.com": ("chatgpt", CHATGPT_PATH),
+              "chat.deepseek.com": ("deepseek", re.compile(r"^/a/chat/s/([0-9a-f-]{36})/?$", re.I))}
 
 MEDIA_EXTS = {
     "jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp", "tif", "tiff", "avif", "heic",
@@ -76,6 +82,10 @@ class Route:
 
 def doc_id(doc_key: str) -> str:
     return hashlib.sha1(doc_key.encode()).hexdigest()[:16]
+
+
+def chat_key(provider: str, conversation_id: str) -> str:
+    return f"chat:{provider}:{conversation_id.lower()}"
 
 
 def extract_url(line: str) -> str | None:
@@ -173,7 +183,9 @@ def _route(found: str) -> Route:
     if _is_local(host):
         return Route(url, "skip", reason="local")
     if bare in PRIVATE_APP_HOSTS:
-        return Route(url, "skip", reason="private_app")
+        provider, pattern = CHAT_LINKS.get(bare, (None, None))
+        m = pattern.match(path) if pattern else None
+        return Route(url, "skip", doc_key=chat_key(provider, m.group(1)) if m else None, reason="private_app")
     if bare in GITHUB_HOSTS:
         return _route_github(url, bare, path)
     if YOUTUBE_HOST.search(host):

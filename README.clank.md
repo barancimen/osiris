@@ -31,7 +31,7 @@ Optional system and Python extras:
 
 `osiris ui` opens one page with two tabs, **Archive** and **Documents**. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
-- **Archive:** add folders of tab backups, local files and tweet files with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports tweet files and the web pages in your local folders, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. An account in a list of accounts counts as one item, done when the run has taken all its new tweets. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
+- **Archive:** add folders of tab backups, local files, tweet files and AI chats with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports tweet files, AI chats and the web pages in your local folders, archives everything and checks for garbage, showing a live log and a progress bar with the time left. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. An account in a list of accounts counts as one item, done when the run has taken all its new tweets. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
 - **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them.
 - **Documents:** everything you've saved, with garbage scores and ways to fix each document. Titles are saved as each document is, so they show and can be searched straight away. Two boxes and five filters narrow the list together: a document shows only if it passes every one. The first box wants every word in the title or URL, in any order; `site:example.com` keeps that site and its subdomains, and several `site:` words mean any of them. The second box, **Inside documents**, searches the saved text alone. The filters are source, status, reason and decision, plus a row of tag ticks for the garbage check's tags (block page, encoding, few common words, odd words, symbols, no spaces, repeated lines), as shown on each document. A document shows if any of its tags is ticked; with **All tags** ticked, documents with no tag show too, including ones never checked. All are ticked at first, which leaves nothing out. Clicking **All tags** ticks or unticks every tag, while a single tag never changes it, so All tags with nothing else ticked lists only the untagged documents. The list loads more as you scroll to its end, adding rows below without moving what you're looking at. While a job runs it refreshes itself every 10 seconds and once when the job ends, keeping as many rows as you've loaded and the row at the top of your view in place; the open document isn't redrawn, and a text search without the index isn't repeated, since it reads every file. **All bad** and **All fine** apply to the same filters, and are hidden while the text box is in use. **Review** sorts whatever is listed by garbage score, worst first, keeping your search and filters; the number on it counts documents flagged and not decided yet. See [Finding garbage](#finding-garbage). **Delete…** removes a document's saved text and osiris's copy of its original for good, after asking. Its links stay in the manifest marked `deleted`, so later runs don't fetch them again from your tab backups. Your own files, such as local files and saved pages, are never touched. It waits while a job is running. With `--search-index`, the text box uses the index, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
@@ -185,7 +185,7 @@ If the web page is updating the index at the time, `osiris search` waits for it 
 
 ## Your originals
 
-Nothing in osiris deletes, moves or changes your local files, tab backups or saved pages. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
+Nothing in osiris deletes, moves or changes your local files, tab backups, saved pages or chat exports. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
 
 - **Guard:** every osiris process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`osiris/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium and DjVuLibre's tools only read.
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
@@ -202,6 +202,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups or sav
 | `osiris run [FILE]` | Fetches and extracts every pending URL. `FILE` defaults to `all_urls.md`, and `/dev/stdin` works |
 | `osiris import DIR [DIR\|FILE ...]` | Stores web pages saved as HTML files, such as SingleFile's. See [Saved pages](#saved-pages) |
 | `osiris import-tweets DIR [DIR\|FILE ...]` | Stores tweets from Twitter's export zips, bookmark exports, Community Archive files and `fetch_tweets.py`'s databases. See [Tweet files and account lists](#tweet-files-and-account-lists) |
+| `osiris import-chats DIR [DIR\|FILE ...]` | Stores conversations from Claude's, ChatGPT's and DeepSeek's exports and the Claude Conversation Exporter extension. See [AI chats](#ai-chats) |
 | `osiris ocr` | Runs only OCR, with `--retry` and `--limit` |
 | `osiris clean` | Repairs text in documents already archived. `--dry-run`, `--undo`. See [Text cleanup](#text-cleanup) |
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
@@ -289,7 +290,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | `generic` | Everything else | Async fetch, then trafilatura for pages and pypdfium2 for PDFs, then the fallback passes |
 | `skip` | See below | Recorded, not fetched |
 
-`skip` covers GitHub user, organization and site pages, other YouTube pages (search, feeds, Watch Later, Liked), unreadable local files, private chat links (ChatGPT, Claude, Grok), X profiles, media files and local hosts.
+`skip` covers GitHub user, organization and site pages, other YouTube pages (search, feeds, Watch Later, Liked), unreadable local files, links to chats (ChatGPT, Claude, DeepSeek, Grok), X profiles, media files and local hosts.
 
 All links into one GitHub repo share one document, so a link to a file or issue stores the repo's README, not that file or issue.
 
@@ -487,13 +488,39 @@ Where the tweets come from depends on what's turned on.
 
 Each run takes only what's new. twitterapi.io is read down to the newest tweet of the last finished walk, which costs one page per account when nothing is new, and Scry is asked only for tweets that aren't saved yet. How far each account has got is kept in the manifest, so a run that was stopped carries on without paying for the same pages again. These documents have `source: tweet:twitterapi` or `tweet:scry`.
 
+## AI chats
+
+`osiris import-chats DIR [DIR|FILE ...]` stores your conversations with Claude, ChatGPT and DeepSeek, one document per conversation. On the page, add the folders under **AI chats**, and each archive run imports them first. These files are read, in the folders given and their subfolders:
+
+| File | What is read |
+|---|---|
+| Claude's data export | `conversations.json`, inside the `conversations-000.zip` parts its manifest lists or the single zip older exports came as. The manifest's links expire after a day, so download every part at once. Projects, memories and artifacts aren't read yet |
+| The [Claude Conversation Exporter](https://github.com/socketteer/Claude-Conversation-Exporter) extension | Its JSON files, one conversation each, or the zip its bulk export makes. Its Markdown and plain text files aren't read |
+| ChatGPT's data export | `conversations.json`, or the `conversations-000.json` files newer exports split it into, loose or in the zip |
+| DeepSeek's data export | The files in `chat_sessions/`, one per conversation |
+
+Zips are read where they are, without unpacking them, and nothing in the folders is changed.
+
+A conversation is known by its own ID, the one in its address, so its copies in several exports, or in an export and the extension's files, make one document. Exports that overlap do no harm, and every export you download can stay in the same folder.
+
+- The newest copy is kept, whatever order the files are read in. That's the copy with the newest message, then the one updated last. A copy with fewer messages than the one saved never replaces it.
+- Of two copies from the same moment, the extension's is kept, since it records which branch of the conversation you were on. The official export doesn't, so for its copies the branch is the one ending in the newest message.
+- A conversation that has gone on since it was last imported is written again from the newer copy. One you've since deleted on the site keeps its document, and one deleted from the archive with **Delete…** isn't brought back.
+- A file read before is skipped unless it has changed. When a new version of osiris writes chats differently, every file is read again and every document rewritten.
+
+A document holds the branch you were on, with a heading for each turn saying who wrote it, when, in UTC, and for ChatGPT which model. It has your messages and the replies, text you attached, files and artifacts Claude wrote, and a line for each web search and page read, with the addresses Claude cited at the end of its reply. Thinking, tool output, images and the system text the sites add are left out. ChatGPT's hidden citation markers are removed, while the names and links they marked keep their words. The extension's copies also name the model in the front matter, and a later export that replaces such a copy keeps it.
+
+Documents have `source: chat:claude`, `chat:claude:extension`, `chat:chatgpt` or `chat:deepseek`, and the conversation's address, so the Documents tab links to the live chat. **Fetch again** doesn't apply to them. Import a newer export instead. Links to conversations in your tab backups are never fetched, and share the conversation's document once it's imported.
+
+If a site changes its format, the parts osiris doesn't know are left out and named in the log, and a conversation that can't be read is counted and skipped without stopping the rest.
+
 ## Output
 
 Everything goes in `data/`.
 
 | Path | Contents |
 |---|---|
-| `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path. Also how far each listed account's tweets have been taken |
+| `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path. Also how far each listed account's tweets have been taken, which copy of each AI chat is saved, and which chat exports have been read |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source, and `raw` when an original was kept) and the markdown body |
 | `corpus.jsonl` | Written by `osiris export` |
 | `review.sqlite` | Garbage scores and your review decisions. An archive's older `audit.sqlite` is renamed to this when it's first opened |
@@ -513,7 +540,7 @@ Everything goes in `data/`.
 | `failed` | No text. `reason` says why |
 | `skipped` | Deliberately not fetched |
 
-`source` records where the text came from, for example `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `tweet:import`, `github:api`, `youtube:transcript:auto` or `file:pdf`.
+`source` records where the text came from, for example `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `tweet:import`, `chat:claude`, `github:api`, `youtube:transcript:auto` or `file:pdf`.
 
 Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 1536), which are replaced every 500 documents and rebuilt after a crash. Only the document that crashed a worker is lost.
 

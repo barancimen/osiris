@@ -97,13 +97,27 @@ CREATE TABLE IF NOT EXISTS twitter_accounts (  -- accounts whose every tweet is 
     scry_after INTEGER,  -- Scry: every tweet it has up to this id has been taken
     scry_count INTEGER   -- Scry: how many tweets it had up to there, to notice older ones turning up later
 );
+CREATE TABLE IF NOT EXISTS chats (  -- the copy of each conversation that chats.py saved, by doc key
+    doc_key  TEXT PRIMARY KEY,
+    newest   TEXT,     -- its newest message, in any branch
+    updated  TEXT,     -- the conversation's own updated time
+    messages INTEGER,  -- in every branch
+    rank     INTEGER,  -- 1 if it knew the branch you were on, as the extension's copies do
+    reader   INTEGER,  -- chats.READER when it was written
+    model    TEXT      -- the model it named, kept for later copies that don't
+);
+CREATE TABLE IF NOT EXISTS chat_files (  -- chat exports read through, by chats.READER and content
+    key     TEXT PRIMARY KEY,
+    name    TEXT,
+    read_at TEXT
+);
 """
 MIGRATIONS = {"dedup_key": "ALTER TABLE urls ADD COLUMN dedup_key TEXT",
               "raw_path": "ALTER TABLE urls ADD COLUMN raw_path TEXT",
               "tried": "ALTER TABLE urls ADD COLUMN tried TEXT NOT NULL DEFAULT ''",
               "title": "ALTER TABLE urls ADD COLUMN title TEXT"}
 
-FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "fetched_at", "raw")
+FRONT_MATTER_KEYS = ("id", "url", "final_url", "source", "title", "author", "date", "site", "model", "fetched_at", "raw")
 DONE = ("ok", "thin")
 TMP_DIR = ".osiris-tmp"
 REFRESH = "refresh"  # in `tried`: this PDF is done in a refresh that hasn't finished
@@ -232,19 +246,20 @@ class Store:
     def add(self, routes: Iterable[Route]) -> tuple[int, int]:
         """Queue routes whose dedup key isn't in the manifest yet. Returns (added, already known).
         A link to a tweet already in the manifest, under another username, is recorded with that
-        tweet's state rather than queued, so it isn't fetched again."""
+        tweet's state rather than queued, so it isn't fetched again. So is a link to a conversation
+        imported from a chat export."""
         known = {key for (key,) in self.db.execute("SELECT dedup_key FROM urls")}
-        tweets = {row[0]: row[1:] for row in self.db.execute(
+        shared = {row[0]: row[1:] for row in self.db.execute(
             "SELECT doc_key, lane, status, reason, http_status, final_url, chars, title, tried FROM urls"
-            " WHERE doc_key LIKE 'tweet:%' GROUP BY doc_key")}
+            " WHERE doc_key LIKE 'tweet:%' OR doc_key LIKE 'chat:%' GROUP BY doc_key")}
         rows, aliases, seen = [], [], 0
         for r in routes:
             if r.dedup_key in known:
                 seen += 1
                 continue
             known.add(r.dedup_key)
-            if r.doc_key in tweets:
-                aliases.append((r.url, r.doc_key, r.doc_id, now_iso(), r.dedup_key, *tweets[r.doc_key]))
+            if r.doc_key in shared:
+                aliases.append((r.url, r.doc_key, r.doc_id, now_iso(), r.dedup_key, *shared[r.doc_key]))
                 continue
             status = "skipped" if r.lane == "skip" else "pending"
             rows.append((r.url, r.lane, r.doc_key, r.doc_id, status, r.reason, now_iso(), r.dedup_key))
@@ -299,11 +314,11 @@ class Store:
         thin ones whose lane changed (e.g. Reddit posts that failed in the generic lane before
         the Reddit lane existed), and GitHub links and local files skipped before their lane or
         format was supported.
-        Finished documents and imported pages are never touched."""
+        Finished documents, imported pages and imported chats are never touched."""
         changed = []
         for url, lane, doc_key, reason, status in self.db.execute(
             "SELECT url, lane, doc_key, reason, status FROM urls"
-            " WHERE (status IN ('pending', 'failed', 'thin') AND lane != 'singlefile')"
+            " WHERE (status IN ('pending', 'failed', 'thin') AND lane NOT IN ('singlefile', 'chat'))"
             " OR (status = 'skipped' AND reason IN ('github', 'local_other'))"
         ).fetchall():
             r = route_fn(url)
@@ -455,15 +470,16 @@ class Store:
         return dict(zip(("url", "lane", "doc_key", "status", "chars"), row)) if row else None
 
     def record_import(self, url: str, doc_key: str, dedup_key: str, status: str, reason: str | None, chars: int,
-                      final_url: str | None) -> None:
-        """A saved page now holds this document, for every URL that shares it."""
-        self.db.execute("INSERT OR IGNORE INTO urls (url, lane, status, dedup_key) VALUES (?, 'singlefile', ?, ?)",
-                        (url, status, dedup_key))
+                      final_url: str | None, lane: str = "singlefile") -> None:
+        """A saved page, or another file you imported, now holds this document, for every URL that shares it."""
+        self.db.execute("INSERT OR IGNORE INTO urls (url, lane, status, dedup_key) VALUES (?, ?, ?, ?)",
+                        (url, lane, status, dedup_key))
         self.db.execute(
-            "UPDATE urls SET lane = 'singlefile', doc_key = ?, doc_id = ?, status = ?, reason = ?, chars = ?,"
+            "UPDATE urls SET lane = ?, doc_key = ?, doc_id = ?, status = ?, reason = ?, chars = ?,"
             " final_url = ?, http_status = NULL, tried = '', updated_at = ?, attempts = attempts + 1, title = ?"
             " WHERE url = ? OR doc_key = ?",
-            (doc_key, doc_id(doc_key), status, reason, chars, final_url, now_iso(), self.title_of(doc_id(doc_key)), url, doc_key),
+            (lane, doc_key, doc_id(doc_key), status, reason, chars, final_url, now_iso(), self.title_of(doc_id(doc_key)),
+             url, doc_key),
         )
         if time.monotonic() - self._last_commit > 1.0:
             self.commit()

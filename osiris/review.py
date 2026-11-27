@@ -44,7 +44,8 @@ DECISIONS = ("fine", "bad", "ocr", "refetch", "unfixable")
 EXCLUDE_FILE = "review-exclude.txt"
 DB_FILE = "review.sqlite"
 OLD_NAMES = ("audit.sqlite", "audit-exclude.txt")  # before review was called review everywhere
-CANNOT_REFETCH = "singlefile"
+CANNOT_REFETCH = {"singlefile": "A saved page can only be imported again",  # lane: why, as the note says
+                  "chat": "A chat can only come from a newer export"}
 
 # The most frequent words of the languages expected here. Ordinary prose is around 40% these; text
 # from a broken PDF font map is close to none.
@@ -75,7 +76,7 @@ BLOCK_PAGE = re.compile(
 WORD = re.compile(r"[^\W\d_]+")
 MIXED_TOKEN = re.compile(r"\b[^\W\d_]+\d+[^\W\d_]+\b|\b\w*[a-zçğıöşü][A-ZÇĞİÖŞÜ][a-zçğıöşü]\w*\b")
 VOWELS = frozenset("aeiouyıöüäéèêàáíóúâîûAEIOUYIÖÜÄÉÈÊÀÁÍÓÚÂÎÛİ")
-CODE_LANES = ("github", "stackexchange")  # code is meant to look like this
+CODE_LANES = ("github", "stackexchange", "chat")  # code is meant to look like this
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scores (
@@ -522,9 +523,8 @@ def prepare_refetch(store: Store, db: sqlite3.Connection, fixes: list[tuple[str,
     method fetches them from scratch. Returns the (doc_key, lane, method) that can go ahead."""
     ready = []
     for key, lane, method in fixes:
-        if lane == CANNOT_REFETCH:  # no source to go back to, so queueing it would only strand it
-            db.execute("UPDATE decisions SET decision = 'bad', note = 'A saved page can only be imported again'"
-                       " WHERE doc_id = ?", (doc_id(key),))
+        if lane in CANNOT_REFETCH:  # no source to go back to, so queueing it would only strand it
+            db.execute("UPDATE decisions SET decision = 'bad', note = ? WHERE doc_id = ?", (CANNOT_REFETCH[lane], doc_id(key)))
             continue
         _keep_for_refetch(store, db, key)
         if method in fetched_like_new:
