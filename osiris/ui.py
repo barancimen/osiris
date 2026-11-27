@@ -1356,6 +1356,55 @@ async def failures_list(request: web.Request) -> web.Response:
         max(int(q.get("offset", 0)), 0), min(max(int(q.get("limit", REPORT_PAGE)), 1), MAX_FAILURE_ROWS)))
 
 
+SOURCE_STATUSES = ("pending", "ok", "thin", "failed", "skipped")
+SCHOLAR_LINKS = "(u.url LIKE 'https://scholar.google.%' OR u.url LIKE 'http://scholar.google.%')"
+
+
+def _source_rows(out: Path, lane: str, status: str, host: str, offset: int, limit: int) -> dict:
+    """One row of the By source card: its links counted by status, as the card counts them, and a page of
+    those with one status, newest first. `scholar` is the Google Scholar row, and `arxiv_fulltext` the arXiv
+    full text row, which counts papers by whether their full text has been looked for."""
+    db = read_manifest(out)
+    db.create_function("site", 1, lambda url: (urlsplit(url).hostname or "local file") if url else "", deterministic=True)
+    try:
+        if lane == "arxiv_fulltext":
+            base = ("SELECT MIN(u.doc_id) AS doc_id, MIN(u.url) AS url, 'arxiv' AS lane, NULL AS reason, MAX(u.chars) AS chars,"
+                    " MAX(u.title) AS title, MAX(u.updated_at) AS at, MIN(u.rowid) AS rid,"
+                    " CASE WHEN MAX(instr(u.tried, ?) > 0) = 0 THEN 'pending' WHEN MAX(u.chars) >= ? THEN 'ok' ELSE 'thin' END AS status"
+                    " FROM urls u WHERE u.lane = 'arxiv' AND u.status = 'ok' GROUP BY u.doc_key")
+            params: list = [f",{FULLTEXT}", ABSTRACT_ONLY_CHARS]
+        else:
+            base = ("SELECT u.doc_id, u.url, u.lane, u.reason, u.chars, u.title, u.updated_at AS at, u.rowid AS rid, u.status"
+                    f" FROM urls u WHERE {SCHOLAR_LINKS if lane == 'scholar' else 'u.lane = ?'}")
+            params = [] if lane == "scholar" else [lane]
+        counts = dict(db.execute(f"SELECT status, COUNT(*) FROM ({base}) GROUP BY status", params))
+        hosts = db.execute(f"SELECT site(url) AS h, COUNT(*) FROM ({base}) WHERE status = ? GROUP BY h ORDER BY 2 DESC, h LIMIT 300",
+                           (*params, status)).fetchall()
+        where, extra = "status = ?", [status]
+        if host:
+            where += " AND site(url) = ?"
+            extra.append(host)
+        total = db.execute(f"SELECT COUNT(*) FROM ({base}) WHERE {where}", (*params, *extra)).fetchone()[0]
+        rows = db.execute(f"SELECT doc_id, url, lane, reason, chars, title, at FROM ({base}) WHERE {where}"
+                          " ORDER BY at DESC, rid DESC LIMIT ? OFFSET ?", (*params, *extra, limit, offset)).fetchall()
+    finally:
+        db.close()
+    return {"counts": counts, "hosts": hosts, "total": total, "items": [
+        {"id": did, "url": url, "lane": row_lane, "reason": reason, "chars": chars, "title": title or None, "at": at,
+         "host": urlsplit(url).hostname or "local file"}
+        for did, url, row_lane, reason, chars, title, at in rows]}
+
+
+async def source_list(request: web.Request) -> web.Response:
+    q = request.query
+    status = q.get("status", "")
+    if status not in SOURCE_STATUSES or not q.get("lane"):
+        raise web.HTTPBadRequest(text="Unknown source or status.")
+    return web.json_response(await asyncio.to_thread(
+        _source_rows, request.app["out"], q["lane"], status, q.get("host", ""),
+        max(int(q.get("offset", 0)), 0), min(max(int(q.get("limit", REPORT_PAGE)), 1), MAX_FAILURE_ROWS)))
+
+
 async def reasons(request: web.Request) -> web.Response:
     """Why documents failed, most common first, with the sites each reason hits most."""
     lane = request.query.get("lane", "")
@@ -1691,6 +1740,7 @@ def make_app(out: str | os.PathLike, search_index: bool = False) -> web.Applicat
         web.get("/api/search", search_documents),
         web.get("/api/reasons", reasons),
         web.get("/api/failures", failures_list),
+        web.get("/api/source", source_list),
         web.get("/api/document/{id}", document),
         web.get("/original/{id}", original),
         web.get("/saved/{id}", raw_text),

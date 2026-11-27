@@ -122,6 +122,7 @@ td.zero { color: var(--line-strong); }
 .segments button { background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 8px; cursor: pointer; color: var(--muted); font-size: 14px; }
 .segments button:hover { background: var(--sunk); }
 .segments button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: 650; }
+.segments button:disabled { opacity: .45; cursor: default; background: none; }
 .tool-row { display: flex; gap: 4px 6px; align-items: center; flex-wrap: wrap; }
 .tool-row select, .tool-row input { min-width: 0; flex: 1; }
 .tool-row select { min-width: 8.5em; }  /* wrap to a new line rather than cut off the choice */
@@ -192,7 +193,7 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 .retry-list .chip { cursor: default; padding-right: 4px; }
 .retry-list .chip button { background: none; border: 0; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 15px; line-height: 1; }
 #report { width: min(960px, calc(100vw - 32px)); }
-#fail-list { width: min(860px, calc(100vw - 32px)); }
+#fail-list, #source-list { width: min(860px, calc(100vw - 32px)); }
 .fail-row { cursor: pointer; }
 .fail-row:hover { background: var(--sunk); }
 .fail-group td { font-weight: 650; }
@@ -240,6 +241,7 @@ mark.here { background: var(--warn); color: var(--panel); box-shadow: 0 0 0 1px 
 <dialog id="picker"></dialog>
 <dialog id="report" aria-label="Cleanup report"></dialog>
 <dialog id="fail-list" aria-label="Failed documents"></dialog>
+<dialog id="source-list" aria-label="Documents of one source"></dialog>
 <div id="toast" role="status"></div>
 <script>
 "use strict";
@@ -566,7 +568,7 @@ function renderArchive() {
         onclick: guarded(() => api("/api/llm-summary", {}).then(tick))}, "LLM summary of current status and issues"))),
     Cleanup.card(),
     Failures.card(),
-    h("div", {class: "card"}, h("h2", {}, "By source"), h("div", {id: "lanes"})),
+    h("div", {class: "card"}, h("h2", {}, "By source"), h("p", {class: "hint", style: "margin-bottom:4px"}, "Choose a row, or a number in it, to see the links."), h("div", {id: "lanes"})),
     h("p", {class: "hint", id: "keys"}),
   );
   for (const key of ["backups", "local", "tweets", "chats"]) for (const p of config[key]) scanFolder(key, p);
@@ -767,15 +769,18 @@ function renderState(s) {
       h("thead", {}, h("tr", {}, h("th", {scope: "col"}, "Source"),
         [["Waiting", "pending"], ["Saved", "ok"], ["Thin", "thin"], ["Failed", "failed"], ["Skipped", "skipped"]].map(([c, st]) => h("th", {scope: "col"}, term(c, help("status-" + st)))))),
       h("tbody", {}, names.flatMap(n => {
-        const row = (name, counts, tip, style) => h("tr", {}, h("td", {style}, term(name, tip)),
-          ["pending", "ok", "thin", "failed", "skipped"].map(st => { const v = counts[st] || 0; return h("td", {class: v ? "" : "zero"}, fmt(v)); }));
-        const rows = [row(n === "arxiv" ? "arXiv abstracts" : LANE_LABEL[n] || n, lanes[n], LANE_HELP[n])];
-        if (n === "arxiv" && Object.keys(s.arxiv_full_text).length) rows.push(row("arXiv full text", s.arxiv_full_text, help("arxiv-full-text-row")));
-        if (n === "generic" && Object.keys(s.scholar).length) rows.push(row("Google Scholar", s.scholar, help("scholar-row"), "padding-left:22px"));
+        const row = (key, name, counts, tip, style) => h("tr", {class: "fail-row", onclick: () => SourceList.open(key, name, tip, counts)},
+          h("td", {style}, h("button", {class: "fail-name", title: tip}, name)),
+          SOURCE_TABS.map(([st]) => { const v = counts[st] || 0; return h("td", {class: v ? "" : "zero", title: v ? help("status-" + st) : "",
+            onclick: e => { if (v) { e.stopPropagation(); SourceList.open(key, name, tip, counts, st); } }}, fmt(v)); }));
+        const rows = [row(n, n === "arxiv" ? "arXiv abstracts" : LANE_LABEL[n] || n, lanes[n], LANE_HELP[n])];
+        if (n === "arxiv" && Object.keys(s.arxiv_full_text).length) rows.push(row("arxiv_fulltext", "arXiv full text", s.arxiv_full_text, help("arxiv-full-text-row")));
+        if (n === "generic" && Object.keys(s.scholar).length) rows.push(row("scholar", "Google Scholar", s.scholar, help("scholar-row"), "padding-left:22px"));
         return rows;
       }))
     ) : h("p", {class: "hint"}, "Nothing archived yet."));
   }
+  SourceList.refresh(s);
 
   const keys = $("#keys");
   const ix = s.index;
@@ -1190,6 +1195,71 @@ const FailList = {
   },
   show(id) {
     $("#fail-list").close();
+    showTab("documents");
+    guarded(() => Docs.show(id))();
+  },
+};
+
+// the links behind one row of the By source card, a tab for each status, kept up to date while it's open
+const SOURCE_TABS = [["pending", "Waiting"], ["ok", "Saved"], ["thin", "Thin"], ["failed", "Failed"], ["skipped", "Skipped"]];
+const SourceList = {
+  lane: "", status: "", host: "", counts: {}, items: [], total: 0, seq: 0, painted: "",
+  open(lane, title, tip, counts, status) {
+    status = status || SOURCE_TABS.find(([st]) => counts[st])?.[0] || "pending";
+    Object.assign(this, {lane, status, host: "", counts: {...counts}, items: [], total: 0, painted: ""});
+    const dlg = $("#source-list");
+    dlg.replaceChildren(
+      h("div", {class: "picker-head"}, h("h3", {}, title), tip && h("p", {class: "hint"}, tip),
+        h("div", {class: "tool-row"},
+          h("div", {class: "segments", id: "source-tabs", role: "group", "aria-label": "Status"}),
+          h("select", {id: "source-host", "aria-label": "Filter by site", onchange: e => { this.host = e.target.value; this.reset(); }}))),
+      h("div", {class: "report-list", id: "source-rows"}),
+      h("div", {class: "picker-foot"}, h("span", {class: "hint", id: "source-count"}), h("button", {class: "btn", onclick: () => dlg.close()}, "Close")));
+    dlg.showModal();
+    this.load();
+  },
+  reset() { this.items = []; this.painted = ""; $("#source-rows").scrollTop = 0; this.load(); },
+  refresh(s) {  // the card's numbers for this row changed: so has the list
+    if (!$("#source-list")?.open) return;
+    const counts = this.lane === "scholar" ? s.scholar : this.lane === "arxiv_fulltext" ? s.arxiv_full_text : s.lanes[this.lane];
+    if (JSON.stringify(counts || {}) !== JSON.stringify(this.counts)) { this.counts = {...counts}; this.load(); }
+  },
+  load: guarded(async function (more) {
+    const self = SourceList, seq = ++self.seq, loaded = self.items.length;
+    const query = new URLSearchParams({lane: self.lane, status: self.status, host: self.host, offset: more ? loaded : 0, limit: more ? 200 : Math.max(loaded, 200)});
+    const r = await api("/api/source?" + query);
+    if (seq !== self.seq || !$("#source-list").open) return;
+    self.items = more ? [...self.items, ...r.items] : r.items;
+    self.total = r.total;
+    self.paint(r);
+  }),
+  paint(r) {
+    $("#source-tabs").replaceChildren(...SOURCE_TABS.map(([st, label]) => h("button", {"aria-pressed": this.status === st, disabled: !r.counts[st] && this.status !== st,
+      title: help("status-" + st), onclick: () => { this.status = st; this.host = ""; this.reset(); }}, `${label} (${fmt(r.counts[st] || 0)})`)));
+    const sel = $("#source-host");
+    if (document.activeElement !== sel || !sel.options.length) sel.replaceChildren(h("option", {value: ""}, `All sites (${fmt(r.counts[this.status] || 0)})`),
+      ...r.hosts.map(([x, n]) => h("option", {value: x, selected: x === this.host}, `${x} (${fmt(n)})`)));
+    $("#source-count").textContent = `${fmt(this.items.length)} of ${fmt(this.total)}`;
+    const painted = JSON.stringify([this.status, this.items, this.total]);
+    if (painted === this.painted) return;  // nothing new, so what you're pointing at stays put
+    this.painted = painted;
+    const list = $("#source-rows"), top = list.scrollTop;
+    const readable = url => { try { return decodeURI(url); } catch { return url; } };
+    const when = at => at ? new Date(at).toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"}) : "";
+    list.replaceChildren(...this.items.map(it => {
+      const web = /^https?:/i.test(it.url);
+      return h("button", {class: "report-row", disabled: !it.id && !web, title: it.id ? "" : "Not a document: opens the link itself",
+          onclick: () => it.id ? this.show(it.id) : window.open(it.url, "_blank", "noopener")},
+        h("div", {class: "fail-url"}, it.title || readable(it.url)),
+        h("div", {class: "where"}, [it.title && readable(it.url), it.host, it.reason && reasonName(it.reason),
+          it.chars != null && ["ok", "thin"].includes(this.status) && `${fmt(it.chars)} characters`, when(it.at)].filter(Boolean).join(" · ")));
+    }));
+    if (!this.items.length) list.append(h("p", {class: "hint", style: "padding:6px 12px"}, "None of these."));
+    if (this.total > this.items.length) list.append(h("div", {class: "more"}, h("button", {class: "btn", onclick: () => this.load(true)}, "Show more")));
+    list.scrollTop = top;
+  },
+  show(id) {
+    $("#source-list").close();
     showTab("documents");
     guarded(() => Docs.show(id))();
   },
