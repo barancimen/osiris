@@ -35,16 +35,18 @@ HOSTS, EXAMPLES, TOP_HOSTS, LOG_LINES, LINE_CHARS, DAYS = 10, 5, 50, 150, 300, 1
 START, END, FAILED = "--- LLM summary of current status", "--- End of the LLM summary", "--- LLM summary failed"
 STATUSES = ("pending", "ok", "thin", "failed", "skipped")
 STATUS_NAMES = {"pending": "waiting", "ok": "saved", "thin": "thin", "failed": "failed", "skipped": "skipped"}
-SETTINGS = (("impersonate", "Retry with a browser's TLS fingerprint"), ("render", "Headless browser pass"),
-            ("doi", "DOI lookup for failed papers"), ("wayback", "Wayback Machine pass"),
+# The boxes' labels as the page and the manual name them (tests/test_llm_summary.py checks them against ui.html).
+SETTINGS = (("impersonate", "Try again looking like Chrome"), ("render", "Use a headless browser for blocked pages"),
+            ("doi", "Look papers up by DOI"), ("wayback", "Use the Wayback Machine"),
             ("scry_crawl", "Use Scry's copy of the page"), ("retry_failed", "Try failed URLs again"),
-            ("ocr", "OCR"), ("arxiv_fulltext", "arXiv full text"), ("scry_twitter", "Tweets from Scry"),
-            ("billed_twitter", "Allow twitterapi.io"), ("scry_arxiv", "arXiv from Scry"), ("scry_youtube", "YouTube from Scry"),
-            ("review_after", "Check for garbage after a run"))
+            ("ocr", "Read scanned PDFs and DjVu files with OCR"), ("arxiv_fulltext", "Get the full text of arXiv papers"),
+            ("scry_twitter", "Look up tweets in Scry"), ("billed_twitter", "Allow twitterapi.io"),
+            ("scry_arxiv", "Use Scry's copy of arXiv papers when it has one"), ("scry_youtube", "Use Scry's transcripts first"),
+            ("review_after", "Check for garbage afterwards"))
 
 SYSTEM = """You read the state of osiris, a program that archives a person's saved links and files as plain-text \
 documents, and write its owner a short report on it. You are given detailed counts from its database, its settings, \
-the current job and the end of its log, and the parts of its manual that explain the reasons and options.
+the current job and the end of its log, and its manual, which explains the reasons and options.
 
 Report the most important issues first: what is still waiting or failed, why, and what the owner can do about each \
 from the osiris page, naming the box or option as the manual does. Weigh how many documents an issue affects and \
