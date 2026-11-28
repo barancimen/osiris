@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/osiris ui
 ```
 
-This opens the [web interface](#web-interface), which covers the whole process. The same work from the command line:
+This starts the [web interface](#web-interface), which covers the whole process, and prints the address to open in your browser. The same work from the command line:
 
 ```sh
 python3 extract_urls.py    # ../tab-backups -> all_urls.md
@@ -31,12 +31,12 @@ Optional system and Python extras:
 
 `osiris ui` opens one page with two tabs, **Archive** and **Documents**. Every choice and location is saved in `data/ui.json` as you make it, so it's still there after a run or a restart. A job keeps running if you close or reload the page. The terminal shows the same log as the page, with the page's address repeated every 20 lines.
 
-- **Archive:** add folders of tab backups, local files, tweet files and AI chats with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports tweet files, AI chats and the web pages in your local folders while **Local files** is ticked under Sources, archives everything and checks for garbage, showing a live log and a progress bar with the time left. The log ends with what the run added, by source, with how many of those documents had failed before and how many thin ones now have full text, and `data/added.tsv` lists them. Fixes end the same way. That counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. An account in a list of accounts counts as one item, done when the run has taken all its new tweets. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
-- **LLM summary:** the small **LLM summary of current status and issues** link under the log asks DeepSeek's `deepseek-flash` for a few lines on what's waiting, failed or thin, why, and what to do about it, ranked by how many documents each issue affects. It works before, during or after a run, and the answer is added to the log. DeepSeek is sent detailed counts from the manifest by source, reason, site, HTTP status, redirect target and day, with some example links of each, your settings (whether a cookies file is set, not its path), the end of the log and this README. No document's text is sent. A summary takes under a minute, reads about 30,000 tokens, costs 1 or 2 cents and needs `DEEPSEEK_API_KEY`.
+- **Archive:** add folders of tab backups, local files, tweet files and AI chats with a folder picker, choose options, and press **Start archiving**. That extracts URLs, imports tweet files, AI chats and the web pages in your local folders while **Local files** is ticked under Sources, archives everything and checks for garbage, showing a live log and a progress bar with the time left. The log ends with what the run added, by source, with how many of those documents had failed before and how many thin ones now have full text, and `data/added.tsv` lists them. Fixes end the same way. The progress bar counts only the sources you ticked. Each source gets its own estimate from its schedule and recent pace, and because sources run side by side, the time left is the slowest one's, not their sum. arXiv's abstracts and full text are added together, since they run one after the other. So are waiting web links and **Refresh PDFs**' web PDFs, which are read after them. Local PDFs read again count with the local files. The fallbacks for failed and thin web pages and OCR count too, one item per page and fallback still to come, after the waiting links. An account in a list of accounts counts as one item, done when the run has taken all its new tweets. The total is counted at the start and only grows when the run finds work it couldn't have known about, such as a page that just failed and now gets fallbacks; it's kept even while no page is open. The garbage check isn't included. Tab backup files are hashed, and any whose URLs are already in the manifest are skipped unless the file or the rules for choosing URLs have changed. **Stop** saves progress, and starting again resumes.
+- **LLM summary:** the small **LLM summary of current status and issues** link under the log asks DeepSeek's `deepseek-flash` for a few lines on what's waiting, failed or thin, why, and what to do about it, ranked by how many documents each issue affects. It works before, during or after a run, and the answer is added to the log. DeepSeek is sent detailed counts from the manifest by source, reason, site, HTTP status, redirect target and day, with some example links of each, your settings (whether a cookies file is set, not its path), the end of the log and this README. No document's text is sent. A summary takes about a minute, reads about 30,000 tokens, costs 1 or 2 cents and needs `DEEPSEEK_API_KEY`.
 - **How to archive it:** the common choices are at the top. **Advanced** groups the rest by what they affect: blocked or logged-in pages, what to do when a page fails, speed, time limits, YouTube, tweets, and papers and forums. Number boxes show their defaults as real values, and emptying one brings its default back. Choosing a cookies file fills in the user agent of the browser you have the page open in. Tick **Edit** to type a different one.
 - **Why things failed:** counts failed documents by category and by reason, for all time and for the current or latest run. It updates during a run. Choose a row to list its documents, filter them by site, and open any of them. The **By source** card works the same way: choose a source's row, or one of its numbers, to list its links with a tab for each status (waiting, saved, thin, failed and skipped), newest first. Like the card, the tabs count links, so several links into one document each have a row. A skipped link has no document, so choosing it opens the link itself.
-- **Documents:** everything you've saved, with garbage scores and ways to fix each document. Titles are saved as each document is, so they show and can be searched straight away. Two boxes and five filters narrow the list together: a document shows only if it passes every one. The first box wants every word in the title or URL, in any order; `site:example.com` keeps that site and its subdomains, and several `site:` words mean any of them. The second box, **Inside documents**, searches the saved text alone. Each box lists your last 20 searches in it as you type, newest first, kept in this browser only. The filters are source, status, reason and decision, plus a row of tag ticks for the garbage check's tags (block page, encoding, few common words, odd words, symbols, no spaces, repeated lines), as shown on each document. A document shows if any of its tags is ticked; with **All tags** ticked, documents with no tag show too, including ones never checked. All are ticked at first, which leaves nothing out. Clicking **All tags** ticks or unticks every tag, while a single tag never changes it, so All tags with nothing else ticked lists only the untagged documents. The list loads more as you scroll to its end, adding rows below without moving what you're looking at. While a job runs it refreshes itself every 10 seconds and once when the job ends, keeping as many rows as you've loaded and the row at the top of your view in place; the open document isn't redrawn, and a text search without the index isn't repeated, since it reads every file. **All bad** and **All fine** apply to the same filters, and are hidden while the text box is in use. **Review** sorts whatever is listed by garbage score, worst first, keeping your search and filters; the number on it counts documents flagged and not decided yet. See [Finding garbage](#finding-garbage). **Delete…** removes a document's saved text and osiris's copy of its original for good, after asking. Its links stay in the manifest marked `deleted`, so later runs don't fetch them again from your tab backups. Your own files, such as local files and saved pages, are never touched. It waits while a job is running. With `--search-index`, the text box uses the index, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
-- **Failures:** choose **Failed** to sort failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. **Retry this site next run** puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
+- **Documents:** everything you've saved, with garbage scores and ways to fix each document. Titles are saved as each document is, so they show and can be searched straight away. Two boxes and five filters narrow the list together: a document shows only if it passes every one. The first box wants every word in the title or URL, in any order; `site:example.com` keeps that site and its subdomains, and several `site:` words mean any of them. The second box, **Inside documents**, searches the saved text alone. Each box lists your last 20 searches in it as you type, newest first, kept in this browser only. The filters are source, status, reason and decision, plus a row of tag ticks for the garbage check's tags (block page, encoding, few common words, odd words, symbols, no spaces, repeated lines), as shown on each document. A document shows if any of its tags is ticked; with **All tags** ticked, documents with no tag show too, including ones never checked. All are ticked at first, which leaves nothing out. Clicking **All tags** ticks or unticks every tag, while a single tag never changes it, so All tags with nothing else ticked lists only the untagged documents. The list loads more as you scroll to its end, adding rows below without moving what you're looking at. While a job runs it refreshes itself every 10 seconds and once when the job ends, keeping as many rows as you've loaded and the row at the top of your view in place; the open document isn't redrawn, and a text search without the index isn't repeated, since it reads every file. **All bad** and **All fine** apply to the same filters. They show only once the title box, the tags, or the source, status or reason filter narrows the list, and not while the text box is in use. **Review** sorts whatever is listed by garbage score, worst first, keeping your search and filters; the number on it counts documents flagged and not decided yet. See [Finding garbage](#finding-garbage). **Delete…** removes a document's saved text and osiris's copy of its original for good, after asking. Its links stay in the manifest marked `deleted`, so later runs don't fetch them again from your tab backups. Your own files, such as local files and saved pages, are never touched. It can't be used while a job is running. With `--search-index`, the text box uses the index, best match first (see [Searching](#searching)). Each document shows its saved text with your search words marked and, where there's one on this machine, its original: your local file, a saved page or a `--keep-raw-pdfs` copy. Web documents link to the live page.
+- **Failures:** choose **Failed** to filter failures by reason. Each failed document says in plain words what went wrong, which fallbacks were already tried and what might still work. Its **Retry *site* next run** button, which names the document's site, puts the site on a list under **How to archive it**. The next archive run fetches that site's failed URLs again, like `--retry-host`, and then clears the list.
 
 **Explanations:** hover over any button, option or status to see what it does or means. A word with a dotted underline, such as **thin** or a garbage signal, has an explanation too.
 
@@ -61,7 +61,7 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 
 ## Finding garbage
 
-**Check for garbage** scores every document from cheap text signals. Anything scoring 0.35 or higher is flagged, and **Review** on the Documents tab lists the worst first. Unchanged documents aren't scored again. It's a ranking for you to read, not a verdict, so expect some false alarms, such as tables, code and languages other than English and Turkish.
+**Check for garbage** scores every document from cheap text signals. Anything scoring 0.35 or higher is flagged, and **Review** on the Documents tab lists the worst first. Unchanged documents aren't scored again. It's a ranking for you to read, not a verdict, so expect some false alarms, such as tables, code and languages other than English, Turkish, German, French and Spanish.
 
 | Signal | What it catches |
 |---|---|
@@ -77,19 +77,19 @@ ssh -N -L 8321:127.0.0.1:8321 <server>
 |---|---|
 | **Fine** | Stays off the list unless its text changes |
 | **Bad** | Left out of `export` and listed in `data/review-exclude.txt`. It stays under **Bad** until you decide otherwise |
-| **OCR it** | PDFs only. Reads the PDF with OCR in the language chosen next to it. If the text comes back different, the document waits under **Choose version** with both versions kept, as with Fetch again. If OCR reads nothing, the earlier text stays |
-| **Fetch again** | Fetches or reads it again, the way chosen next to it (below). For a web page or PDF, if that way doesn't work, the others follow in a run's order (the plain download, impersonate, browser, DOI, Wayback, Scry's crawl if ticked, then OCR), skipping the one already tried. The old length is forgotten first, so whatever comes back is kept to compare. If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
+| **OCR it** | PDFs and DjVu files only. Reads the PDF with OCR in the language chosen next to it. If the text comes back different, the document waits under **Choose version** with both versions kept, as with Fetch again. If OCR reads nothing, the earlier text stays |
+| **Fetch again** | Fetches or reads it again, the way chosen next to it (below). For a web page or PDF fetched with a browser's fingerprint, in the headless browser or from the Wayback Machine, if that way doesn't work, the plain download follows and then the other ways that are on, in a run's order (impersonate, browser, DOI, Wayback, Scry's crawl, then OCR), skipping the one already tried. The old length is forgotten first, so whatever comes back is kept to compare. If the text comes back different, the document waits under **Choose version** with both versions kept. If fetching fails, the earlier document is put back exactly as it was |
 | **Can't fix** | Like Bad, but no longer counted as something to come back to |
 
 Any document can be decided on, including ones the check hasn't scored yet and ones that failed. Clicking the chosen decision again undoes it. For **OCR it** and **Fetch again** that takes the document off the queue, as long as the fix is still waiting and the same way is chosen next to it; once a running job has taken the fix, it can't be called back.
 
 | Way to fetch again | For |
 |---|---|
-| The usual way | Every document except saved pages: what an archive run does, with your settings from the Archive tab (cookies, headless browser, Scry options, YouTube pacing) and the fallbacks |
+| The usual way | Every document except saved pages and AI chats: what an archive run does, with your settings from the Archive tab (cookies, headless browser, Scry options, YouTube pacing) and the fallbacks |
 | With a browser's fingerprint, in the headless browser, the Wayback Machine's copy | Web pages: that one way, from the start. The headless browser is offered once Playwright is installed |
 | Scry's copy of the page | Web pages, with a Scry key: the text Scry's crawler last read from that address |
 | Title and abstract by DOI | Paper links with a DOI in them |
-| arXiv's full text again, web version first; full text from Scry | arXiv papers. Scry's copy replaces the full text you have |
+| arXiv's full text again, web version first; full text from Scry | arXiv papers. Text from arXiv is kept by the same rules as in a run, while Scry's copy replaces the full text you have |
 | Transcript from Scry | YouTube videos, with a Scry key |
 | Scry's copy of the post | LessWrong posts, with a Scry key |
 | From twitterapi.io | Tweets. It's billed per tweet, so the page asks first, and only a run with such a fix queued gets the key |
@@ -186,11 +186,11 @@ If the web page is updating the index at the time, `osiris search` waits for it 
 
 ## Your originals
 
-Nothing in osiris deletes, moves or changes your local files, tab backups, saved pages or chat exports. They're only opened for reading, and the web interface has no way to delete, rename or upload anything.
+Nothing in osiris deletes, moves or changes your local files, tab backups, saved pages or chat exports. They're only opened for reading, and the web interface has no way to delete, rename or upload any of them.
 
 - **Guard:** every osiris process refuses, with a `PermissionError`, any attempt by Python code, including third-party parsers, to create, change or delete a file outside the output folder, the system temp folder and `~/.cache` (`osiris/safety.py`). It can't see other programs or native code that makes its own system calls: tesseract only gets page images on stdin, and pdfium and DjVuLibre's tools only read.
 - **Output paths:** `extract_urls.py --output` won't write into the backup folder, or over anything that isn't a list of URLs. `osiris export -o` won't overwrite anything but an earlier export.
-- **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. The option isn't in the web interface.
+- **`--chrome-profile`:** this needs a copy, because Chrome rewrites the profile it runs on. Standard real profile locations are refused. On the page it's **Copy of a Chrome profile**, used only with the headless browser.
 
 **What can change:** files in `data/`. **OCR it** and **Fetch again** replace a document's saved text when you choose the new version, though neither touches the original. **Delete…** removes a document's files from `data/` only. `extract_urls.py` rewrites `all_urls.md` by default, so keep hand-written lists in another file.
 
@@ -208,7 +208,7 @@ Nothing in osiris deletes, moves or changes your local files, tab backups, saved
 | `osiris clean` | Repairs text in documents already archived. `--dry-run`, `--undo`. See [Text cleanup](#text-cleanup) |
 | `osiris search QUERY` | Full-text search, best match first. `--lane`, `--limit`, `--json`. See [Searching](#searching) |
 | `osiris stats` | Counts by lane and status. `--failed` and `--thin` add the top hosts |
-| `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix |
+| `osiris export` | Writes `data/corpus.jsonl`, leaving out documents marked Bad or Can't fix, or waiting under Choose version |
 
 Common `osiris run` options:
 
@@ -269,7 +269,7 @@ All keys go in one file, `.env` in the osiris folder. Copy `.env.example` to `.e
 
 | Variable | Used for | If unset |
 |---|---|---|
-| `SCRY_API_KEY` | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives | Those sources are skipped |
+| `SCRY_API_KEY` | Tweets, Reddit threads and DOI abstracts from [Scry](https://scry.io)'s archives, LessWrong posts no longer public, and the Scry options for arXiv, YouTube and web pages | Tweets wait unless twitterapi.io is used, Reddit and DOI lookups use only Arctic Shift and the OpenAlex API, and the Scry options do nothing |
 | `GITHUB_TOKEN` | GitHub lane, 5,000 API calls an hour instead of 60. A token with no scopes is enough for public repos | GitHub URLs stay pending |
 | `TWITTERAPI_IO_KEY` | Tweets Scry lacks, and every tweet of the accounts in your lists, from twitterapi.io, billed per tweet | Tweets Scry lacks are marked `not_in_scry`, and listed accounts come from Scry alone |
 | `STACKEXCHANGE_KEY` | 10,000 Stack Exchange API calls a day instead of 300 | The lower quota applies |
@@ -287,7 +287,7 @@ Each URL goes to the cheapest source that actually returns its text.
 | `stackexchange` | `*/questions/<id>` on SE sites | API, 100 IDs per call. Question, all answers and comments as markdown |
 | `reddit` | `reddit.com/…/comments/<id>`, `redd.it/<id>` | Post and comment tree from Scry, then Arctic Shift for what Scry lacks |
 | `hackernews` | `news.ycombinator.com/item?id=<id>` | Algolia's item API: the story, or one comment, with every reply |
-| `lesswrong` | Posts on `lesswrong.com`, `alignmentforum.org`, `greaterwrong.com` | GraphQL API: the full post as markdown with every comment A post LessWrong no longer shows to visitors comes from Scry's archive instead, with the source `lesswrong:scry`. |
+| `lesswrong` | Posts on `lesswrong.com`, `alignmentforum.org`, `greaterwrong.com` | GraphQL API: the full post as markdown with every comment. A post LessWrong no longer shows to visitors comes from Scry's archive instead, with the source `lesswrong:scry` |
 | `github` | `github.com/<owner>/<repo>/…`, gists | REST API: repo metadata and README, or a gist's files with notebooks reduced to markdown and code |
 | `youtube` | Videos, playlists, channels | Transcripts, or a list's title, description and video titles |
 | `localfile` | `file://` links | Read in place, never changed |
@@ -362,7 +362,7 @@ Ebooks and Word files follow [MarkItDown](https://github.com/microsoft/markitdow
 - Hosts are served round-robin, with at most `--per-host` (4) requests in flight per host and `--concurrency` (64) overall, and cooldowns on 429 and 5xx responses. `Retry-After` is honored.
 - `--host-limit PATTERN=N[:SECONDS]` groups matching hosts into one slower queue, each wait varied by up to a quarter either way. The default is `scholar.google.*=1:20`, since Scholar shows CAPTCHAs after bursts (see [Google Scholar](#google-scholar)). Hosts in a group share the pace, but each is judged on its own: after 3 connection failures in a row, DNS included, only that host's remaining links are skipped as `host_down`.
 - The `Content-Type` is checked before the body is read, so non-text responses are dropped unread.
-- Timeouts, dropped connections, downloads that broke off, 429s and server errors (500, 502, 503, 504 and Cloudflare's 520 to 524) are tried up to 3 times (**Tries per page**), waiting longer each time, up to 60 seconds or what `Retry-After` asks.
+- Timeouts, dropped connections, downloads that broke off, 429s and server errors (500, 502, 503, 504 and Cloudflare's 520 to 524) are tried up to 3 times (**Tries per page**), waiting longer each time, or as long as `Retry-After` asks, but never more than 60 seconds (**Longest wait before trying again**).
 - When one site refuses 5 links in a row (403, or 429 after its retries), its remaining links are marked `http_403` or `http_429` without being requested. When it fails to connect 3 times in a row (DNS, connection, TLS or timeout), its remaining links are marked `host_down` the same way. Links marked like this have no HTTP status in the manifest, and the fallback passes still try them. **Skip a site after this many refusals in a row** and **Skip a site after this many dropped connections in a row** under **When a page fails** change the numbers.
 
 **Fallback passes**
@@ -378,7 +378,7 @@ These run after the first pass in every run that includes web pages, in the orde
 | `crawl` | **Use Scry's copy of the page** (`--scry-crawl`), off by default. Needs a Scry key | The same as `wayback` | Saves the text Scry's web crawler last read from the page, under any of its http/https and www spellings, 50 pages per query. It sends those pages' addresses to Scry and stops once the run has spent `--scry-crawl-max-dollars` (1) on it, and the pages it didn't reach wait for the next run. In one test, three pages found cost $0.006 |
 
 - A pass is recorded in the manifest's `tried` column once it has dealt with a link, and doesn't take it again. So a pass you turn on later, such as the headless browser, works through the old failures it takes in the next run, with nothing else to do.
-- When all have run, a failed link stays failed until **Try failed URLs again** (`--retry-failed`), **Retry this site next run** (`--retry-host`) or **Fetch again**. Each clears `tried`, so every pass runs again. The first two put failed links back only, not thin ones.
+- When all have run, a failed link stays failed until **Try failed URLs again** (`--retry-failed`), **Retry *site* next run** (`--retry-host`) or **Fetch again**. Each clears `tried`, so every pass runs again. The first two put failed links back only, not thin ones.
 - The rules above for skipping a site after 5 refusals or 3 connection failures apply inside each pass too. There the site's remaining links count as tried by that pass without being requested.
 - A pass that can't start, such as the headless browser when Chromium isn't installed, is skipped with one error in the log, and its links keep their turn for a later run.
 - OCR comes after these, for PDFs only. See [OCR](#ocr).
@@ -391,7 +391,7 @@ Scholar rations automated requests. Past some number it answers with an "unusual
 - **Block pages:** Google's block page ("unusual traffic", or "Verifying your request… Please wait while we verify your session"), a 403 or 429 from Google, or a redirect to its `/sorry/` page is never saved. The first one ends Scholar's turn for the run: that link and every Scholar link not reached yet stay waiting for the next run, and the fallback passes leave Scholar alone too, so the block can lift. A Wayback copy that is only the block page counts as a failure.
 - **No headless browser:** the browser pass and the browser fix method skip Scholar. Your cookies with the plain download work better.
 - Scholar links still waiting usually mean a block page stopped Scholar's turn before they were reached. If Google blocks the first Scholar request of every run, each run asks for one link and no Scholar link ever arrives. Opening that link in your own browser shows whether Google is asking this connection to prove it's human.
-- Since 2026-11-10 a 403 from Google counts as a block and leaves the link waiting, so Scholar links failed with `http_403` were recorded by earlier versions, mostly marked without being requested after 5 refusals in a row. They stay failed until **Retry this site next run** for `scholar.google.com`, or **Try failed URLs again**.
+- Since 2026-11-10 a 403 from Google counts as a block and leaves the link waiting, so Scholar links failed with `http_403` were recorded by earlier versions, mostly marked without being requested after 5 refusals in a row. They stay failed until **Retry scholar.google.com next run**, or **Try failed URLs again**.
 - **Profiles:** a profile's list of works is asked for 100 at a time (`cstart=0&pagesize=100`), not the 20 Scholar shows unless you click Show more. Profiles saved before this have 20; fetch one again to get the longer list.
 
 ### Browser session
@@ -412,7 +412,7 @@ The cookie file holds live sessions, so keep it private.
 
 This section is for working out why documents aren't saved and what can still be done about them. The page's [LLM summary](#web-interface) sends the whole README to DeepSeek with the counts, so this is also what it goes by.
 
-The page and the LLM summary count documents. Several links can lead to one document, such as links to different files in one GitHub repo, and they share one record. `osiris stats` and the end of a run's log count links.
+The LLM summary and the page's **Why things failed** card count documents. Several links can lead to one document, such as links to different files in one GitHub repo, and they share one record. The **By source** card, `osiris stats` and the end of a run's log count links.
 
 ### A document's record
 
@@ -420,12 +420,12 @@ Each link has a row in `data/manifest.sqlite`.
 
 | Column | Meaning |
 |---|---|
-| `status` | `pending` (waiting), `ok` (saved), `thin`, `failed`, `skipped`, or `deleted` (removed with **Delete…** and never fetched again) |
+| `status` | `pending` (waiting), `ok` (saved), `thin`, `failed` or `skipped`. A document removed with **Delete…** is `skipped` with reason `deleted`, so it's never fetched again |
 | `reason` | Why it's failed, thin or skipped. For a failed web page it's what the first download got, and fallback passes that fail too leave it as it was. So `http_403` with `impersonate,wayback` in `tried` means the site refused the first download, and neither the Chrome-like download nor the Wayback Machine got the page either. Only a pass that saves text, or **Fetch again**, writes a new reason |
 | `http_status` | The site's answer to the download that set the reason. It's empty for failures with no HTTP answer, such as `timeout` or `dns`, and for links marked without being requested, as with `host_down` and with the links marked after a site refused 5 in a row. For failures, only web pages and GitHub record it |
 | `final_url` | Where the download ended up after redirects. Another site there, such as a login or consent page, usually means a login wall or a paywall |
 | `content_type` | What the site said it sent, such as `text/html` or `application/pdf` |
-| `tried` | What has been done to it already, as a list: the fallback passes `impersonate`, `render`, `doi`, `wayback` and `crawl` (see [Generic lane](#generic-lane)), `ocr` (OCR has read it), `fulltext` (arXiv's full text was looked for), `html_checked` and `html_busy` (arXiv's HTML was read, or a run was too busy to read it), `comments` (a Stack Exchange thread was fetched with its comments) and `refresh` (a PDF refresh that hasn't finished) |
+| `tried` | What has been done to it already, as a list: the fallback passes `impersonate`, `render`, `doi`, `wayback` and `crawl` (see [Generic lane](#generic-lane)), `ocr` (OCR has read it), `fulltext` (arXiv's full text was looked for), `html_checked` and `html_busy` (arXiv's HTML was read, or a run was too busy to read it), `comments` (a Stack Exchange thread was fetched with its comments), `refresh` (a PDF refresh that hasn't finished) and `plain` (the usual download, after a **Fetch again** that tried another way first) |
 | `attempts` | How many times an outcome was recorded for it, over all runs. A fallback pass that fails records nothing, so this isn't the number of downloads |
 | `updated_at` | When an outcome was last recorded. A fallback pass that fails doesn't change it |
 | `chars` | Characters of text saved |
@@ -435,18 +435,19 @@ Each link has a row in `data/manifest.sqlite`.
 A waiting document hasn't been fetched or read yet. These are the usual causes.
 
 - The run hasn't reached it yet, or was stopped. Starting again carries on.
-- Its source isn't ticked under **What to archive**, or isn't in `--only`. Local files, saved pages, tweet files and AI chats are only read while **Local files** is ticked.
+- Its source isn't ticked under **Sources**, or isn't in `--only`. Local files, saved pages, tweet files and AI chats are only read while **Local files** is ticked.
 - GitHub links wait while there's no `GITHUB_TOKEN`, or the token is refused.
 - Tweets wait while **Look up tweets in Scry** and **Allow twitterapi.io** are both off, or neither key is set, and once a run has spent the dollar limit next to **Look up tweets in Scry**.
 - YouTube videos wait after a block, through pauses of 30 to 240 minutes, and the lane stops for the run after 5 blocks in a row. At about 240 videos an hour, a long list takes days. See [YouTube](#youtube).
 - Google Scholar links wait after a block page, until the next run. See [Google Scholar](#google-scholar).
-- arXiv full text waits until every abstract is in, comes one paper every 15 seconds, and stops for the run if arXiv can't be reached several times in a row or the Scry dollar limit is reached. The page's **arXiv full text** row counts papers as waiting until their full text has been looked for, though they're saved with their abstract.
+- arXiv full text waits until every abstract is in, comes one paper every 15 seconds, and stops for the run if arXiv can't be reached for 5 papers in a row or the Scry dollar limit is reached. The page's **arXiv full text** row counts papers as waiting until their full text has been looked for, though they're saved with their abstract.
 - Stack Exchange questions wait once the day's API quota runs out, 300 calls without `STACKEXCHANGE_KEY`, until the next day.
 - Web pages queued for **Fetch again** in the headless browser wait if the browser can't start.
+- Reddit posts wait while Scry or Arctic Shift can't be reached, arXiv abstracts while arXiv's API is down, and the documents of a lane that crashed until it runs again. The log has the error.
 
 ### Thin
 
-A thin document is saved and exported, but with less than 200 characters of text (**--thin-under**), or with only part of what was wanted. Thin web pages get every fallback pass, and thin PDFs get OCR. **Try failed URLs again** doesn't put thin documents back, but **Fetch again** does.
+A thin document is saved and exported, but with less than 200 characters of text (**Call a page thin below**, `--thin-under`), or with only part of what was wanted. Thin web pages get every fallback pass, and thin PDFs get OCR. **Try failed URLs again** doesn't put thin documents back, but **Fetch again** does.
 
 | Reason | Meaning |
 |---|---|
@@ -460,34 +461,34 @@ A document the DOI pass saved is `ok` but holds only the abstract, not the paper
 
 ### Failed
 
-"Passes left" names the fallback passes that take the reason, which run if they're on and haven't run on the link yet. All five are `impersonate`, `render` (not for PDFs or Google), `doi` (only for links with a DOI), `wayback` and `crawl`. Once they have run, a failed document isn't tried again by itself, so "trying later" means **Try failed URLs again** or **Retry this site next run** in a later run, or **Fetch again** for one document.
+"Passes left" names the fallback passes that take the reason, which run if they're on and haven't run on the link yet. All five are `impersonate`, `render` (not for PDFs or Google), `doi` (only for links with a DOI), `wayback` and `crawl`. Once they have run, a failed document isn't tried again by itself, so "trying later" means **Try failed URLs again** or **Retry *site* next run** in a later run, or **Fetch again** for one document.
 
 | Reason | Meaning | Passes left | What else can help |
 |---|---|---|---|
 | `http_403` | The site refused the download, usually a bot wall or a login | All five | A cookies file with the matching **Browser user agent**, the headless browser, or saving the page with SingleFile into a Local files folder |
 | `http_401`, `http_402` | The page needs a login or a subscription | `doi`, `wayback`, `crawl` | Cookies, or SingleFile |
 | `http_404`, `http_410` | The page isn't there any more | `doi`, `wayback`, `crawl` | Nothing, unless a copy exists elsewhere. **Can't fix** takes it off the list |
-| `http_429` | Too many requests. Tried 3 times in the first pass | All five | Trying later with **Retry this site next run**, or adding the site to the slower sites under **Speed** |
+| `http_429` | Too many requests. Tried 3 times in the first pass | All five | Trying later with **Retry *site* next run**, or adding the site to **Slower rules for particular sites** under **Speed** |
 | `http_503` | Server overloaded, or a bot check. Tried 3 times in the first pass | All five | Trying later, the headless browser, or cookies |
 | `http_500` to `http_599` other than 503 | Server error. 500, 502, 504 and 520 to 524 are tried 3 times in the first pass | `doi`, `wayback`, `crawl` | Trying later |
 | `http_999`, `http_418`, `http_420` and other codes | The site turns away automated requests. LinkedIn answers 999 | `doi`, `wayback`, `crawl` | SingleFile |
 | `redirects` | Too many redirects, usually a login loop | `doi`, `wayback`, `crawl` | Cookies, or SingleFile |
-| `timeout` | No answer in time (**--page-timeout**, 30 seconds, or 15 seconds with nothing sent). Tried 3 times in the first pass | `doi`, `wayback`, `crawl` | Trying later, or a longer time limit under **Time limits** |
+| `timeout` | No answer in time (**Downloading a page or PDF**, 30 seconds, or **A download that goes silent**, 15 seconds). Tried 3 times in the first pass | `doi`, `wayback`, `crawl` | Trying later, or a longer time limit under **Time limits** |
 | `connect`, `payload` | The connection failed, or the download broke off. Tried 3 times in the first pass | All five | Trying later |
 | `ssl` | The secure connection failed, often an expired certificate | All five | Usually nothing |
 | `dns` | The site's name doesn't resolve, so the domain is probably gone | `doi`, `wayback`, `crawl` | Nothing |
-| `host_down` | The site failed to connect 3 times in a row, so its other links were marked without being requested | `doi`, `wayback`, `crawl` | **Retry this site next run** once the site is back, which gives each link a real try |
+| `host_down` | The site failed to connect 3 times in a row, so its other links were marked without being requested | `doi`, `wayback`, `crawl` | **Retry *site* next run** once the site is back, which gives each link a real try |
 | `no_text` | The page loaded but had no readable text: a JavaScript app, or a PDF with no text layer | All five, and OCR for PDFs | The headless browser for pages. A PDF with `ocr` in `tried` was read by OCR with nothing new found |
 | `challenge` | A bot-check page didn't clear in the headless browser, chosen for **Fetch again** | `doi`, `wayback`, `crawl` | Cookies with the user agent they came from, since Cloudflare ties its `cf_clearance` cookie to it, a longer **Wait for a bot check to clear**, or SingleFile |
 | `blocked` | The Wayback Machine's copy, chosen for **Fetch again**, was only Google's block page | `doi`, `wayback`, `crawl` | Nothing |
 | `non_text:<type>` | An image, video, archive or other file that isn't text, so it wasn't downloaded | `doi` | Nothing |
-| `too_large` | Too big to read in memory, or turned down for its size by an older version | `doi` | **Try failed URLs again**, with more **--worker-mem-mb** if needed |
+| `too_large` | Too big to read in memory, or turned down for its size by an older version | `doi` | **Try failed URLs again**, with a higher **Memory limit for each one** if needed |
 | `pdf_error:<error>`, `extract_error:<error>` | The PDF or page couldn't be parsed | `doi`, `wayback`, `crawl` | **OCR it** for a PDF |
-| `extract_crashed`, `extract_timeout` | Reading it crashed or took longer than **--read-timeout**, usually a huge or broken file | `doi`, `wayback`, `crawl` | A longer time limit, or more worker memory |
+| `extract_crashed`, `extract_timeout` | Reading it crashed or ran past **Getting the text out of a page or PDF**, usually a huge or broken file | `doi`, `wayback`, `crawl` | A longer time limit, or more worker memory |
 | `bad_url` | The address isn't valid | None | Nothing |
 | `bug:<error>`, `error:<error>` | Something went wrong in osiris itself. The log has the details | `doi`, and `wayback` and `crawl` for `error:` | Trying again after an update |
 | `not_in_scry` | Scry doesn't have the tweet, and twitterapi.io wasn't used | None | **Allow twitterapi.io** with `TWITTERAPI_IO_KEY`, billed per tweet, then **Try failed URLs again** or **Fetch again** from twitterapi.io. Or import your own tweet files |
-| `not_found` | The source says it doesn't exist: an unknown arXiv ID, a deleted or private GitHub repo, a deleted Hacker News item, LessWrong post or Stack Exchange question, or a tweet twitterapi.io doesn't have because it was deleted or is protected | None | Nothing |
+| `not_found` | The source says it doesn't exist: an unknown arXiv ID, a deleted or private GitHub repo, a deleted Hacker News item, LessWrong post or Stack Exchange question, a Reddit post neither archive has, or a tweet twitterapi.io doesn't have because it was deleted or is protected | None | Nothing |
 | `api_error`, `bad_response:<error>`, `network` | Stack Exchange's, Hacker News', LessWrong's or GitHub's API failed or couldn't be reached | None | Trying later |
 | `bot_check` | YouTube refused this video while others went through | None | Trying later |
 | `unavailable` | The YouTube video or list is private, removed or otherwise unavailable | None | Nothing |
@@ -496,6 +497,7 @@ A document the DOI pass saved is `ok` but holds only the abstract, not the paper
 | `file_missing` | The local file isn't at its path on this machine, usually because the archive was moved or the drive isn't mounted | None | Running where the file is, then **Try failed URLs again** |
 | `file_unreadable` | The local file couldn't be opened | None | Checking its permissions |
 | `drm_protected` | The ebook is under DRM | None | Nothing |
+| `epub_error:<error>`, `docx_error:<error>`, `kindle_error:<error>`, `kindle_no_content`, `read_error:<error>` | The ebook, Word file or other local file couldn't be read, usually because it's broken | None | A working copy of the file, then **Try failed URLs again** |
 | `djvulibre_missing`, `djvu_error` | DjVuLibre isn't installed, or the DjVu file couldn't be read | None | `apt install djvulibre-bin`, then **Try failed URLs again** |
 
 ### Skipped
@@ -512,10 +514,11 @@ Skipped links are left alone on purpose and are never fetched. None needs doing 
 | `media:<extension>` | Images, video, audio, archives and installers, judged by the address's extension |
 | `local`, `local_other` | Addresses on your own network, and local files in a format osiris can't read |
 | `bad_url` | Addresses that aren't valid |
+| `deleted` | Documents you removed with **Delete…**. Their links stay so that no later run fetches them again |
 
 ### Clues to a cause
 
-- A site whose failed links mostly have no HTTP status refused or dropped the first few, and the rest were marked without being requested. **Retry this site next run** gives each a real try.
+- A site whose failed links mostly have no HTTP status refused or dropped the first few, and the rest were marked without being requested. **Retry *site* next run** gives each a real try.
 - Many failures from one site with `impersonate` and `wayback` already in `tried` point to a bot wall or a login. Cookies, the headless browser or SingleFile are what's left.
 - A failed link whose `tried` lacks a pass that's on now and takes its reason will get that pass in the next run by itself.
 - Failures that all happened on one day or in one run, across many sites, point to a network problem or a block at the time, and trying again is worth it.
@@ -674,13 +677,13 @@ Everything goes in `data/`.
 | `manifest.sqlite` | One row per URL: lane, status, reason, HTTP status, final URL, character count, dedup key, fallback passes tried and raw path. Also how far each listed account's tweets have been taken, which copy of each AI chat is saved, and which chat exports have been read |
 | `md/<id[:2]>/<id>.md` | YAML front matter (url, title, author, date, site, source, and `raw` when an original was kept) and the markdown body |
 | `corpus.jsonl` | Written by `osiris export` |
-| `added.tsv` | The documents the last run added, one per line: whether each is new, had failed or was thin before, its source, title, address and file. Every `osiris run` and every run on the page writes it again |
+| `added.tsv` | The documents the last run added, one per line: whether each is new, had failed or was thin before, its source, title, address and file. Every `osiris run` without `--no-summary`, and every run and fix on the page, writes it again |
 | `review.sqlite` | Garbage scores and your review decisions. An archive's older `audit.sqlite` is renamed to this when it's first opened |
-| `review-exclude.txt` | Paths of documents marked Bad or Can't fix |
+| `review-exclude.txt` | Paths of documents marked Bad or Can't fix, or waiting under Choose version |
 | `lexicon.sqlite` | Words and hyphenated pairs seen at least twice in the archive, for rejoining words broken at line ends. Built by `osiris clean` |
 | `clean-report.tsv`, `clean-backup.sqlite` | What the last `osiris clean` changed, and the originals `--undo` puts back |
 | `search.sqlite`, `search.lock` | Only with `osiris ui --search-index` or `osiris search`: the full-text index, rebuilt from `md/` if deleted, and the lock that keeps two updates from running at once |
-| `.osiris-busy` | An empty file that `run` (with or without `--fixes`), `import`, `import-tweets`, `ocr` and `clean` hold a shared lock on while they run, so that a program reading the archive, such as isis, can tell that osiris is writing to it and put off heavy work until it's done. The system drops the lock when the command ends, however it ends. `osiris.store.is_archiving(data)` tests it |
+| `.osiris-busy` | An empty file that `run` (with or without `--fixes`), `import`, `import-tweets`, `import-chats`, `ocr` and `clean` hold a shared lock on while they run, so that a program reading the archive, such as isis, can tell that osiris is writing to it and put off heavy work until it's done. The system drops the lock when the command ends, however it ends. `osiris.store.is_archiving(data)` tests it |
 | `ui.json`, `ui_urls.txt`, `ui_inputs.txt` | The web interface's settings, latest URL list and the tab backups behind it |
 | `raw/<id[:2]>/<id>.{html.zst,pdf}` | Only with `--keep-raw-pdfs`; the same id as the document in `md/`. `.html.zst` is arXiv's HTML. Budget about 2 MB per PDF |
 
@@ -690,14 +693,13 @@ Everything goes in `data/`.
 | `ok` | Stored |
 | `thin` | Under 200 characters, usually a JavaScript app, paywall or bot wall, or a paper with no abstract. Still saved and exported |
 | `failed` | No text. `reason` says why |
-| `skipped` | Deliberately not fetched |
-| `deleted` | Removed with **Delete…**, and not fetched again |
+| `skipped` | Deliberately not fetched. A document removed with **Delete…** is skipped with reason `deleted` |
 
 [Why documents are waiting, failed or thin](#why-documents-are-waiting-failed-or-thin) explains each reason and what can still be done.
 
 `source` records where the text came from, for example `html`, `singlefile`, `pdf:wayback`, `html:render`, `doi:scry`, `reddit:scry+arctic_shift`, `tweet:twitterapi`, `tweet:import`, `chat:claude`, `github:api`, `youtube:transcript:auto` or `file:pdf`.
 
-Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 1536), which are replaced every 500 documents and rebuilt after a crash. Only the document that crashed a worker is lost.
+Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 1536), which are replaced after 500 documents each and rebuilt after a crash. Only the document that crashed a worker is lost.
 
 ## Tests
 
@@ -706,7 +708,7 @@ Extraction runs in memory-capped worker processes (`--worker-mem-mb`, default 15
 .venv/bin/python -m pytest
 ```
 
-One test prints a page to PDF with Chrome, and is skipped if there's none.
+The DjVu tests are skipped without DjVuLibre's tools, and the tests of the pre-commit hook without git and a shell.
 
 ## The screenshot
 
